@@ -1,30 +1,49 @@
-CC = gcc-14
-# CC = clang
-CFLAGS = -O3 -Wall -std=c11
+#--------------------- GCC Compilers --------------------
+CC = gcc
+CFLAGS = -O3 -march=native
 
-CXX = g++-14
-# CXX = clang++
-
-# Debug
-# CXXFLAGS = -O3 -g
-
-# Profile
-# CXXFLAGS = -O2 -g -debug inline-debug-info
-
-# Production
+CXX = g++
 CXXFLAGS = -O3 -march=native
+
+# OpenMP support
+CXXFLAGS += -fopenmp
+
+#------------------ Intel oneApi Compilers -----------------
+# CC = icx
+# CFLAGS = -Ofast
+
+# CXX = icpx
 # CXXFLAGS = -Ofast
 
-# c++17 compliance and full warnings (except for VLA extension)
-CXXFLAGS +=  -Wall -std=c++17 -Wno-unknown-pragmas
+# OpenMP support
+# CXXFLAGS += -qopenmp
 
-# Only needed by intel compilers
-# -Wno-vla-extension
+#------------------ LLVM Compilers -----------------
+# CC = clang
+# CFLAGS = -O3
+
+# CXX = clang++
+# CXXFLAGS = -Ofast
 
 # OpenMP support
 # CXXFLAGS += -fopenmp
 
+# --------------------------------------------------------------------------- #
+
+
+# Enable AVX2 extensions
 CXXFLAGS += -mavx2 -mfma
+
+# c11 compliance and full warnings
+CFLAGS += -Wall -std=c11
+
+# c++17 compliance and full warnings (except for VLA extension)
+CXXFLAGS +=  -Wall -std=c++17 -Wno-unknown-pragmas 
+
+# Only needed by intel compilers
+# -Wno-vla-cxx-extension
+
+# --------------------------------------------------------------------------- #
 
 SOURCE = particles.cpp emf.cpp laser.cpp current.cpp \
          udist.cpp density.cpp species.cpp cathode.cpp
@@ -50,10 +69,14 @@ CMSG    := $(shell tput bold && tput setaf 3 && echo "[c]" && tput sgr0)
 CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
-.PHONY: all
-all: $(SOURCE) $(TARGET)
+.PHONY: dirs
 
-$(TARGET) : $(OBJS) | $(OBJDIR)
+.PHONY: all
+all: dirs $(SOURCE) $(TARGET)
+
+dirs: $(OBJDIR) $(DEPDIR)
+
+$(TARGET) : $(OBJS)
 	@echo "$(LINKMSG) $(@F)"
 	@$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS)
 
@@ -71,6 +94,7 @@ clean :
 	@rm -rf $(OBJS)
 	@echo "[clean] Removing dependencies directory"
 	@rm -rf $(DEPS)
+	@echo "[clean] Removing build target"
 	@rm -f $(TARGET)
 
 $(OBJDIR): ; @mkdir -p $@

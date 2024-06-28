@@ -38,8 +38,12 @@ CMSG    := $(shell tput bold && tput setaf 3 && echo "[c]" && tput sgr0)
 CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
+.PHONY: dirs
+
 .PHONY: all
-all: $(SOURCE) $(TARGET)
+all: dirs $(SOURCE) $(TARGET)
+
+dirs: $(OBJDIR) $(DEPDIR)
 
 $(TARGET) : $(OBJS) | $(OBJDIR)
 	@echo "$(LINKMSG) $(@F)"
@@ -60,6 +64,8 @@ clean :
 	@rm -rf $(OBJS)
 	@echo "[clean] Removing dependencies directory"
 	@rm -rf $(DEPS)
+	@echo "[clean] Removing build target"
+	@rm -f $(TARGET)
 
 $(OBJDIR): ; @mkdir -p $@
 

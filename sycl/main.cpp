@@ -367,7 +367,7 @@ void test_current( sycl::queue & q ) {
 
 void test_weibel( sycl::queue & q  ) {
     uint2 gnx{ 256, 256 };
-    uint2 ntiles{ 8, 8 };
+    uint2 ntiles{ 16, 16 };
 
     uint2 nx{ gnx.x/ntiles.x, gnx.y/ntiles.y };
     float2 box = make_float2( gnx.x/10.0, gnx.y/10.0 );
@@ -423,8 +423,10 @@ void test_weibel( sycl::queue & q  ) {
 
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
+    std::cout << "[benchmark] " << perf << " GPart/s\n";
+
+//    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+//              << ", Performance: " << perf << " GPart/s\n";
 }
 
 void test_weibel_large( sycl::queue & q  )

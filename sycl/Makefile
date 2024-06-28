@@ -17,8 +17,12 @@ CXXFLAGS = -O2 -g
 # c++17 compliance and full warnings
 CXXFLAGS += -std=c++17 -Wall -fsycl
 
+# Compile for cuda device
 # CXXFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
-CXXFLAGS += -fsycl-targets=spir64_x86_64
+
+# Compile for x86 avx2 cpu
+CXXFLAGS += -fsycl-targets=spir64_x86_64 
+LDFLAGS = -Xsycl-target-backend  "-march=avx2"
 
 SOURCE = emf.cpp laser.cpp particles.cpp current.cpp \
          udist.cpp density.cpp species.cpp cathode.cpp
@@ -44,8 +48,12 @@ CMSG    := $(shell tput bold && tput setaf 3 && echo "[c]" && tput sgr0)
 CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
+.PHONY: dirs
+
 .PHONY: all
-all: $(SOURCE) $(TARGET)
+all: dirs $(SOURCE) $(TARGET)
+
+dirs: $(OBJDIR) $(DEPDIR)
 
 $(TARGET) : $(OBJS) | $(OBJDIR)
 	@echo "$(LINKMSG) $(@F)"
@@ -67,6 +75,8 @@ clean :
 	@rm -rf $(OBJS)
 	@echo "[clean] Removing dependencies directory"
 	@rm -rf $(DEPS)
+	@echo "[clean] Removing build target"
+	@rm -f $(TARGET)
 
 $(OBJDIR): ; @mkdir -p $@
 
