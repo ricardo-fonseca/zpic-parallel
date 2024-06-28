@@ -2,7 +2,7 @@
 
 Parallel implementations of the ZPIC code
 
-Available version:
+Available versions:
 
-+ [OpenMP / SIMD](openmp) - OpenMP version with SIMD optimizations (x86 AVX2, ARM Neon under development)
-
++ [OpenMP / SIMD](openmp) - OpenMP version with SIMD optimizations (x86 AVX2, ARM Neon under development) for CPUs
++ [CUDA](cuda) - CUDA version for NVIDIA gpus
