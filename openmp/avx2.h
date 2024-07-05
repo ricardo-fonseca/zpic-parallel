@@ -29,7 +29,7 @@ static inline float vec_extract( const __m256 v ) {
 static inline float vec_extract( const __m256 v, int i ) {
     union {
         __m256 v;
-        float s[0];
+        float s[8];
     } b;
     b.v = v;
     return b.s[i & 7];
@@ -224,7 +224,7 @@ static inline __m256i vec_ne( __m256 a, __m256 b ) {
  * 
  * @param a 
  * @param b 
- * @return __m256 
+ * @return __m256i
  */
 static inline __m256i vec_gt( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_GT_OQ) );
@@ -502,7 +502,7 @@ static inline int vec_extract( const __m256i v ) {
 static inline int vec_extract( const __m256i v, int i ) {
     union {
         __m256i v;
-        int32_t s[0];
+        int32_t s[8];
     } b;
     b.v = v;
     return b.s[i & 7];
@@ -973,6 +973,13 @@ static inline vint2 vint2_zero( ) {
     return v;
 }
 
+/**
+ * @brief Vector version of the __mmask16 type holding 2 (.x, .y) masks
+ * 
+ */
+struct alignas(__m256i) vmask2 {
+    __m256i x, y;
+};
 
 class Vec8Float {
     union {
@@ -997,9 +1004,26 @@ class Vec8Int {
     public:
     Vec8Int( const __m256i v ) { data.v = v; }
     Vec8Int( const int s ) { data.v = _mm256_set1_epi32(s); }
-    int extract( const int i ) { return data.s[ i & 7 ]; }
+    int extract( const int i ) const { return data.s[ i ]; }
     friend std::ostream& operator<<(std::ostream& os, const Vec8Int& obj) { 
         os << obj.data.v;
+        return os;
+    }
+};
+
+class Vec8Mask {
+    union {
+        __m256i v;
+        int s[8];
+    } data;
+    public:
+    Vec8Mask( const __m256i v ) { data.v = v; }
+    int extract( const unsigned i ) const { 
+        return data.s[ i ] ;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const Vec8Mask& obj) { 
+        for( unsigned i = 0; i < 8; i ++) 
+            os << (( obj.extract(i) == 0 ) ? 0 : 1 );
         return os;
     }
 };
@@ -1007,12 +1031,15 @@ class Vec8Int {
 constexpr int vecwidth = 8;
 typedef __m256 vfloat;
 typedef __m256i vint;
+typedef __m256i vmask;
 typedef Vec8Float VecFloat_s;
 typedef Vec8Int VecInt_s;
-
+typedef Vec8Mask VecMask_s;
 
 template< typename T >
-int is_aligned_32( T * addr ) { return (((uintptr_t)addr & 0x1F) == 0); }
+constexpr int is_aligned_32( T * addr ) { 
+    return (((uintptr_t)addr & 0x1F) == 0);
+}
 
 template< typename T >
 void assert_aligned_32( T * addr, std::string msg ) { 
@@ -1025,7 +1052,7 @@ void assert_aligned_32( T * addr, std::string msg ) {
 
 
 template< typename T >
-int is_aligned_16( T * addr ) { return (((uintptr_t)addr & 0x0F) == 0); }
+constexpr int is_aligned_16( T * addr ) { return (((uintptr_t)addr & 0x0F) == 0); }
 
 template< typename T >
 void assert_aligned_16( T * addr, std::string msg ) { 

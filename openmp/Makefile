@@ -1,22 +1,22 @@
 #--------------------- GCC Compilers --------------------
-CC = gcc
-CFLAGS = -O3 -march=native
+# CC = gcc
+# CFLAGS = -O3 -march=native
 
-CXX = g++
-CXXFLAGS = -O3 -march=native
+# CXX = g++
+# CXXFLAGS = -O3 -march=native
 
 # OpenMP support
-CXXFLAGS += -fopenmp
+# CXXFLAGS += -fopenmp
 
 #------------------ Intel oneApi Compilers -----------------
-# CC = icx
-# CFLAGS = -Ofast
+CC = icx
+CFLAGS = -O3
 
-# CXX = icpx
-# CXXFLAGS = -Ofast
+CXX = icpx
+CXXFLAGS = -O3
 
 # OpenMP support
-# CXXFLAGS += -qopenmp
+CXXFLAGS += -qopenmp
 
 #------------------ LLVM Compilers -----------------
 # CC = clang
@@ -30,9 +30,13 @@ CXXFLAGS += -fopenmp
 
 # --------------------------------------------------------------------------- #
 
+# Enable AVX2 extensions with FMA support
+# CXXFLAGS += -mavx2 -mfma
 
-# Enable AVX2 extensions
-CXXFLAGS += -mavx2 -mfma
+# Enable AVX512f extensions
+CXXFLAGS += -mavx512f 
+
+#-mavx512dq
 
 # c11 compliance and full warnings
 CFLAGS += -Wall -std=c11
@@ -40,9 +44,7 @@ CFLAGS += -Wall -std=c11
 # c++17 compliance and full warnings (except for VLA extension)
 CXXFLAGS +=  -Wall -std=c++17 -Wno-unknown-pragmas 
 
-# Only needed by intel compilers
-# -Wno-vla-cxx-extension
-
+CXXFLAGS += -Wno-vla-cxx-extension
 # --------------------------------------------------------------------------- #
 
 SOURCE = particles.cpp emf.cpp laser.cpp current.cpp \
@@ -69,12 +71,20 @@ CMSG    := $(shell tput bold && tput setaf 3 && echo "[c]" && tput sgr0)
 CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
+
 .PHONY: dirs
+.PHONE: info
 
 .PHONY: all
 all: dirs $(SOURCE) $(TARGET)
 
 dirs: $(OBJDIR) $(DEPDIR)
+
+info:
+	@ tput bold && echo "Compile options" && tput sgr0
+	@ echo "[c]     $(CC) $(CFLAGS)"
+	@ echo "[c++]   $(CXX) $(CXXFLAGS)"
+	@ echo "[ld]    $(CXX) $(CXXFLAGS) $(LDFLAGS)"
 
 $(TARGET) : $(OBJS)
 	@echo "$(LINKMSG) $(@F)"
@@ -97,9 +107,9 @@ clean :
 	@echo "[clean] Removing build target"
 	@rm -f $(TARGET)
 
-$(OBJDIR): ; @mkdir -p $@
+$(OBJDIR): ; @ test -d $@ || mkdir -p $@
 
-$(DEPDIR): ; @mkdir -p $@
+$(DEPDIR): ; @ test -d $@ || mkdir -p $@
 
 $(DEPS):
 

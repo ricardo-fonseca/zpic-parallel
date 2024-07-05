@@ -208,8 +208,8 @@ void test_weibel( void ) {
 
     std::cout << "[benchmark] " << perf << " GPart/s\n";
 
-//    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-//              << ", Performance: " << perf << " GPart/s\n";
+    std::cout << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+              << ", Performance: " << perf << " GPart/s\n";
 
     
 }

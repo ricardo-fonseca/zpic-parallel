@@ -39,11 +39,18 @@ CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
 .PHONY: dirs
+.PHONE: info
 
 .PHONY: all
 all: dirs $(SOURCE) $(TARGET)
 
 dirs: $(OBJDIR) $(DEPDIR)
+
+info:
+	@ tput bold && echo "Compile options" && tput sgr0
+	@ echo "[c]     $(CC) $(CFLAGS)"
+	@ echo "[c++]   $(CXX) $(CXXFLAGS)"
+	@ echo "[ld]    $(CXX) $(CXXFLAGS) $(LDFLAGS)"
 
 $(TARGET) : $(OBJS) | $(OBJDIR)
 	@echo "$(LINKMSG) $(@F)"

@@ -498,6 +498,8 @@ void test_weibel_large( sycl::queue & q  )
                                                                   
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 
+    std::cout << "[benchmark] " << perf << " GPart/s\n";
+
     std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
               << ", Performance: " << perf << " GPart/s\n";
 
@@ -557,10 +559,10 @@ void test_warm( sycl::queue & q  )
 int main( void ) {
 
     // Run on cpu
-    sycl::queue q{sycl::cpu_selector_v};;
+    // sycl::queue q{sycl::cpu_selector_v};;
     
     // Run on gpu
-    // sycl::queue q{sycl::gpu_selector_v};;
+    sycl::queue q{sycl::gpu_selector_v};;
 
     print_dev_info( q );
 
@@ -572,9 +574,9 @@ int main( void ) {
     // test_mov( q );
     // test_current( q );
 
-    test_weibel( q );
+    // test_weibel( q );
 
-    // test_weibel_large( q );
+    test_weibel_large( q );
 
     // test_warm( q );
 }

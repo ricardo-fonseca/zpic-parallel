@@ -1,0 +1,71 @@
+#!/bin/bash
+
+BIN=./zpic
+
+MAKE_PARALLEL="-j 16"
+
+# This is required by mawk
+LC_NUMERIC=en_US.UTF-8
+
+# Runs a sequence of 10 simulation tests, preceded by 1 warm up test, and
+# prints the average
+
+TBOLD=$(tput bold)
+TRED=$(tput setaf 1)
+TRESET=$(tput sgr0)
+
+info () {
+    echo -e "${TBOLD}$1${TRESET}"
+}
+
+error() {
+    echo -e "${TBOLD}${TRED}$1${TRESET}" > /dev/stderr
+}
+
+usage() {
+cat << _EOM
+Usage:
+$0 [-h] [test_name]
+-h          Print this message and exit.
+test_name   Name of test to run, defaults to "weibel" (currently ignored)
+_EOM
+}
+
+if [ $# -gt 1 ]; then
+    error "Invalid number of arguments"
+    usage
+    exit 1
+fi
+
+if [ "$1" = "-h" ]; then
+    usage
+    exit 0
+fi
+
+# If necessary compile the code, exiting in case of an error
+if ! make -q ${MAKE_PARALLEL}; then
+    info "\nCompiling code..."
+    if ! make; then
+        error "\nCompilation failed, aborting."
+        exit 1
+    fi
+fi
+
+info "\nRunning warm up test..."
+
+if ! ${BIN} $1; then
+    error "Test $1 failed, aborting."
+    exit 1
+fi
+
+info "\nAveraging 10 measurements..."
+for i in {1..10}; do
+    ${BIN} $1
+done | awk '/benchmark/ { \
+    n++; x=$2; b=a+(x-a)/n; q+=(x-a)*(x-b); a=b; \
+    printf("[%2d/10] %s\n",n,$0) \
+    } END {print "avg:",a,"GPart/s, dev:", 100 * sqrt(q/n)/a, "%"}'
+
+
+# This uses Welford's algorithm for calculating the average and the standard deviation
+# see https://en.wikipedia.org/wiki/Standard_deviation#Rapid_calculation_methods

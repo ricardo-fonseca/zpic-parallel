@@ -38,11 +38,11 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
-            if ( quant == part::ux ) val = u[idx].x;
-            if ( quant == part::uy ) val = u[idx].y;
-            if ( quant == part::uz ) val = u[idx].z;
+            if constexpr ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::ux ) val = u[idx].x;
+            if constexpr ( quant == part::uy ) val = u[idx].y;
+            if constexpr ( quant == part::uz ) val = u[idx].z;
             d_data[ data_offset + idx ] = val;
         }
     }
@@ -114,11 +114,11 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
-            if ( quant == part::ux ) val = u[idx].x;
-            if ( quant == part::uy ) val = u[idx].y;
-            if ( quant == part::uz ) val = u[idx].z;
+            if constexpr ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::ux ) val = u[idx].x;
+            if constexpr ( quant == part::uy ) val = u[idx].y;
+            if constexpr ( quant == part::uz ) val = u[idx].z;
             d_data[ offset + idx ] = ops::fma( scale.x, val, scale.y );
         }
     }

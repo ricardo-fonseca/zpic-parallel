@@ -1,28 +1,27 @@
 CC = icx
 CFLAGS = -O3 -Wall -std=c11
 
-
 CXX = icpx
 
 # Debug
 # CXXFLAGS = -Og -g
 
 # Profile
-CXXFLAGS = -O2 -g
+# CXXFLAGS = -O2 -g
 
 # Production
 # CXXFLAGS = -O3
-# CXXFLAGS = -Ofast
+CXXFLAGS = -Ofast
 
 # c++17 compliance and full warnings
 CXXFLAGS += -std=c++17 -Wall -fsycl
 
 # Compile for cuda device
-# CXXFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
+CXXFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
 
 # Compile for x86 avx2 cpu
-CXXFLAGS += -fsycl-targets=spir64_x86_64 
-LDFLAGS = -Xsycl-target-backend  "-march=avx2"
+# CXXFLAGS += -fsycl-targets=spir64_x86_64 
+# LDFLAGS = -Xsycl-target-backend "-march=avx2"
 
 SOURCE = emf.cpp laser.cpp particles.cpp current.cpp \
          udist.cpp density.cpp species.cpp cathode.cpp
@@ -49,11 +48,18 @@ CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
 .PHONY: dirs
+.PHONE: info
 
 .PHONY: all
 all: dirs $(SOURCE) $(TARGET)
 
 dirs: $(OBJDIR) $(DEPDIR)
+
+info:
+	@ tput bold && echo "Compile options" && tput sgr0
+	@ echo "[c]     $(CC) $(CFLAGS)"
+	@ echo "[c++]   $(CXX) $(CXXFLAGS)"
+	@ echo "[ld]    $(CXX) $(CXXFLAGS) $(LDFLAGS)"
 
 $(TARGET) : $(OBJS) | $(OBJDIR)
 	@echo "$(LINKMSG) $(@F)"
@@ -78,9 +84,9 @@ clean :
 	@echo "[clean] Removing build target"
 	@rm -f $(TARGET)
 
-$(OBJDIR): ; @mkdir -p $@
+$(OBJDIR): ; @ test -d $@ || mkdir -p $@
 
-$(DEPDIR): ; @mkdir -p $@
+$(DEPDIR): ; @ test -d $@ || mkdir -p $@
 
 $(DEPS):
 

@@ -401,7 +401,7 @@ void test_weibel_large( )
                             
     // Create simulation box
     uint2 ntiles{64, 64};
-    uint2 nx{40, 40};
+    uint2 nx{32, 32};
     uint2 ppc{8, 8};
                                                                                                     
     uint64_t vol = static_cast<uint64_t>(nx.x * nx.y) *  static_cast<uint64_t>(ntiles.x * ntiles.y);
@@ -464,9 +464,10 @@ void test_weibel_large( )
                                                                   
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
+    // std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+    //          << ", Performance: " << perf << " GPart/s\n";
 
+    std::cout << "[benchmark] " << perf << " GPart/s\n";
 }
 
 void test_warm( ) 
@@ -628,9 +629,9 @@ int main( void ) {
 
     // test_weibel( );
 
-    // test_weibel_large( );
+    test_weibel_large( );
 
-    test_warm( );
+    // test_warm( );
 
     // benchmark_weibel();
 }
