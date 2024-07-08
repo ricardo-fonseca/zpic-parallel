@@ -31,18 +31,16 @@ CXXFLAGS += -qopenmp
 # --------------------------------------------------------------------------- #
 
 # Enable AVX2 extensions with FMA support
-# CXXFLAGS += -mavx2 -mfma
+# CXXFLAGS += -DUSE_AVX2 -mavx2 -mfma
 
 # Enable AVX512f extensions
-CXXFLAGS += -mavx512f 
-
-#-mavx512dq
+CXXFLAGS += -DUSE_AVX512 -mavx512f
 
 # c11 compliance and full warnings
 CFLAGS += -Wall -std=c11
 
 # c++17 compliance and full warnings (except for VLA extension)
-CXXFLAGS +=  -Wall -std=c++17 -Wno-unknown-pragmas 
+CXXFLAGS += -Wall -std=c++17 -Wno-unknown-pragmas 
 
 CXXFLAGS += -Wno-vla-cxx-extension
 # --------------------------------------------------------------------------- #

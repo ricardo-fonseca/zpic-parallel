@@ -30,6 +30,7 @@ static inline float vec_extract( const __m256 v ) {
     return buf[imm];
 }
 
+static inline
 std::ostream& operator<<(std::ostream& os, const __m256 v) {
     os << "[";
     os <<         vec_extract< 0>( v );
@@ -82,6 +83,7 @@ static inline float vec_extract( const __m512 v, int i ) {
  * @param v     Float vector value
  * @return std::ostream& 
  */
+static inline
 std::ostream& operator<<(std::ostream& os, const __m512 v) {
     os << "[";
     os <<         vec_extract< 0>( v );
@@ -730,6 +732,7 @@ static inline int vec_extract( const __m512i v, int i ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
+static inline
 std::ostream& operator<<(std::ostream& os, const __m512i v) {
     os << "[";
     os <<         vec_extract< 0>( v );
@@ -1273,47 +1276,5 @@ class Vec16Mask {
     }
 };
 
-constexpr int vecwidth = 16;
-typedef __m512 vfloat;
-typedef __m512i vint;
-typedef __mmask16 vmask;
-typedef Vec16Float VecFloat_s;
-typedef Vec16Int VecInt_s;
-typedef Vec16Mask VecMask_s;
-
-template< typename T >
-int is_aligned_64( T * addr ) { return (((uintptr_t)addr & 0x3F) == 0); }
-
-template< typename T >
-void assert_aligned_64( T * addr, std::string msg ) { 
-    if ( ! is_aligned_64(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 64 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}
-
-template< typename T >
-int is_aligned_32( T * addr ) { return (((uintptr_t)addr & 0x1F) == 0); }
-
-template< typename T >
-void assert_aligned_32( T * addr, std::string msg ) { 
-    if ( ! is_aligned_32(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 32 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}
 
 
-template< typename T >
-int is_aligned_16( T * addr ) { return (((uintptr_t)addr & 0x0F) == 0); }
-
-template< typename T >
-void assert_aligned_16( T * addr, std::string msg ) { 
-    if ( ! is_aligned_16(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 16 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}

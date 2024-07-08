@@ -17,7 +17,18 @@
 #include <omp.h>
 #endif
 
+#include "simd.h"
+
 void info( void ) {
+
+#ifdef SIMD
+    std::cout << "SIMD support enabled\n";
+    std::cout << "  vector unit : " << vecname << '\n';
+    std::cout << "  vector width: " << vecwidth <<'\n';
+#else
+    std::cout << "SIMD support not enabled\n";
+#endif
+
 #ifdef _OPENMP
 
     std::cout << "OpenMP enabled\n";
@@ -489,13 +500,13 @@ int main( void ) {
 
     // test_inj();
 
-    test_weibel();
+    // test_weibel();
 
     // test_cathode();
 
     // benchmark();
 
-    // test_weibel_large();
+    test_weibel_large();
 
     // test_weibel_96();
 }

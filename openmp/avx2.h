@@ -42,7 +42,7 @@ static inline float vec_extract( const __m256 v, int i ) {
  * @param v     Float vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const __m256 v) {
+static inline std::ostream& operator<<(std::ostream& os, const __m256 v) {
     os << "[";
     os <<         vec_extract<0>( v );
     os << ", " << vec_extract<1>( v );
@@ -515,6 +515,7 @@ static inline int vec_extract( const __m256i v, int i ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
+static inline
 std::ostream& operator<<(std::ostream& os, const __m256i v) {
     os << "[";
     os <<         vec_extract<0>( v );
@@ -1028,37 +1029,5 @@ class Vec8Mask {
     }
 };
 
-constexpr int vecwidth = 8;
-typedef __m256 vfloat;
-typedef __m256i vint;
-typedef __m256i vmask;
-typedef Vec8Float VecFloat_s;
-typedef Vec8Int VecInt_s;
-typedef Vec8Mask VecMask_s;
-
-template< typename T >
-constexpr int is_aligned_32( T * addr ) { 
-    return (((uintptr_t)addr & 0x1F) == 0);
-}
-
-template< typename T >
-void assert_aligned_32( T * addr, std::string msg ) { 
-    if ( ! is_aligned_32(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 32 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}
 
 
-template< typename T >
-constexpr int is_aligned_16( T * addr ) { return (((uintptr_t)addr & 0x0F) == 0); }
-
-template< typename T >
-void assert_aligned_16( T * addr, std::string msg ) { 
-    if ( ! is_aligned_16(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 16 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}

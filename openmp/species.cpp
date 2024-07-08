@@ -1,6 +1,8 @@
 #include "species.h"
 #include <iostream>
 
+#include "simd.h"
+
 /**
  * @brief Memory alignment of local buffers
  * 
@@ -25,7 +27,7 @@ inline float rgamma( const float3 u ) {
  * @brief Interpolate EM field values at particle position using linear 
  * (1st order) interpolation.
  * 
- * The EM fields are assumed to be organized according to the Yee scheme with
+ * @note The EM fields are assumed to be organized according to the Yee scheme with
  * the charge defined at lower left corner of the cell
  * 
  * @param E         Pointer to position (0,0) of E field grid
@@ -103,13 +105,12 @@ void interpolate_fld(
  * For the future, other, more accurate, rotation algorithms should be used
  * instead, such as employing the full Euler-Rodrigues formula.
  * 
- * Note: uses CUDA intrinsic fma() and rsqrtf() functions
- * 
- * @param tem 
- * @param e 
- * @param b 
- * @param u 
- * @return float3 
+ * @param alpha     Normalization 
+ * @param e         E-field interpolated at particle position
+ * @param b         B-field interpolated at particle position
+ * @param u         Initial particle momentum
+ * @param energy    Particle energy (time centered)
+ * @return float3   Final particle momentum
  */
 float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, double & energy )
 {
@@ -425,15 +426,22 @@ inline void split2d(
     }
 }
 
-//#include "avx2.h"
-#include "avx512.h"
 
 /*
- * Vector functions
+ * Vector (SIMD) optimized functions
  */
 
-inline
-vfloat rgamma( const vfloat3 u ) {
+#ifdef SIMD
+
+/**
+ * @brief Returns reciprocal Lorentz gamma factor
+ * 
+ * $ \frac{1}{\sqrt{u_x^2 + u_y^2 + u_z^2 + 1 }} $
+ * 
+ * @param u         Generalized momentum in units of c
+ * @return float    Reciprocal Lorentz gamma factor
+ */
+inline vfloat rgamma( const vfloat3 u ) {
     vfloat c1 = vec_float(1);
     return vec_div( c1, vec_fmadd( u.z, u.z,
                         vec_fmadd( u.y, u.y,
@@ -518,6 +526,19 @@ inline vfloat3 vdudt_boris( const vfloat alpha, vfloat3 e, vfloat3 b, vfloat3 u,
     return ut;
 }
 
+/**
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell (vector version)
+ * 
+ * @note Current will be deposited for all vector elements
+ * 
+ * @param ix        Particle cell
+ * @param x0        Initial particle position
+ * @param x1        Final particle position
+ * @param qnx       Normalization values for in plane current deposition
+ * @param qvz       Out of plane current
+ * @param J         current(J) grid (should be in shared memory)
+ * @param stride    current(J) grid stride 
+ */
 void vdep_current_seg(
     const vint2 ix, const vfloat2 x0, const vfloat2 x1,
     const vfloat2 qnx, const vfloat qvz,
@@ -583,7 +604,18 @@ void vdep_current_seg(
     }
 }
 
-
+/**
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell using a mask
+ * 
+ * @param ix        Particle cell
+ * @param x0        Initial particle position
+ * @param x1        Final particle position
+ * @param qnx       Normalization values for in plane current deposition
+ * @param qvz       Out of plane current
+ * @param J         current(J) grid (should be in shared memory)
+ * @param stride    current(J) grid stride
+ * @param mask      Vector mask, current will only be deposited for mask elements equal true
+ */
 inline void vdep_current_seg(
     const vint2 ix, const vfloat2 x0, const vfloat2 x1,
     const vfloat2 qnx, const vfloat qvz,
@@ -659,34 +691,35 @@ inline void vdep_current_seg(
 
 
 /**
- * @brief Trajectory splitter (vector version)
+ * @brief Split particle trajectory into segments fitting in a single cell (vector version)
  * 
- * @param ix 
- * @param x0 
- * @param x1 
- * @param delta 
- * @param qvz 
- * @param deltai 
- * @param cross 
- * @param v0_ix 
- * @param v0_x0 
- * @param v0_x1 
- * @param v0_qvz 
- * @param v1_ix 
- * @param v1_x0 
- * @param v1_x1 
- * @param v1_qvz 
- * @param v2_ix 
- * @param v2_x0 
- * @param v2_x1 
- * @param v2_qvz 
+ * @param ix        Initial cell
+ * @param x0        Initial position
+ * @param x1        Final position
+ * @param delta     Particle motion ( used to conserve precision, x1 = x0 + delta )
+ * @param qvz       Charge times z velocity
+ * @param deltai    [out] Cell motion
+ * @param v0_ix     [out] 1st segment cell
+ * @param v0_x0     [out] 1st segment initial position
+ * @param v0_x1     [out] 1st segment final position
+ * @param v0_qvz    [out] 1st segment charge times velocity
+ * @param v1_ix     [out] 2nd segment cell
+ * @param v1_x0     [out] 2nd segment initial position
+ * @param v1_x1     [out] 2nd segment final position
+ * @param v1_qvz    [out] 2nd segment charge times velocity
+ * @param v2_ix     [out] 3rd segment cell
+ * @param v2_x0     [out] 3rd segment initial position
+ * @param v2_x1     [out] 3rd segment final position
+ * @param v2_qvz    [out] 3rd segment charge times velocity
+ * @param cross     [out] Cell edge crossing
  */
 inline void vsplit2d( 
     const vint2 ix, const vfloat2 x0, const vfloat2 x1, const vfloat2 delta, const vfloat qvz,
-    vint2 & deltai, vmask2 & cross,
+    vint2 & deltai,
     vint2 & v0_ix, vfloat2 & v0_x0, vfloat2 & v0_x1, vfloat & v0_qvz,
     vint2 & v1_ix, vfloat2 & v1_x0, vfloat2 & v1_x1, vfloat & v1_qvz,
-    vint2 & v2_ix, vfloat2 & v2_x0, vfloat2 & v2_x1, vfloat & v2_qvz
+    vint2 & v2_ix, vfloat2 & v2_x0, vfloat2 & v2_x1, vfloat & v2_qvz,
+    vmask2 & cross
 ) {
     const vint   c1i   = vec_int(1);
     const vfloat c1_2  = vec_float(.5);
@@ -811,7 +844,19 @@ inline void vsplit2d(
     }
 }
 
-void vmove_deposit_kernel(
+/**
+ * @brief Move particles and deposit current (vector version)
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param d_current         Current grid (global)
+ * @param current_offset    Offset to position [0,0] of the current grid
+ * @param ext_nx            Current grid size (external)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param q                 Particle charge
+ * @param qnx               Current normalization
+ */
+void move_deposit_kernel(
     uint2 const tile_idx,
     ParticleData const part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
@@ -880,10 +925,11 @@ void vmove_deposit_kernel(
 
         vsplit2d( 
             ix0, x0, x1, delta, qvz, 
-            deltai, cross,
+            deltai,
             v0_ix, v0_x0, v0_x1, v0_qvz,
             v1_ix, v1_x0, v1_x1, v1_qvz,
-            v2_ix, v2_x0, v2_x1, v2_qvz
+            v2_ix, v2_x0, v2_x1, v2_qvz,
+            cross
         );
         
         // Deposit current
@@ -966,7 +1012,20 @@ void vmove_deposit_kernel(
     }
 }
 
-void vmove_deposit_shift_kernel(
+/**
+ * @brief Move particles, deposit current and shift positions
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param d_current         Current grid (global)
+ * @param current_offset    Offset to position [0,0] of the current grid
+ * @param ext_nx            Current grid size (external)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param q                 Particle charge
+ * @param qnx               Current normalization 
+ * @param shift             Position shift
+ */
+void move_deposit_shift_kernel(
     uint2 const tile_idx,
     ParticleData const part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
@@ -1039,10 +1098,11 @@ void vmove_deposit_shift_kernel(
 
         vsplit2d( 
             ix0, x0, x1, delta, qvz, 
-            deltai, cross,
+            deltai,
             v0_ix, v0_x0, v0_x1, v0_qvz,
             v1_ix, v1_x0, v1_x1, v1_qvz,
-            v2_ix, v2_x0, v2_x1, v2_qvz
+            v2_ix, v2_x0, v2_x1, v2_qvz,
+            cross
         );
         
         // Deposit current
@@ -1130,7 +1190,7 @@ void vmove_deposit_shift_kernel(
  * @brief Interpolate EM field values at particle position using linear 
  * (1st order) interpolation using SIMD operations.
  * 
- * The EM fields are assumed to be organized according to the Yee scheme with
+ * @note The EM fields are assumed to be organized according to the Yee scheme with
  * the charge defined at lower left corner of the cell
  * 
  * @param E         Pointer to position (0,0) of E field grid
@@ -1248,7 +1308,7 @@ inline void vinterpolate_fld(
 
 
 template < species::pusher type >
-void vpush_kernel ( 
+void push_kernel ( 
     uint2 const tile_idx,
     ParticleData const part,
     float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
@@ -1322,7 +1382,20 @@ void vpush_kernel (
     *d_energy += energy;
 }
 
+#else
 
+/**
+ * @brief Move particles and deposit current
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param d_current         Current grid (global)
+ * @param current_offset    Offset to position [0,0] of the current grid
+ * @param ext_nx            Current grid size (external)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param q                 Particle charge
+ * @param qnx               Current normalization
+ */
 void move_deposit_kernel(
     uint2 const tile_idx,
     ParticleData const part,
@@ -1334,7 +1407,7 @@ void move_deposit_kernel(
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     // This is usually in block shared memeory
-    float3 _move_deposit_buffer[tile_size];
+    alignas(local_align) float3 _move_deposit_buffer[tile_size];
 
     // Zero local current buffer
     for( auto i = 0; i < tile_size; i++ ) 
@@ -1416,6 +1489,19 @@ void move_deposit_kernel(
     }
 }
 
+/**
+ * @brief Move particles, deposit current and shift positions
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param d_current         Current grid (global)
+ * @param current_offset    Offset to position [0,0] of the current grid
+ * @param ext_nx            Current grid size (external)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param q                 Particle charge
+ * @param qnx               Current normalization 
+ * @param shift             Position shift
+ */
 void move_deposit_shift_kernel(
     uint2 const tile_idx,
     ParticleData const part,
@@ -1426,7 +1512,7 @@ void move_deposit_shift_kernel(
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     // This is usually in block shared memeory
-    float3 _move_deposit_buffer[tile_size];
+    alignas(local_align) float3 _move_deposit_buffer[tile_size];
 
     // Zero local current buffer
     for( auto i = 0; i < tile_size; i++ ) 
@@ -1510,9 +1596,6 @@ void move_deposit_shift_kernel(
 /**
  * @brief Kernel for pushing particles
  * 
- * This kernel will interpolate fields and advance particle momentum using a 
- * relativistic Boris pusher
- * 
  * @param d_tiles       Particle tile information
  * @param d_ix          Particle data (cells)
  * @param d_x           Particle data (positions)
@@ -1522,6 +1605,20 @@ void move_deposit_shift_kernel(
  * @param field_offset  Tile offset to field position (0,0)
  * @param ext_nx        E,B tile grid external size
  * @param alpha         Force normalization ( 0.5 * q / m * dt )
+ */
+
+/**
+ * @brief Advance particle velocities
+ * 
+ * @tparam type 
+ * @param tile_idx      Tile index
+ * @param part          Particle data
+ * @param d_E           E-field grid (global)
+ * @param d_B           B-field grid (global)
+ * @param field_offset  Offset to position [0,0] of field grids
+ * @param ext_nx        Field grid size (external)
+ * @param alpha         Normalization parameter
+ * @param d_energy      Total particle energy (if using OpenMP this must be a reduction variable)
  */
 template < species::pusher type >
 void push_kernel ( 
@@ -1541,8 +1638,8 @@ void push_kernel (
 
     // Copy E and B into shared memory
 
-    float3 E_local[ field_vol ];
-    float3 B_local[ field_vol ];
+    alignas(local_align) float3 E_local[ field_vol ];
+    alignas(local_align) float3 B_local[ field_vol ];
 
     for( auto i = 0; i < field_vol; i++ ) {
         E_local[i] = d_E[tile_off + i];
@@ -1580,6 +1677,8 @@ void push_kernel (
     // In OpenMP, d_energy needs to be a reduction variable
     *d_energy += energy;
 }
+
+#endif
 
 /**
  * @brief Construct a new Species object
@@ -2051,7 +2150,7 @@ void Species::move( vec3grid<float3> * J )
     for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
         
         const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-        vmove_deposit_kernel(
+        move_deposit_kernel(
             tile_idx, *particles,
             J -> d_buffer, J -> offset, J -> ext_nx, dt_dx, q, qnx
             );
@@ -2224,7 +2323,7 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
         #pragma omp parallel for schedule(dynamic) reduction(+:d_energy)
         for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {    
             const uint2 tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            vpush_kernel <species::boris> (
+            push_kernel <species::boris> (
                 tile_idx, *particles,
                 E -> d_buffer, B -> d_buffer, E -> offset, ext_nx, alpha,
                 &d_energy

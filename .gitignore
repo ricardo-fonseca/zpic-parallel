@@ -31,3 +31,6 @@
 *.out
 *.app
 .vscode/settings.json
+
+# Python caches
+__pycache__/
