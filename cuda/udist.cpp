@@ -4,7 +4,7 @@
 namespace kernel {
 
 __global__
-void none( Particles & part ) {
+void none( ParticleData const part ) {
 
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
@@ -36,7 +36,7 @@ void UDistribution::None::set( Particles & part, unsigned int seed ) const {
 namespace kernel {
 
 __global__
-void cold( Particles & part, const float3 ufl ) {
+void cold( ParticleData const part, const float3 ufl ) {
 
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
@@ -68,7 +68,7 @@ void UDistribution::Cold::set( Particles & part, unsigned int seed ) const {
 namespace kernel {
 
 __global__
-void thermal( Particles & part, uint2 rnd_seed, const float3 uth, const float3 ufl ) {
+void thermal( ParticleData const part, uint2 rnd_seed, const float3 uth, const float3 ufl ) {
 
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
@@ -112,7 +112,7 @@ void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const
 namespace kernel {
 
 __global__
-void thermal_corr( Particles & part, uint2 rnd_seed, const float3 uth, const float3 ufl, int const npmin )
+void thermal_corr( ParticleData const part, uint2 rnd_seed, const float3 uth, const float3 ufl, int const npmin )
 {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
@@ -197,9 +197,6 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
 
     const auto bsize = part.nx.x * part.nx.y;
     const size_t shm_size = bsize * ( sizeof( float3 ) + sizeof( int ) );
-
-    float3 f = make_float3( 1, 2, 3 );
-
     block::set_shmem_size( kernel::thermal_corr, shm_size );
     kernel::thermal_corr <<< grid, block, shm_size >>> ( part, rnd_seed, uth, ufl, npmin );
 }
