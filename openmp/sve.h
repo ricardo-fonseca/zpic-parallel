@@ -1,20 +1,23 @@
-#include <arm_neon.h>
+#include <arm_sve.h>
 
 #include <iostream>
 #include <iomanip>
 
-typedef float32x4_t vec_f32;
-typedef int32x4_t   vec_i32 ;
-typedef uint32x4_t  vec_mask32 ;
+constexpr int vec_width = __ARM_FEATURE_SVE_BITS / 32;
+
+typedef svfloat32_t vec_f32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
+typedef svint32_t   vec_i32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
+typedef svuint32_t  vec_u32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
+typedef svbool_t    vec_mask __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
 
 /**
  * @brief Floating point (32 bit) SIMD types
  * 
- * @note For ARM Neon this corresponds to the vec_f32 vector
+ * @note For ARM SVE this corresponds to the vec_f32 vector
  */
 
 /**
- * @brief Extract a single float from a _mm256 vector
+ * @brief Extract a single float from a vec_f32 vector
  * 
  * @tparam imm      Which value to extract
  * @param v         Input vector
@@ -22,12 +25,15 @@ typedef uint32x4_t  vec_mask32 ;
  */
 template< int imm > 
 static inline float vec_extract( const vec_f32 v ) {
-    static_assert( imm >= 0 && imm < 4, "imm must be in the range [0..4]" );
-    return vgetq_lane_f32( v, imm );
+    static_assert( imm >= 0 && imm < vec_width, "imm must be in the range [0..vec_width[" );
+    return  v[imm];
 }
 
 static inline float vec_extract( const vec_f32 v, int i ) {
-    return v[i];
+    // This uses a 
+    // return v[i];
+    
+    return svlastb_f32( svwhilele_b32( 0, i ), v );
 }
 
 /**
@@ -43,6 +49,25 @@ std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
     os << ", " << vec_extract<1>( v );
     os << ", " << vec_extract<2>( v );
     os << ", " << vec_extract<3>( v );
+
+#if __ARM_FEATURE_SVE_BITS > 128
+    os << ", " << vec_extract<4>( v );
+    os << ", " << vec_extract<5>( v );
+    os << ", " << vec_extract<6>( v );
+    os << ", " << vec_extract<7>( v );
+#endif
+
+#if __ARM_FEATURE_SVE_BITS > 256
+    os << ", " << vec_extract<8>( v );
+    os << ", " << vec_extract<9>( v );
+    os << ", " << vec_extract<10>( v );
+    os << ", " << vec_extract<11>( v );
+    os << ", " << vec_extract<12>( v );
+    os << ", " << vec_extract<13>( v );
+    os << ", " << vec_extract<14>( v );
+    os << ", " << vec_extract<15>( v );
+#endif
+
     os << "]";
 
     return os;
@@ -54,7 +79,7 @@ std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_zero_float() {
-    return vdupq_n_f32(0);
+    return svdup_n_f32(0);
 }
 
 /**
@@ -64,7 +89,7 @@ static inline vec_f32 vec_zero_float() {
  * @return vec_f32 
  */
 static inline vec_f32 vec_float( float s ) {
-    return vdupq_n_f32(s);
+    return svdup_n_f32(s);
 }
 
 /**
@@ -74,7 +99,7 @@ static inline vec_f32 vec_float( float s ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_float( vec_i32 vi ) {
-    return vcvtq_f32_s32( vi );
+    return svcvt_f32_s32_x( svptrue_b32(), vi );
 }
 
 /**
@@ -86,9 +111,31 @@ static inline vec_f32 vec_float( vec_i32 vi ) {
  * @param d 
  * @return vec_f32 
  */
-static inline vec_f32 vec_float( float a, float b, float c, float d ) {
-    return vec_f32{ a, b, c, d };
+
+#if (__ARM_FEATURE_SVE_BITS==128)
+static inline vec_f32 vec_float( float f0, float f1, float f2, float f3) {
+    return vec_f32{ f0, f1, f2, f3 };
 }
+#elif (__ARM_FEATURE_SVE_BITS==256)
+static inline vec_f32 vec_float( 
+    float f0, float f1, float f2, float f3,
+    float f4, float f5, float f6, float f7)
+{
+    return vec_f32{ f0, f1, f2, f3, f4, f5, f6, f7 };
+}
+#elif (__ARM_FEATURE_SVE_BITS==512)
+static inline vec_f32 vec_float( 
+    float  f0, float  f1, float  f2, float  f3,
+    float  f4, float  f5, float  f6, float  f7,
+    float  f8, float  f9, float f10, float f11,
+    float f12, float f13, float f14, float f15)
+{
+    return vec_f32{ 
+        f0,  f1,  f2,  f3,  f4,  f5,  f6,  f7,
+        f8,  f9, f10, f11, f12, f13, f14, f15
+    };
+}
+#endif
 
 /**
  * @brief Loads vector from memory
@@ -99,7 +146,7 @@ static inline vec_f32 vec_float( float a, float b, float c, float d ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_load( const float * mem_addr) { 
-    return vld1q_f32( (float32_t *) mem_addr );
+    return svld1( svptrue_b32(), (float32_t *) mem_addr );
 }
 
 /**
@@ -111,11 +158,18 @@ static inline vec_f32 vec_load( const float * mem_addr) {
  * @param a 
  */
 static inline vec_f32 vec_store( float * mem_addr, vec_f32 a ) {
-    vst1q_f32( mem_addr, a ); return a;
+    svst1( svptrue_b32(), mem_addr, a ); return a;
 }
 
+/**
+ * @brief Negate vector value
+ * 
+ * @param a         Input value
+ * @return vec_f32  Output value (-a)
+ */
 static inline vec_f32 vec_neg( vec_f32 a ) {
-    return vnegq_f32( a );
+    // return svneg_f32_x( svptrue_b32(), a );
+    return -a;
 }
 
 /**
@@ -126,7 +180,7 @@ static inline vec_f32 vec_neg( vec_f32 a ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_add( vec_f32 a, vec_f32 b ) {
-    return a+b;
+    return svadd_f32_x( svptrue_b32(), a, b );
 }
 
 /**
@@ -137,7 +191,7 @@ static inline vec_f32 vec_add( vec_f32 a, vec_f32 b ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_add( vec_f32 a, float s ) { 
-    return a + vdupq_n_f32(s);
+    return svadd_n_f32_x( svptrue_b32(), a, s );
 }
 
 /**
@@ -148,7 +202,7 @@ static inline vec_f32 vec_add( vec_f32 a, float s ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_sub( vec_f32 a, vec_f32 b ) {
-    return a - b;
+    return svsub_f32_x( svptrue_b32(), a, b );
 }
 
 /**
@@ -159,7 +213,7 @@ static inline vec_f32 vec_sub( vec_f32 a, vec_f32 b ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_mul( vec_f32 a, vec_f32 b ) { 
-    return a * b;
+    return svmul_f32_x( svptrue_b32(), a, b );
 }
 
 /**
@@ -170,7 +224,7 @@ static inline vec_f32 vec_mul( vec_f32 a, vec_f32 b ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_mul( vec_f32 a, float s ) {
-    return vmulq_n_f32(a, s);
+    return svmul_n_f32_x( svptrue_b32(), a, s );
 }
 
 /**
@@ -181,7 +235,7 @@ static inline vec_f32 vec_mul( vec_f32 a, float s ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_div( vec_f32 a, vec_f32 b ) {
-    return a / b;
+    return svdiv_f32_x( svptrue_b32(), a, b );
 }
 
 /**
@@ -191,30 +245,30 @@ static inline vec_f32 vec_div( vec_f32 a, vec_f32 b ) {
  * @param b 
  * @return vec_i32
  */
-static inline vec_mask32 vec_eq( vec_f32 a, vec_f32 b ) { 
-    return vceqq_f32( a, b );
+static inline vec_mask vec_eq( vec_f32 a, vec_f32 b ) { 
+    return svcmpeq_f32( svptrue_b32(), a, b );
 }
 
 /**
- * @brief Compares 2 vector values (by element) for inequality (!=)
+ * @brief Compares 2 vector values (by element) for inequality (!=) and return mask
  * 
  * @param a 
  * @param b 
  * @return vec_i32
  */
-static inline vec_mask32 vec_ne( vec_f32 a, vec_f32 b ) { 
-    return vmvnq_u32( vceqq_f32( a, b ) );
+static inline vec_mask vec_ne( vec_f32 a, vec_f32 b ) { 
+    return svcmpne_f32( svptrue_b32(), a, b );
 }
 
 /**
- * @brief Compares 2 vector values (by element) for "greater-than" (>)
+ * @brief Compares 2 vector values (by element) for "greater-than" (>) and return mask
  * 
  * @param a 
  * @param b 
- * @return vec_f32 
+ * @return vec_mask
  */
-static inline vec_mask32 vec_gt( vec_f32 a, vec_f32 b ) { 
-    return vcgtq_f32( a, b );
+static inline vec_mask vec_gt( vec_f32 a, vec_f32 b ) { 
+    return svcmpgt_f32( svptrue_b32(), a, b );
 }
 
 /**
@@ -224,8 +278,8 @@ static inline vec_mask32 vec_gt( vec_f32 a, vec_f32 b ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-static inline vec_mask32 vec_ge( vec_f32 a, vec_f32 b ) { 
-    return vcgeq_f32( a, b );
+static inline vec_mask vec_ge( vec_f32 a, vec_f32 b ) { 
+    return svcmpge_f32( svptrue_b32(), a, b );
 }
 
 /**
@@ -238,8 +292,8 @@ static inline vec_mask32 vec_ge( vec_f32 a, vec_f32 b ) {
  */
 static inline vec_f32 vec_ge( vec_f32 a, vec_f32 b, vec_f32 v ) { 
 
-    return vreinterpretq_f32_u32( 
-        vandq_u32( vcgeq_f32( a, b ), vreinterpretq_u32_f32(v)) );
+    vec_mask m = svcmpge_f32( svptrue_b32(), a, b );
+    return svsel_f32( m, v, svdup_n_f32(0) );
 }
 
 /**
@@ -251,7 +305,8 @@ static inline vec_f32 vec_ge( vec_f32 a, vec_f32 b, vec_f32 v ) {
  * @return      Result, for each element i, 0 if false and v[i] if true
  */
 static inline vec_i32 vec_ge( vec_f32 a, vec_f32 b, vec_i32 vi ) { 
-    return  vreinterpretq_s32_u32( vandq_u32( vcgeq_f32( a, b ), vreinterpretq_u32_s32(vi) ) );
+    vec_mask m = svcmpge_f32( svptrue_b32(), a, b );
+    return svsel_s32( m, vi, svdup_n_s32(0) );
 }
 
 
@@ -262,8 +317,8 @@ static inline vec_i32 vec_ge( vec_f32 a, vec_f32 b, vec_i32 vi ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-static inline vec_mask32 vec_lt( vec_f32 a, vec_f32 b ) { 
-    return vcltq_f32( a, b );
+static inline vec_mask vec_lt( vec_f32 a, vec_f32 b ) { 
+    return svcmplt_f32( svptrue_b32(), a, b );
 }
 
 /**
@@ -275,8 +330,8 @@ static inline vec_mask32 vec_lt( vec_f32 a, vec_f32 b ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_lt( vec_f32 a, vec_f32 b, vec_f32 v ) { 
-    return vreinterpretq_f32_u32( 
-        vandq_u32( vcltq_f32( a, b ), vreinterpretq_u32_f32(v)) );
+    vec_mask m = svcmplt_f32( svptrue_b32(), a, b );
+    return svsel_f32( m, v, svdup_n_f32(0) );
 }
 
 /**
@@ -288,8 +343,9 @@ static inline vec_f32 vec_lt( vec_f32 a, vec_f32 b, vec_f32 v ) {
  * @return vec_f32 
  */
 
-static inline vec_mask32 vec_lt( vec_f32 a, vec_f32 b, vec_i32 vi ) { 
-    return  vandq_u32( vcltq_f32( a, b ), vreinterpretq_u32_s32(vi) );
+static inline vec_i32 vec_lt( vec_f32 a, vec_f32 b, vec_i32 vi ) { 
+    vec_mask m = svcmplt_f32( svptrue_b32(), a, b );
+    return svsel_s32( m, vi, svdup_n_s32(0) );
 }
 
 /**
@@ -299,8 +355,8 @@ static inline vec_mask32 vec_lt( vec_f32 a, vec_f32 b, vec_i32 vi ) {
  * @param b 
  * @return vec_f32 
  */
-static inline vec_mask32 vec_le( vec_f32 a, vec_f32 b ) { 
-    return vcleq_f32( a, b );
+static inline vec_mask vec_le( vec_f32 a, vec_f32 b ) { 
+    return svcmple_f32( svptrue_b32(), a, b );
 }
 
 /**
@@ -312,7 +368,7 @@ static inline vec_mask32 vec_le( vec_f32 a, vec_f32 b ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_fmadd( vec_f32 a, vec_f32 b, vec_f32 c ) { 
-    return vmlaq_f32( c, b, a );
+    return svmad_f32_x( svptrue_b32(), a, b, c );
 }
 
 /**
@@ -324,7 +380,7 @@ static inline vec_f32 vec_fmadd( vec_f32 a, vec_f32 b, vec_f32 c ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_fmsub( vec_f32 a, vec_f32 b, vec_f32 c ) { 
-    return vmlaq_f32( c, b, vnegq_f32(a) );
+    return svmad_f32_x( svptrue_b32(), a, b, svneg_f32_x( svptrue_b32(), c ));
 }
 
 /**
@@ -336,7 +392,7 @@ static inline vec_f32 vec_fmsub( vec_f32 a, vec_f32 b, vec_f32 c ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_fnmadd( vec_f32 a, vec_f32 b, vec_f32 c ) {
-    return vmlsq_f32( c, b, a );
+    return svmsb_f32_x( svptrue_b32(), a, b, c );
 }
 
 /**
@@ -348,15 +404,14 @@ static inline vec_f32 vec_fnmadd( vec_f32 a, vec_f32 b, vec_f32 c ) {
 static inline vec_f32 vec_recp( const vec_f32 a )
 {
     // Full calculation
-    auto recp = vdupq_n_f32(1.0f) / a;
+    auto recp = svdiv_f32_x( svptrue_b32(), svdup_n_f32(1.0f), a );
 
 /*
-    // Fast estimate + 2 Newton-Raphson iterations
-    auto recp =  vrecpeq_f32( a );
-   // 2 iterations are required for full precision
-   recp = vrecpsq_f32( a, recp ) * recp;
-   recp = vrecpsq_f32( a, recp ) * recp;
+    // Fast estimate + 1 Newton-Raphson iteration
+    auto recp =  svrecpe_f32( a );
+    recp = svmul_f32_x( svptrue_b32(),svrecps_f32( a, recp ), recp );
 */
+
     return recp;
 }
 
@@ -369,16 +424,14 @@ static inline vec_f32 vec_recp( const vec_f32 a )
 static inline vec_f32 vec_rsqrt( const vec_f32 a ) {
 
     // Full calculation
-    auto rsqrt = vdupq_n_f32(1.0f) / vsqrtq_f32(a);
+    auto rsqrt = svdiv_f32_x( svptrue_b32(), svdup_n_f32(1.0f) , svsqrt_f32_x( svptrue_b32(), a) );
 
 /*
-   // Fast estimate + 2 Newton-Raphson iterations
-   auto rsqrt = vrsqrteq_f32( a );
+    // Fast estimate + 2 Newton-Raphson iterations
+    auto rsqrt = svrsqrte_f32( a );
 
-   // 2 iterations are required for full precision
-   rsqrt = vrsqrtsq_f32( a * rsqrt, rsqrt ) * rsqrt;
-   rsqrt = vrsqrtsq_f32( a * rsqrt, rsqrt ) * rsqrt;
-
+    rsqrt = svmul_f32_x( svptrue_b32(),svrsqrts_f32( svmul_f32_x( svptrue_b32(), a, rsqrt ), rsqrt ), rsqrt );
+    rsqrt = svmul_f32_x( svptrue_b32(),svrsqrts_f32( svmul_f32_x( svptrue_b32(), a, rsqrt ), rsqrt ), rsqrt );
 */
 
     return rsqrt;
@@ -391,7 +444,7 @@ static inline vec_f32 vec_rsqrt( const vec_f32 a ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_sqrt( const vec_f32 a ) {
-    return vsqrtq_f32(a);
+    return svsqrt_f32_x( svptrue_b32(), a );
 }
 
 /**
@@ -401,7 +454,7 @@ static inline vec_f32 vec_sqrt( const vec_f32 a ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_fabs( const vec_f32 a ) { 
-    return vabsq_f32( a );
+    return svabs_f32_x( svptrue_b32(), a );
 }
 
 /**
@@ -409,11 +462,11 @@ static inline vec_f32 vec_fabs( const vec_f32 a ) {
  * 
  * @param a     a vector
  * @param b     b vector
- * @param mask  selection mask, 0 selects a vector element, -1 selects b vector element
+ * @param mask  selection mask
  * @return vec_i32 
  */
-static inline vec_f32 vec_select( const vec_f32 a, const vec_f32 b, const vec_mask32 mask ) {
-    return vbslq_f32( mask, b, a );
+static inline vec_f32 vec_select( const vec_f32 a, const vec_f32 b, const vec_mask mask ) {
+    return svsel_f32( mask, b, a );
 }
 
 
@@ -424,8 +477,7 @@ static inline vec_f32 vec_select( const vec_f32 a, const vec_f32 b, const vec_ma
  * @return float 
  */
 static inline float vec_reduce_add( const vec_f32 a ) {
-    auto tmp = vpaddq_f32(a,a);
-    return vgetq_lane_f32(tmp,0) + vgetq_lane_f32(tmp,1);
+    return svadda_f32( svptrue_b32(), 0.0f, a );
 }
 
 /**
@@ -437,24 +489,17 @@ static inline float vec_reduce_add( const vec_f32 a ) {
  */
 static inline vec_f32 vec_gather( float const * base_addr, vec_i32 vindex ) {
 
-    vec_f32 v;
-
-    v = vld1q_dup_f32(  base_addr + vgetq_lane_s32( vindex, 0 ) );
-    v = vld1q_lane_f32( base_addr + vgetq_lane_s32( vindex, 1 ), v, 1 );
-    v = vld1q_lane_f32( base_addr + vgetq_lane_s32( vindex, 2 ), v, 2 );
-    v = vld1q_lane_f32( base_addr + vgetq_lane_s32( vindex, 3 ), v, 3 );
+    vec_f32 v = svld1_gather_s32offset_f32( svptrue_b32(), base_addr, vindex );
 
     return v;
 }
 
 /**
  * @brief Integer (32 bit) SIMD types
- * 
- * @note For AVX this corresponds to the vec_i32 vector
  */
 
 /**
- * @brief Extract a single integer from a _mm256i vector
+ * @brief Extract a single integer from a vec_i32 vector
  * 
  * @tparam imm      Which value to extract
  * @param v         Input vector
@@ -463,12 +508,12 @@ static inline vec_f32 vec_gather( float const * base_addr, vec_i32 vindex ) {
 
 template< int imm > 
 static inline int vec_extract( const vec_i32 v ) {
-    static_assert( imm >= 0 && imm < 4, "imm must be in the range [0..3]" );
-    return vgetq_lane_s32( v, imm );
+    static_assert( imm >= 0 && imm < vec_width, "imm must be in the range [0..vec_width[" );
+    return  v[imm];
 }
 
 static inline int vec_extract( const vec_i32 v, int i ) {
-   return v[i];
+    return svlastb_s32( svwhilele_b32( 0, i ), v );
 }
 
 /**
@@ -484,6 +529,26 @@ std::ostream& operator<<(std::ostream& os, const vec_i32 v) {
     os << ", " << vec_extract<1>( v );
     os << ", " << vec_extract<2>( v );
     os << ", " << vec_extract<3>( v );
+
+
+#if __ARM_FEATURE_SVE_BITS > 128
+    os << ", " << vec_extract<4>( v );
+    os << ", " << vec_extract<5>( v );
+    os << ", " << vec_extract<6>( v );
+    os << ", " << vec_extract<7>( v );
+#endif
+
+#if __ARM_FEATURE_SVE_BITS > 256
+    os << ", " << vec_extract<8>( v );
+    os << ", " << vec_extract<9>( v );
+    os << ", " << vec_extract<10>( v );
+    os << ", " << vec_extract<11>( v );
+    os << ", " << vec_extract<12>( v );
+    os << ", " << vec_extract<13>( v );
+    os << ", " << vec_extract<14>( v );
+    os << ", " << vec_extract<15>( v );
+#endif
+
     os << "]";
 
     return os;
@@ -495,7 +560,7 @@ std::ostream& operator<<(std::ostream& os, const vec_i32 v) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_zero_int() {
-    return vdupq_n_s32(0);
+    return svdup_n_s32(0);
 }
 
 /**
@@ -505,7 +570,7 @@ static inline vec_i32 vec_zero_int() {
  * @return vec_i32 
  */
 static inline vec_i32 vec_int( int s ) {
-    return vdupq_n_s32(s);
+    return svdup_n_s32(s);
 }
 
 /**
@@ -517,9 +582,28 @@ static inline vec_i32 vec_int( int s ) {
  * @param d 
  * @return vec_i32 
  */
-static inline vec_i32 vec_int( int a, int b, int c, int d ){ 
-    return vec_i32{ a, b, c, d };
+#if (__ARM_FEATURE_SVE_BITS==128)
+static inline vec_i32 vec_int( int i0, int i1, int i2, int i3) {
+    return vec_i32{ i0, i1, i2, i3 };
 }
+#elif (__ARM_FEATURE_SVE_BITS==256)
+static inline vec_i32 vec_int( 
+    int i0, int i1, int i2, int i3,
+    int i4, int i5, int i6, int i7)
+{
+    return vec_i32{ i0, i1, i2, i3, i4, i5, i6, i7 };
+}
+#elif (__ARM_FEATURE_SVE_BITS==512)
+static inline vec_i32 vec_int( 
+    int i0, int i1, int i2, int i3,
+    int i4, int i5, int i6, int i7,
+    int i8, int i9, int i10, int i11,
+    int i12, int i13, int i14, int i15)
+{
+    return vec_i32{ i0, i1, i2, i3, i4, i5, i6, i7,
+                    i8, i9, i10, i11, i12, i13, i14, i15 };
+}
+#endif
 
 /**
  * @brief Loads vector from memory
@@ -530,7 +614,7 @@ static inline vec_i32 vec_int( int a, int b, int c, int d ){
  * @return vec_i32 
  */
 static inline vec_i32 vec_load( const int * mem_addr) { 
-    return vld1q_s32( mem_addr );
+    return svld1_s32( svptrue_b32(), mem_addr );
 }
 
 /**
@@ -542,7 +626,7 @@ static inline vec_i32 vec_load( const int * mem_addr) {
  * @param a 
  */
 static inline vec_i32 vec_store( int * mem_addr, vec_i32 a ) { 
-    vst1q_s32( mem_addr, a ); return a;
+    svst1_s32( svptrue_b32(), mem_addr, a ); return a;
 }
 
 /**
@@ -553,7 +637,7 @@ static inline vec_i32 vec_store( int * mem_addr, vec_i32 a ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_add( vec_i32 a, vec_i32 b ) { 
-    return a + b;
+    return a+b;
 }
 
 /**
@@ -564,7 +648,7 @@ static inline vec_i32 vec_add( vec_i32 a, vec_i32 b ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_sub( vec_i32 a, vec_i32 b ) {
-    return a - b;
+    return a-b;
 }
 
 /**
@@ -575,7 +659,7 @@ static inline vec_i32 vec_sub( vec_i32 a, vec_i32 b ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_add( vec_i32 a, int s ) { 
-    return a + vdupq_n_s32(s);
+    return svadd_n_s32_x( svptrue_b32(), a, s );
 }
 
 /**
@@ -586,7 +670,7 @@ static inline vec_i32 vec_add( vec_i32 a, int s ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_mul( vec_i32 a, vec_i32 b ) {
-    return a * b;
+    return svmul_s32_x( svptrue_b32(), a, b );
 }
 
 /**
@@ -597,7 +681,7 @@ static inline vec_i32 vec_mul( vec_i32 a, vec_i32 b ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_mul( vec_i32 a, int s ) { 
-    return vmulq_n_s32( a, s );
+    return svmul_n_s32_x( svptrue_b32(), a, s );
 }
 
 /**
@@ -607,7 +691,7 @@ static inline vec_i32 vec_mul( vec_i32 a, int s ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_mul3( vec_i32 a ) {
-    return a + a + a;
+    return a*3;
 }
 
 /**
@@ -617,8 +701,8 @@ static inline vec_i32 vec_mul3( vec_i32 a ) {
  * @param b 
  * @return vec_i32 
  */
-static inline vec_mask32 vec_eq( vec_i32 a, vec_i32 b ) { 
-    return vceqq_s32( a, b );
+static inline vec_mask vec_eq( vec_i32 a, vec_i32 b ) { 
+    return svcmpeq_s32( svptrue_b32(), a, b );
 }
 
 /**
@@ -628,9 +712,8 @@ static inline vec_mask32 vec_eq( vec_i32 a, vec_i32 b ) {
  * @param b 
  * @return vec_i32 
  */
-static inline vec_mask32 vec_ne( vec_i32 a, vec_i32 b ) { 
-
-    return vmvnq_u32( vceqq_s32( a, b ) );
+static inline vec_mask vec_ne( vec_i32 a, vec_i32 b ) { 
+    return svcmpne_s32( svptrue_b32(), a, b );
 }
 
 /**
@@ -640,8 +723,8 @@ static inline vec_mask32 vec_ne( vec_i32 a, vec_i32 b ) {
  * @param b 
  * @return vec_i32 
  */
-static inline vec_mask32 vec_gt( vec_i32 a, vec_i32 b ) { 
-    return vcgtq_s32( a, b );
+static inline vec_mask vec_gt( vec_i32 a, vec_i32 b ) { 
+    return svcmpgt_s32( svptrue_b32(), a, b );
 }
 
 /**
@@ -651,8 +734,8 @@ static inline vec_mask32 vec_gt( vec_i32 a, vec_i32 b ) {
  * @param b 
  * @return vec_i32 
  */
-static inline vec_mask32 vec_lt( vec_i32 a, vec_i32 b ) { 
-    return vcltq_s32( a, b );
+static inline vec_mask vec_lt( vec_i32 a, vec_i32 b ) { 
+    return svcmplt_s32( svptrue_b32(), a, b );
 }
 /**
  * @brief Absolute value
@@ -661,7 +744,7 @@ static inline vec_mask32 vec_lt( vec_i32 a, vec_i32 b ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_abs( vec_i32 a ) {
-    return vabsq_s32( a );
+    return svabs_s32_x( svptrue_b32(), a );
 }
 
 /**
@@ -672,14 +755,12 @@ static inline vec_i32 vec_abs( vec_i32 a ) {
  * @param mask  selection mask, 0 selects a vector element, -1 selects b vector element
  * @return vec_i32 
  */
-static inline vec_i32 vec_select( const vec_i32 a, const vec_i32 b, const vec_mask32 mask ) {
-    return vbslq_s32( mask, b, a );
+static inline vec_i32 vec_select( const vec_i32 a, const vec_i32 b, const vec_mask mask ) {
+    return svsel_s32( mask, b, a );
 }
 
 /**
  * @brief Mask functions
- * 
- * @note In ARM Neon the mask is simply an integer vector vec_i32
  * 
  */
 
@@ -688,10 +769,10 @@ static inline vec_i32 vec_select( const vec_i32 a, const vec_i32 b, const vec_ma
  * @brief Bitwise complement (not)
  * 
  * @param a 
- * @return vec_mask32 
+ * @return vec_mask 
  */
-static inline vec_mask32 vec_not( vec_mask32 a ) {
-    return vmvnq_u32(a);
+static inline vec_mask vec_not( vec_mask a ) {
+    return svnot_b_z(svptrue_b32(), a);
 }
 
 /**
@@ -699,10 +780,10 @@ static inline vec_mask32 vec_not( vec_mask32 a ) {
  * 
  * @param a 
  * @param b 
- * @return vec_mask32 
+ * @return vec_mask 
  */
-static inline vec_mask32 vec_or( vec_mask32 a, vec_mask32 b ) {
-    return vorrq_u32( a, b );
+static inline vec_mask vec_or( vec_mask a, vec_mask b ) {
+    return svorr_b_z( svptrue_b32(), a, b );
 }
 
 /**
@@ -710,10 +791,10 @@ static inline vec_mask32 vec_or( vec_mask32 a, vec_mask32 b ) {
  * 
  * @param a 
  * @param b 
- * @return vec_mask32 
+ * @return vec_mask 
  */
-static inline vec_mask32 vec_and( vec_mask32 a, vec_mask32 b ) {
-    return vandq_u32( a, b );
+static inline vec_mask vec_and( vec_mask a, vec_mask b ) {
+    return svand_b_z( svptrue_b32(), a, b );
 }
 
 
@@ -723,20 +804,10 @@ static inline vec_mask32 vec_and( vec_mask32 a, vec_mask32 b ) {
  * @param mask 
  * @return int 
  */
-static inline int vec_all( const vec_mask32 mask ) {
-    // Check this
-    // https://stackoverflow.com/questions/41005281/testing-neon-simd-registers-for-equality-over-all-lanes
+static inline int vec_all( const vec_mask mask ) {
 
-    // Convert 4 x 32 bit integer to 4 x 16 bit integers
-    // Cast to 1 x 64 bit vector
-    // Get 1st (and only) lane
-    // Compare to int
+    return ! svptest_any( svptrue_b32(), svnot_b_z(svptrue_b32(), mask) );
 
-    uint16x4_t t = vqmovn_u32( mask );
-    return vget_lane_u64(vreinterpret_u64_u16(t), 0) == (uint64_t)(-1);
-
-    // Another option is to use vminvq_u32() (minimum accross lanes)
-    // return vminvq_u32( mask ) == -1;
 }
 
 /**
@@ -745,42 +816,30 @@ static inline int vec_all( const vec_mask32 mask ) {
  * @param mask 
  * @return int 
  */
-static inline int vec_any( const vec_mask32 mask ) {
-    // Check this
-    // https://stackoverflow.com/questions/41005281/testing-neon-simd-registers-for-equality-over-all-lanes
-
-    // Convert 4 x 32 bit integer to 4 x 16 bit integers
-    // Cast to 1 x 64 bit vector
-    // Get 1st (and only) lane
-    // Compare to int
-
-    uint16x4_t t = vqmovn_u32( mask );
-    return vget_lane_u64(vreinterpret_u64_u16(t), 0) != 0;
-
-    // Another option is to use vmaxvq_u32() (maximum accross lanes)
-    // return vmaxvq_u32( mask ) == -1;
-
+static inline int vec_any( const vec_mask mask ) {
+    return svptest_any( svptrue_b32(), mask );
 }
 
 
-static inline vec_mask32 vec_true() { 
-    return vdupq_n_u32(-1);
+static inline vec_mask vec_true() { 
+    return svptrue_b32();
 }
 
-static inline vec_mask32 vec_false() { 
-    return vdupq_n_u32(0);
+static inline vec_mask vec_false() { 
+    return svpfalse_b();
 }
 
-static inline int vec_extract( const vec_mask32 v, int i ) {
-   return v[i] & 1;
+static inline int vec_extract( const vec_mask mask, int i ) {
+    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
+    return svlastb_s32( svwhilele_b32( 0, i ), v );
 }
 
 template< int imm > 
-static inline int vec_extract( const vec_mask32 v ) {
-    static_assert( imm >= 0 && imm < 4, "imm must be in the range [0..4]" );
-    return vgetq_lane_u32( v, imm ) & 1;
+static inline float vec_extract( const vec_mask mask ) {
+    static_assert( imm >= 0 && imm < vec_width, "imm must be in the range [0..vec_width[" );
+    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
+    return  v[imm];
 }
-
 
 /**
  * @brief Writes the textual representation of vector v to os
@@ -789,17 +848,37 @@ static inline int vec_extract( const vec_mask32 v ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_mask32 v) {
+std::ostream& operator<<(std::ostream& os, const vec_mask mask) {
+    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
+
     os << "[";
-    os << vec_extract<0>( v );
-    os << vec_extract<1>( v );
-    os << vec_extract<2>( v );
-    os << vec_extract<3>( v );
+    os <<         v[0];
+    os << ", " << v[1];
+    os << ", " << v[2];
+    os << ", " << v[3];
+
+#if __ARM_FEATURE_SVE_BITS > 128
+    os << ", " << v[4];
+    os << ", " << v[5];
+    os << ", " << v[6];
+    os << ", " << v[7];
+#endif
+
+#if __ARM_FEATURE_SVE_BITS > 256
+    os << ", " << v[8];
+    os << ", " << v[9];
+    os << ", " << v[10];
+    os << ", " << v[11];
+    os << ", " << v[12];
+    os << ", " << v[13];
+    os << ", " << v[14];
+    os << ", " << v[15];
+#endif
+
     os << "]";
 
     return os;
 }
-
 
 /**
  * @brief Vector version of the float2 type holding 2 (.x, .y) vectors
@@ -828,8 +907,9 @@ static inline vfloat2 vfloat2_zero( ) {
  * @return vfloat2 
  */
 static inline vfloat2 vec_load_s2( const float * addr ) {
-    float32x4x2_t tmp = vld2q_f32((float32_t const *) addr );
-    return vfloat2{ tmp.val[0], tmp.val[1] };
+    
+    svfloat32x2_t tmp = svld2_f32(svptrue_b32(),(float32_t const *) addr );
+    return vfloat2{ svget2_f32(tmp,0), svget2_f32(tmp,1) };
 }
 
 /**
@@ -841,8 +921,9 @@ static inline vfloat2 vec_load_s2( const float * addr ) {
  * @param v 
  */
 static inline void vec_store_s2( float * addr, const vfloat2 v ) {
-    float32x4x2_t tmp{ v.x, v.y };
-    vst2q_f32( addr, tmp );
+    svfloat32x2_t tmp = svcreate2_f32( v.x, v.y );
+    svst2( svptrue_b32(),(float32_t *) addr, tmp );
+
 }
 
 /**
@@ -872,8 +953,8 @@ static inline vfloat3 vfloat3_zero( ) {
  * @return vfloat3 
  */
 static inline vfloat3 vec_load_s3( const float * addr ) {
-    float32x4x3_t tmp = vld3q_f32((float32_t const *) addr );
-    return vfloat3{ tmp.val[0], tmp.val[1], tmp.val[2] };
+    svfloat32x3_t tmp = svld3_f32(svptrue_b32(),(float32_t const *) addr );
+    return vfloat3{ svget3_f32(tmp,0), svget3_f32(tmp,1), svget3_f32(tmp,2) };
 }
 
 /**
@@ -885,8 +966,8 @@ static inline vfloat3 vec_load_s3( const float * addr ) {
  * @param v 
  */
 static inline void vec_store_s3( float * addr, const vfloat3 v ) {
-    float32x4x3_t tmp{ v.x, v.y, v.z };
-    vst3q_f32( addr, tmp );
+    svfloat32x3_t tmp = svcreate3_f32( v.x, v.y, v.z );
+    svst3( svptrue_b32(),(float32_t *) addr, tmp );
 }
 
 /**
@@ -905,9 +986,10 @@ struct alignas(vec_i32) vint2 {
  * @param addr 
  * @return vint2 
  */
-static inline vint2 vec_load_s2( int * addr ) {
-    int32x4x2_t tmp = vld2q_s32((int32_t const *) addr );
-    return vint2{ tmp.val[0], tmp.val[1] };
+static inline vint2 vec_load_s2( int const * addr ) {
+
+    svint32x2_t tmp = svld2_s32(svptrue_b32(),(int32_t const *) addr );
+    return vint2{ svget2_s32(tmp,0), svget2_s32(tmp,1) };
 }
 
 /**
@@ -919,8 +1001,9 @@ static inline vint2 vec_load_s2( int * addr ) {
  * @param v 
  */
 static inline void vec_store_s2( int * addr, const vint2 v ) {
-    int32x4x2_t tmp{ v.x, v.y };
-    vst2q_s32( addr, tmp );
+
+    svint32x2_t tmp = svcreate2_s32( v.x, v.y );
+    svst2( svptrue_b32(),(int32_t *) addr, tmp );
 }
 
 static inline vint2 vint2_zero( ) {
@@ -929,37 +1012,44 @@ static inline vint2 vint2_zero( ) {
 }
 
 
-class Vec4Float {
+class VecFloat {
     vec_f32 v;
     public:
-    Vec4Float( const vec_f32 v ) : v(v) {};
-    Vec4Float( const float s ) : v( vdupq_n_f32(s) ) {};
-    float extract( const int i ) { return v[i]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec4Float& obj) { 
+    VecFloat( const vec_f32 v ) : v(v) {};
+    VecFloat( const float s ) : v( svdup_n_f32(s) ) {};
+    float extract( const int i ) { 
+        return svlastb_f32( svwhilele_b32( 0, i ), v );
+    }
+    friend std::ostream& operator<<(std::ostream& os, const VecFloat& obj) { 
         os << obj.v;
         return os;
     }
 };
 
-class Vec4Int {
+class VecInt {
     vec_i32 v;
     public:
-    Vec4Int( const vec_i32 v ) : v(v) {};
-    Vec4Int( const int s ) : v( vdupq_n_s32(s) ) {};
-    int extract( const int i ) { return v[i]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec4Int& obj) { 
+    VecInt( const vec_i32 v ) : v(v) {};
+    VecInt( const int s ) : v( svdup_n_s32(s) ) {};
+    int extract( const int i ) { 
+        return svlastb_s32( svwhilele_b32( 0, i ), v );
+    }
+    friend std::ostream& operator<<(std::ostream& os, const VecInt& obj) { 
         os << obj.v;
         return os;
     }
 };
 
-class Vec4Mask {
-    vec_mask32 v;
+class VecMask {
+    vec_mask v;
     public:
-    Vec4Mask( const vec_mask32 v ) : v(v) {};
-    Vec4Mask( const unsigned int s ) : v( vdupq_n_u32(s) ) {};
-    int extract( const int i ) { return v[i]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec4Mask& obj) { 
+    VecMask( const vec_mask v ) : v(v) {};
+    VecMask( const unsigned int s ) : v( svdup_n_b32(s) ) {};
+    int extract( const int i ) {
+        vec_i32 iv = svsel_s32( v, svdup_n_s32(1), svdup_n_s32(0) );
+        return svlastb_s32( svwhilele_b32( 0, i ), iv );
+    }
+    friend std::ostream& operator<<(std::ostream& os, const VecMask& obj) { 
         os << obj.v;
         return os;
     }

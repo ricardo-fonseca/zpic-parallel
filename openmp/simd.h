@@ -53,6 +53,58 @@ typedef Vec16Mask VecMask_s;
 
 #endif
 
+/**
+ * @brief Enable use of ARM NEON optimized code
+ * 
+ */
+#ifdef USE_NEON
+
+#ifdef SIMD
+#error SIMD has already been defined, only 1 type of SIMD code should be enabled.
+#endif
+
+#include "neon.h"
+
+constexpr char vecname[] = "ARM NEON";
+constexpr int vecwidth = 4;
+typedef vec_f32 vfloat;
+typedef vec_i32 vint;
+typedef vec_mask32 vmask;
+
+typedef Vec4Float  VecFloat_s;
+typedef Vec4Int    VecInt_s;
+typedef Vec4Mask   VecMask_s;
+
+#define SIMD NEON
+
+#endif
+
+/**
+ * @brief Enable use of ARM SVE optimized code
+ * 
+ */
+#ifdef USE_SVE
+
+#ifdef SIMD
+#error SIMD has already been defined, only 1 type of SIMD code should be enabled.
+#endif
+
+#include "sve.h"
+
+constexpr char vecname[] = "ARM SVE";
+
+typedef vec_f32 vfloat;
+typedef vec_i32 vint;
+typedef vec_mask vmask;
+
+typedef VecFloat  VecFloat_s;
+typedef VecInt    VecInt_s;
+typedef VecMask   VecMask_s;
+
+#define SIMD SVE
+
+#endif
+
 
 /**
  * @brief Disable use of SIMD optimized code
@@ -64,6 +116,10 @@ constexpr char vecname[] = "none";
 constexpr int vecwidth = 1;
 
 #endif
+
+/**
+ * Memory alingment routines
+ */
 
 
 /**

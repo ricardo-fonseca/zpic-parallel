@@ -1,10 +1,10 @@
+#ifndef AVX512_H_
+#define AVX512_H_
+
 #include <immintrin.h>
 
 #include <iostream>
 #include <iomanip>
-
-
-
 
 static inline __m512 _mm512_set_m256( __m256 hi, __m256 lo ) {
     // Using AVX512F _mm512_insertf64x4
@@ -1276,5 +1276,4 @@ class Vec16Mask {
     }
 };
 
-
-
+#endif
