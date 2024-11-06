@@ -37,5 +37,7 @@ Currently suported architectures:
     + Compile with `-DUSE_AVX2 -mavx2 -mfma`
 + __x86 AVX512__
     + Compile with `-DUSE_AVX512 -mavx512f`
-
-ARM Neon and SVE(2) support is currently under development and will be published soon.
++ __ARM NEON__
+    + Compile with `-DUSE_NEON`
++ __ARM SVE__
+    + Compile with `-DUSE_SVE -msve-vector-bits=512`
