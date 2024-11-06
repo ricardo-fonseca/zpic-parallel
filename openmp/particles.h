@@ -1,6 +1,8 @@
 #ifndef PARTICLES_H_
 #define PARTICLES_H_
 
+#include <cstdint>
+
 #include "zpic.h"
 #include "vec_types.h"
 #include "bnd.h"

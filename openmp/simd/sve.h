@@ -1,9 +1,12 @@
+#ifndef SVE_H_
+#define SVE_H_
+
 #include <arm_sve.h>
 
 #include <iostream>
 #include <iomanip>
 
-constexpr int vec_width = __ARM_FEATURE_SVE_BITS / 32;
+constexpr int sve_vec_width = __ARM_FEATURE_SVE_BITS / 32;
 
 typedef svfloat32_t vec_f32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
 typedef svint32_t   vec_i32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
@@ -25,14 +28,18 @@ typedef svbool_t    vec_mask __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SV
  */
 template< int imm > 
 static inline float vec_extract( const vec_f32 v ) {
-    static_assert( imm >= 0 && imm < vec_width, "imm must be in the range [0..vec_width[" );
+    static_assert( imm >= 0 && imm < sve_vec_width, "imm must be in the range [0..vec_width[" );
     return  v[imm];
 }
 
+/**
+ * @brief Extract a single float from a vec_f32 vector
+ * 
+ * @param v         Input vector
+ * @param i         Element index
+ * @return float    Selected value
+ */
 static inline float vec_extract( const vec_f32 v, int i ) {
-    // This uses a 
-    // return v[i];
-    
     return svlastb_f32( svwhilele_b32( 0, i ), v );
 }
 
@@ -43,7 +50,7 @@ static inline float vec_extract( const vec_f32 v, int i ) {
  * @param v     Float vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
+static inline std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
     os << "[";
     os <<         vec_extract<0>( v );
     os << ", " << vec_extract<1>( v );
@@ -146,7 +153,7 @@ static inline vec_f32 vec_float(
  * @return vec_f32 
  */
 static inline vec_f32 vec_load( const float * mem_addr) { 
-    return svld1( svptrue_b32(), (float32_t *) mem_addr );
+    return svld1_f32( svptrue_b32(), (float32_t *) mem_addr );
 }
 
 /**
@@ -180,7 +187,8 @@ static inline vec_f32 vec_neg( vec_f32 a ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_add( vec_f32 a, vec_f32 b ) {
-    return svadd_f32_x( svptrue_b32(), a, b );
+    // return svadd_f32_x( svptrue_b32(), a, b );
+    return a + b;
 }
 
 /**
@@ -202,7 +210,8 @@ static inline vec_f32 vec_add( vec_f32 a, float s ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_sub( vec_f32 a, vec_f32 b ) {
-    return svsub_f32_x( svptrue_b32(), a, b );
+    // return svsub_f32_x( svptrue_b32(), a, b );
+    return a - b;
 }
 
 /**
@@ -477,7 +486,7 @@ static inline vec_f32 vec_select( const vec_f32 a, const vec_f32 b, const vec_ma
  * @return float 
  */
 static inline float vec_reduce_add( const vec_f32 a ) {
-    return svadda_f32( svptrue_b32(), 0.0f, a );
+    return svaddv_f32( svptrue_b32(), a );
 }
 
 /**
@@ -488,10 +497,7 @@ static inline float vec_reduce_add( const vec_f32 a ) {
  * @return vec_f32 
  */
 static inline vec_f32 vec_gather( float const * base_addr, vec_i32 vindex ) {
-
-    vec_f32 v = svld1_gather_s32offset_f32( svptrue_b32(), base_addr, vindex );
-
-    return v;
+    return svld1_gather_s32index_f32( svptrue_b32(), base_addr, vindex );
 }
 
 /**
@@ -508,7 +514,7 @@ static inline vec_f32 vec_gather( float const * base_addr, vec_i32 vindex ) {
 
 template< int imm > 
 static inline int vec_extract( const vec_i32 v ) {
-    static_assert( imm >= 0 && imm < vec_width, "imm must be in the range [0..vec_width[" );
+    static_assert( imm >= 0 && imm < sve_vec_width, "imm must be in the range [0..vec_width[" );
     return  v[imm];
 }
 
@@ -523,7 +529,7 @@ static inline int vec_extract( const vec_i32 v, int i ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_i32 v) {
+static inline std::ostream& operator<<(std::ostream& os, const vec_i32 v) {
     os << "[";
     os <<         vec_extract<0>( v );
     os << ", " << vec_extract<1>( v );
@@ -691,7 +697,9 @@ static inline vec_i32 vec_mul( vec_i32 a, int s ) {
  * @return vec_i32 
  */
 static inline vec_i32 vec_mul3( vec_i32 a ) {
-    return a*3;
+    // return a*3;
+    return a + a + a;
+    // return svmul_n_s32_x( svptrue_b32(), a, 3 );
 }
 
 /**
@@ -836,7 +844,7 @@ static inline int vec_extract( const vec_mask mask, int i ) {
 
 template< int imm > 
 static inline float vec_extract( const vec_mask mask ) {
-    static_assert( imm >= 0 && imm < vec_width, "imm must be in the range [0..vec_width[" );
+    static_assert( imm >= 0 && imm < sve_vec_width, "imm must be in the range [0..vec_width[" );
     vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
     return  v[imm];
 }
@@ -848,31 +856,31 @@ static inline float vec_extract( const vec_mask mask ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_mask mask) {
+static inline std::ostream& operator<<(std::ostream& os, const vec_mask mask) {
     vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
 
     os << "[";
-    os <<         v[0];
-    os << ", " << v[1];
-    os << ", " << v[2];
-    os << ", " << v[3];
+    os << v[0];
+    os << v[1];
+    os << v[2];
+    os << v[3];
 
 #if __ARM_FEATURE_SVE_BITS > 128
-    os << ", " << v[4];
-    os << ", " << v[5];
-    os << ", " << v[6];
-    os << ", " << v[7];
+    os << v[4];
+    os << v[5];
+    os << v[6];
+    os << v[7];
 #endif
 
 #if __ARM_FEATURE_SVE_BITS > 256
-    os << ", " << v[8];
-    os << ", " << v[9];
-    os << ", " << v[10];
-    os << ", " << v[11];
-    os << ", " << v[12];
-    os << ", " << v[13];
-    os << ", " << v[14];
-    os << ", " << v[15];
+    os << v[8];
+    os << v[9];
+    os << v[10];
+    os << v[11];
+    os << v[12];
+    os << v[13];
+    os << v[14];
+    os << v[15];
 #endif
 
     os << "]";
@@ -1011,6 +1019,14 @@ static inline vint2 vint2_zero( ) {
     return v;
 }
 
+/**
+ * @brief Vector version of the vec_mask type holding 2 (.x, .y) masks
+ * 
+ */
+struct alignas(vec_mask) vmask2 {
+    vec_mask x, y;
+};
+
 
 class VecFloat {
     vec_f32 v;
@@ -1054,3 +1070,5 @@ class VecMask {
         return os;
     }
 };
+
+#endif

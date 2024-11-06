@@ -120,7 +120,7 @@ class grid {
      * 
      * @return total size of data buffers
      */
-    const std::size_t buffer_size() {
+    std::size_t buffer_size() {
         return (static_cast <std::size_t> (tile_vol)) * ( ntiles.x * ntiles.y ) ;
     };
 

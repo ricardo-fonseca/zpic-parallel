@@ -92,6 +92,7 @@ typedef Vec4Mask   VecMask_s;
 #include "sve.h"
 
 constexpr char vecname[] = "ARM SVE";
+constexpr int vecwidth = sve_vec_width;
 
 typedef vec_f32 vfloat;
 typedef vec_i32 vint;
@@ -205,6 +206,5 @@ void assert_aligned_16( T * addr, std::string msg ) {
         abort();
     }
 }
-
 
 #endif

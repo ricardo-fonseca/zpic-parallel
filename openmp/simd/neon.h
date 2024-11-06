@@ -1,4 +1,9 @@
+#ifndef NEON_H_
+#define NEON_H_
+
 #include <arm_neon.h>
+
+#include <stdint.h>
 
 #include <iostream>
 #include <iomanip>
@@ -37,7 +42,7 @@ static inline float vec_extract( const vec_f32 v, int i ) {
  * @param v     Float vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
+static inline std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
     os << "[";
     os <<         vec_extract<0>( v );
     os << ", " << vec_extract<1>( v );
@@ -288,8 +293,9 @@ static inline vec_f32 vec_lt( vec_f32 a, vec_f32 b, vec_f32 v ) {
  * @return vec_f32 
  */
 
-static inline vec_mask32 vec_lt( vec_f32 a, vec_f32 b, vec_i32 vi ) { 
-    return  vandq_u32( vcltq_f32( a, b ), vreinterpretq_u32_s32(vi) );
+static inline vec_i32 vec_lt( vec_f32 a, vec_f32 b, vec_i32 vi ) { 
+    return  vreinterpretq_s32_u32( 
+        vandq_u32( vcltq_f32( a, b ), vreinterpretq_u32_s32(vi) ) );
 }
 
 /**
@@ -478,7 +484,7 @@ static inline int vec_extract( const vec_i32 v, int i ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_i32 v) {
+static inline std::ostream& operator<<(std::ostream& os, const vec_i32 v) {
     os << "[";
     os <<         vec_extract<0>( v );
     os << ", " << vec_extract<1>( v );
@@ -789,7 +795,7 @@ static inline int vec_extract( const vec_mask32 v ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-std::ostream& operator<<(std::ostream& os, const vec_mask32 v) {
+static inline std::ostream& operator<<(std::ostream& os, const vec_mask32 v) {
     os << "[";
     os << vec_extract<0>( v );
     os << vec_extract<1>( v );
@@ -928,6 +934,13 @@ static inline vint2 vint2_zero( ) {
     return v;
 }
 
+/**
+ * @brief Vector version of the vec_mask type holding 2 (.x, .y) masks
+ * 
+ */
+struct alignas(vec_mask32) vmask2 {
+    vec_mask32 x, y;
+};
 
 class Vec4Float {
     vec_f32 v;
@@ -959,8 +972,10 @@ class Vec4Mask {
     Vec4Mask( const vec_mask32 v ) : v(v) {};
     Vec4Mask( const unsigned int s ) : v( vdupq_n_u32(s) ) {};
     int extract( const int i ) { return v[i]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec4Mask& obj) { 
+    inline friend std::ostream& operator<<(std::ostream& os, const Vec4Mask& obj) { 
         os << obj.v;
         return os;
     }
 };
+
+#endif

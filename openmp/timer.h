@@ -2,6 +2,7 @@
 #define __TIMER__
 
 #include <iostream>
+#include <cstdint>
 #include <chrono>
 
 namespace timer {
@@ -39,6 +40,7 @@ class Timer {
      */
     double resolution() {
         auto period = std::chrono::steady_clock::period();
+
         return ( period.num * 1.0e9 ) / ( period.den );
     }
 

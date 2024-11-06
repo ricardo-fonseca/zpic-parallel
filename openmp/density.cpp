@@ -439,7 +439,6 @@ void Density::Step::inject( Particles & part,
             }
         }
         break;
-    break;
     }
 }
 
@@ -554,7 +553,6 @@ void Density::Step::np_inject( Particles & part,
             }
         }
         break;
-    break;
     }
 
 }
