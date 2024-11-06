@@ -613,3 +613,42 @@ void Cathode::advance( Current &current )
     iter++;
 }
 
+/**
+ * @brief Free stream cathode species.
+ * 
+ * Free streams existing particles and injects new particles if needed.
+ * No acceleration or current deposition is performed. Used for debug purposes.
+ * 
+ * @param current 
+ */
+void Cathode::advance( ) 
+{
+    // Advance positions without depositing current
+    move( );
+
+    // Process physical boundary conditions
+    process_bc();
+
+    double t = ( iter - 1 ) * dt;
+    if (( t >= start ) && ( t < end ) ) { 
+
+        // Update injection positions of cathode particles
+        update_inj_pos();
+
+        // Count how many particles are being injected
+        cathode_np_inject( np_inj );
+
+        // Sort particles according to tile, leaving room for new particles to be injected
+        particles -> tile_sort( *tmp, *sort, np_inj );
+
+        // Inject new cathode particles
+        cathode_inject() ;
+
+    } else {
+        // Just sort particles over tiles
+        particles -> tile_sort( *tmp, *sort );
+    } 
+
+    // Increase internal iteration number
+    iter++;
+}

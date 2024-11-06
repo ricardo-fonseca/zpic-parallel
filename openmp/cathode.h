@@ -47,6 +47,8 @@ public:
     
     ~Cathode();
 
+    void advance() override;
+
     void advance( EMF const &emf, Current &current ) override;
 
     void advance( Current &current ) override;
