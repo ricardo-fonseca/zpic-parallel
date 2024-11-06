@@ -1415,7 +1415,7 @@ size_t zdf_end_cdset( t_zdf_file* zdf, t_zdf_dataset* dataset ){
 size_t zdf_open_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset ) {
 
     // Set file position after the magic number
-    if ( fseek( zdf -> fp, 4, SEEK_SET ) ) return(-1);
+    if ( fseek( zdf -> fp, 4, SEEK_SET ) ) return(0);
 
     // Locate the requested dataset
     // If the dataset is not found there will be an EOF error signaled
@@ -1447,7 +1447,7 @@ size_t zdf_open_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset ) {
 
     if ( !found ) {
         fprintf(stderr,"(*error*) Unable to find dataset %s\n", dataset -> name);
-        return(-1);
+        return(0);
     }
 
     // re-position the file pointer at the end of the file

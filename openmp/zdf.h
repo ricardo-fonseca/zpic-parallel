@@ -24,7 +24,7 @@ along with the ZPIC Educational code suite. If not, see <http://www.gnu.org/lice
 extern "C" {
 #endif
 
-#if !(defined _WIN32 || defined _WIN64)
+#if !(defined _WIN32 || defined _WIN64 || defined __FUJITSU )
 
   #if __SIZEOF_FLOAT__ != 4
   #error This version of ZDF only support systems were sizeof(float) = 4
