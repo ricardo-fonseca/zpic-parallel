@@ -16,6 +16,7 @@ using part_info = t_zdf_part_info;
 
 using file = t_zdf_file;
 using par_file = t_zdf_par_file;
+using dataset  = t_zdf_dataset;
 
 using chunk = t_zdf_chunk;
 
@@ -31,14 +32,31 @@ template<> constexpr t_zdf_data_type data_type<uint32_t>() { return zdf_uint32; 
 template<> constexpr t_zdf_data_type data_type<float   >() { return zdf_float32; };
 template<> constexpr t_zdf_data_type data_type<double  >() { return zdf_float64; };
 
-
+/**
+ * @brief Save grid data to disk
+ * 
+ * @tparam T        Datatype
+ * @param buffer    Data buffer
+ * @param info      Data information
+ * @param iter      Iteration information
+ * @param path      File path (file name is built from data information)
+ * @return int      0 on success, -1 on error
+ */
 template< typename T>
 int save_grid( T *buffer, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path ) {
     static_assert( data_type<T>() != zdf_null, "Unsupported data type");
     return zdf_save_grid( (void*) buffer, data_type<T>(), &info, &iter, path.c_str() );
 }
 
-
+/**
+ * @brief Open particle data file
+ * 
+ * @param file          File information
+ * @param info          Particle data information
+ * @param iteration     Interation information
+ * @param path          File path (file name is built from particle data information)
+ * @return int          0 on success, -1 on error
+ */
 static inline
 int open_part_file( t_zdf_file &file, t_zdf_part_info &info, t_zdf_iteration &iteration, std::string path ) {
     return zdf_open_part_file( &file, &info, &iteration, path.c_str() );
@@ -132,6 +150,57 @@ int save_grid( T *buffer, unsigned ndims,
     return( zdf_par_close_file( &zdf ) );
 }
 
+static inline
+int open_part_file( t_zdf_par_file &file, t_zdf_part_info &info, t_zdf_iteration &iteration, std::string path,
+    MPI_Comm comm, t_zdf_parallel_io_mode par_io_mode = ZDF_MPI ) {
+    
+    // Create base path if necessary
+    int rank; 
+    MPI_Comm_rank( comm, & rank );
+    if ( rank == 0 ) create_path( path.c_str() );
+    MPI_Barrier( comm );
+
+    // Prepare filename
+    char filename[1025];
+    snprintf( filename, 1024, "%s/%s-%s-%06u.zdf", path.c_str(), "particles", info.name, (unsigned) iteration.n );
+
+    // Create file
+    if ( !zdf_par_open_file( &file, filename, ZDF_CREATE, comm, par_io_mode ) ) {
+        std::cerr << "(*error*) Unable to open parallel ZDF file, aborting.\n";
+        return(-1);
+    }
+
+    // Add file type
+    if ( !zdf_par_add_string( &file, "TYPE", "particles") ) return(0);
+
+    // Add particle info
+    if ( !zdf_par_add_part_info( &file, &info ) ) return(0);
+
+    // Add iteration info
+    if ( !zdf_par_add_iteration( &file, &iteration ) ) return(0);
+
+    return(1);
+}
+
+static inline
+int close_file( t_zdf_par_file &file ) {
+    return zdf_par_close_file( & file );
+};
+
+static inline
+int start_cdset( t_zdf_par_file &file, t_zdf_dataset & dataset ) {
+    return zdf_par_start_cdset( & file, & dataset );
+}
+
+static inline
+int write_cdset( t_zdf_par_file &file, t_zdf_dataset & dataset, t_zdf_chunk & chunk, const int64_t offset ) {
+    return zdf_par_write_cdset( &file, &dataset, &chunk, offset );
+}
+
+static inline
+int end_cdset( t_zdf_par_file &file, t_zdf_dataset & dataset ) {
+    return zdf_par_end_cdset( & file, & dataset );
+}
 
 // End namespace zdf
 }
