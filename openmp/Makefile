@@ -8,15 +8,26 @@
 # OpenMP support
 # CXXFLAGS += -fopenmp
 
-#------------------ Intel oneApi Compilers -----------------
-CC = icx
-CFLAGS = -O3
+#--------------------- ARM Clang Compilers --------------------
+# -march=native is not detecting the A64FX processor properly
+CC = armclang
+CFLAGS = -O3 -mcpu=a64fx
 
-CXX = icpx
-CXXFLAGS = -O3
+CXX = armclang++
+CXXFLAGS = -O3 -mcpu=a64fx
 
 # OpenMP support
-CXXFLAGS += -qopenmp
+CXXFLAGS += -fopenmp
+
+#------------------ Intel oneApi Compilers -----------------
+# CC = icx
+# CFLAGS = -O3
+
+# CXX = icpx
+# CXXFLAGS = -O3
+
+# OpenMP support
+# CXXFLAGS += -qopenmp
 
 #------------------ LLVM Compilers -----------------
 # CC = clang
@@ -34,14 +45,21 @@ CXXFLAGS += -qopenmp
 # CXXFLAGS += -DUSE_AVX2 -mavx2 -mfma
 
 # Enable AVX512f extensions
-CXXFLAGS += -DUSE_AVX512 -mavx512f
+# CXXFLAGS += -DUSE_AVX512 -mavx512f
+
+# Enable ARM Neon extensions
+# CXXFLAGS += -DUSE_NEON
+
+# Enable ARM SVE extensions (512 bits)
+CXXFLAGS += -DUSE_SVE -msve-vector-bits=512
 
 # c11 compliance and full warnings
 CFLAGS += -Wall -std=c11
 
-# c++17 compliance and full warnings (except for VLA extension)
-CXXFLAGS += -Wall -std=c++17 -Wno-unknown-pragmas 
+# c++17 compliance and full warnings
+CXXFLAGS += -Wall -std=c++17 -Wno-unknown-pragmas
 
+# Disable VLA extension warnings (clang compilers)
 CXXFLAGS += -Wno-vla-cxx-extension
 # --------------------------------------------------------------------------- #
 

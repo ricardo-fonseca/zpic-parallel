@@ -1,5 +1,11 @@
 
+/**
+ * OMP_NUM_THREADS=16 GOMP_CPU_AFFINITY="0-15" ./zpic
+ */
+
 #include <iostream>
+
+#include <stdint.h>
 
 #include "utils.h"
 #include "vec_types.h"
@@ -17,7 +23,9 @@
 #include <omp.h>
 #endif
 
-#include "simd.h"
+#include "simd/simd.h"
+
+#include <sys/prctl.h>
 
 void info( void ) {
 
@@ -27,6 +35,13 @@ void info( void ) {
     std::cout << "  vector width: " << vecwidth <<'\n';
 #else
     std::cout << "SIMD support not enabled\n";
+#endif
+
+#ifdef __ARM_FEATURE_SVE_BITS
+#if __ARM_FEATURE_SVE_BITS > 0
+    std::cout << "ARM SVE bits: " << __ARM_FEATURE_SVE_BITS << '\n';
+    prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8);
+#endif
 #endif
 
 #ifdef _OPENMP
@@ -155,17 +170,18 @@ void test_weibel( void ) {
     uint2 gnx = make_uint2( 128, 128 );
     uint2 ntiles = make_uint2( 8, 8 );
 
+//    uint2 gnx = make_uint2( 256, 256);
+//    uint2 ntiles = make_uint2( 16, 16 );
+
     uint2 nx = make_uint2( gnx.x/ntiles.x, gnx.y/ntiles.y );
     float2 box = make_float2( gnx.x/10.0, gnx.y/10.0 );
     float dt = 0.07;
 
-/*
     std::cout << "Starting Weibel test\n"
               << "ntiles    : " << ntiles << '\n'
               << "tile size : " << nx << '\n'
-              << "gnx       : " << uint2( ntiles.x * nx.x, ntiles.y * nx.y ) << '\n'
+              << "gnx       : " << make_uint2( ntiles.x * nx.x, ntiles.y * nx.y ) << '\n'
               << "box       : " << box << '\n';
-*/
 
     Simulation sim( ntiles, nx, box, dt );
 
@@ -496,6 +512,8 @@ int main( void ) {
 
     info();
 
+    // test_random();
+
     // test_laser();
 
     // test_inj();
@@ -506,7 +524,7 @@ int main( void ) {
 
     // benchmark();
 
-    test_weibel_large();
+    // test_weibel_large();
 
-    // test_weibel_96();
+    test_weibel_96();
 }
