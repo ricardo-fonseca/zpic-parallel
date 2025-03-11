@@ -2415,19 +2415,20 @@ void Species::deposit_charge( grid<float> &charge ) const {
  */
 void Species::save() const {
 
-    const char * quants[] = {
-        "x","y",
-        "ux","uy","uz"
+    const part::quant quants[] = {
+        part::x, part::y, part::ux, part::uy, part::uz
     };
 
-    const char * qlabels[] = {
-        "x","y",
-        "u_x","u_y","u_z"
+    const char * names[] = {
+        "x","y","ux","uy","uz"
     };
 
-    const char * qunits[] = {
-        "c/\\omega_n", "c/\\omega_n",
-        "c","c","c"
+    const char * labels[] = {
+        "x","y","u_x","u_y","u_z"
+    };
+
+    const char * units[] = {
+        "c/\\omega_n", "c/\\omega_n","c","c","c"
     };
 
     zdf::iteration iter_info = {
@@ -2441,12 +2442,12 @@ void Species::save() const {
         .name = (char *) name.c_str(),
         .label = (char *) name.c_str(),
         .nquants = 5,
-        .quants = (char **) quants,
-        .qlabels = (char **) qlabels,
-        .qunits = (char **) qunits,
+        .quants = (char **) names,
+        .qlabels = (char **) labels,
+        .qunits = (char **) units,
     };
 
-    particles -> save( info, iter_info, "PARTICLES" );
+    particles -> save( quants, info, iter_info, "PARTICLES" );
 }
 
 /**

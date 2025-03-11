@@ -1,6 +1,18 @@
-# ZPIC OpenMP / SIMD
+# ZPIC MPI / OpenMP / SIMD
 
-This version implements an OpenMP/SIMD optimized of the ZPIC algorithm.
+This version implements an MPI/OpenMP/SIMD optimized of the ZPIC algorithm.
+
+__WARNING : This version is not yet operational__ 
+
+## MPI
+
+The MPI parallelization is done using a coarse spatial domain decomposition across parallel nodes, while using a fine domain decomposition (i.e. micro-spatial decomposition, see below) inside each parallel node. It is fully compatible with the OpenMP and SIMD optimizations.
+
+For this version, MPI support is mandatory. If you don't have (or don't want) MPI support, you should use the OpenMP / SIMD version instead.
+
+### Compiling with MPI
+
+The supplied `Makefile` uses MPI wrapper compilers for MPI support. The code was tested with the Intel OneAPI toolkit and with MPICH from `brew`.
 
 ## OpenMP
 

@@ -30,11 +30,15 @@ static const MPI_Op sum = MPI_SUM;
 static const int proc_null = MPI_PROC_NULL;
 
 namespace type {
+    extern MPI_Datatype int2;
+    extern MPI_Datatype float2;
     extern MPI_Datatype float3;
     extern MPI_Datatype double3;
 }
 
 // These cannot be declared constexpr as their value is unknown at compile time
+template<> inline MPI_Datatype data_type<int2 >(void)   { return mpi::type::int2; };
+template<> inline MPI_Datatype data_type<float3 >(void) { return mpi::type::float3; };
 template<> inline MPI_Datatype data_type<float3 >(void) { return mpi::type::float3; };
 template<> inline MPI_Datatype data_type<double3>(void) { return mpi::type::double3; };
 
@@ -43,6 +47,12 @@ static inline int init( int *argc, char ***argv ) {
 
     if ( ierr == MPI_SUCCESS ) {
         // Initialize extra types
+        MPI_Type_contiguous( 2, MPI_INT,  &mpi::type::int2 ); 
+        MPI_Type_commit( &mpi::type::int2 );
+
+        MPI_Type_contiguous( 2, MPI_FLOAT,  &mpi::type::float2 ); 
+        MPI_Type_commit( &mpi::type::float2 );
+
         MPI_Type_contiguous( 3, MPI_FLOAT,  &mpi::type::float3 ); 
         MPI_Type_commit( &mpi::type::float3 );
         
@@ -55,6 +65,8 @@ static inline int init( int *argc, char ***argv ) {
 static inline int finalize( void ) {
 
     // These aren't strictly necessary
+    MPI_Type_free( &mpi::type::int2 );
+    MPI_Type_free( &mpi::type::float2 );
     MPI_Type_free( &mpi::type::float3 );
     MPI_Type_free( &mpi::type::double3 );
 

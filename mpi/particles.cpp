@@ -154,61 +154,100 @@ void Particles::gather( part::quant quant, const float2 scale, float * const __r
     }
 }
 
+
 /**
  * @brief Save particle data to disk
  * 
+ * @param quants    Quantities to save
  * @param metadata  Particle metadata (name, labels, units, etc.). Information is used to
  *                  set file name
  * @param iter      Iteration metadata
  * @param path      Path where to save the file
  */
-void Particles::save( zdf::part_info &metadata, zdf::iteration &iter, std::string path ) {
+void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf::iteration &iter, std::string path ) {
 
-    // The particle buffer may not be compact, get offsets in output buffer
-    int *out_offset = memory::malloc<int>( ntiles.x * ntiles.y );
+    // Get total number of particles to save
+    uint64_t local = np_local();
+    uint64_t global;
+    MPI_Allreduce( &local, &global, 1, MPI_UINT64_T, MPI_SUM, parallel.get_comm() );
 
-    uint32_t out_np = 0;
-    for( unsigned i = 0; i < ntiles.x * ntiles.y; i++) {
-        out_offset[i] = out_np;
-        out_np += np[i];
+    if ( global > 0 ) {
+        // Create a communicator including only the nodes with local particles
+        int color = ( local > 0 ) ? 1 : MPI_UNDEFINED;
+        MPI_Comm comm;
+        MPI_Comm_split( parallel.get_comm(), color, 0, & comm );
+
+        // Only nodes with particles are involved in this section
+        if ( local > 0 ) {
+
+            // Get rank in new communicator
+            int rank;
+            MPI_Comm_rank( comm, & rank );
+
+            // Open file
+            zdf::par_file part_file;
+            zdf::open_part_file( part_file, metadata, iter, path+"/"+metadata.name, comm );
+
+            // create the datasets
+            zdf::dataset dsets[ metadata.nquants ];
+
+            for( int i = 0; i < metadata.nquants; i++ ) {
+                dsets[i].name      = metadata.quants[i];
+                dsets[i].data_type = zdf::data_type<float>();
+                dsets[i].ndims     = 1;
+                dsets[i].data      = nullptr;
+                dsets[i].count[0]  = global; 
+
+                if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
+                    std::cerr << "Particles::save() - Unable to create chunked dataset " << metadata.quants[i] << '\n';
+                    exit(1);
+                }
+            }
+
+            // Allocate buffer for gathering particle data
+            float *data = memory::malloc<float>( local );
+
+            // Get offsets - this avoids recalculating offsets for each quantity
+            uint64_t file_off;
+            MPI_Exscan( &local, &file_off, 1, MPI_UINT64_T, MPI_SUM, comm );
+            if ( rank == 0 ) file_off = 0;
+
+            // Local data chunk
+            zdf::chunk chunk;
+            chunk.count[0] = local;
+            chunk.start[0] = file_off;
+            chunk.stride[0] = 1;
+            chunk.data = data;
+
+            // Write the data
+            for ( int i = 0; i < metadata.nquants; i ++) {
+                gather( quants[i], data, offset );
+                zdf::write_cdset( part_file, dsets[i], chunk, file_off );
+            }
+
+            // Free temporary data
+            memory::free( data );
+
+            // close the datasets
+            for( int i = 0; i < metadata.nquants; i++ ) 
+                zdf::end_cdset( part_file, dsets[i] );
+
+            // Close the file
+            zdf::close_file( part_file );
+        }
+    } else {
+        // No particles - root node creates an empty file
+        if ( parallel.get_rank() == 0 ) {
+            zdf::file part_file;
+            zdf::open_part_file( part_file, metadata, iter, path+"/"+metadata.name );
+
+            for ( int i = 0; i < metadata.nquants; i ++) {
+                zdf::add_quant_part_file( part_file, metadata.quants[i],  nullptr, 0 );
+            }
+
+            zdf::close_file( part_file );
+        }
     }
-
-    metadata.np = out_np;
-
-    // Open file
-    zdf::file part_file;
-    zdf::open_part_file( part_file, metadata, iter, path+"/"+metadata.name );
-
-    // Gather and save each quantity
-    float *data = nullptr;
-
-    if( out_np > 0 ) {
-        data = memory::malloc<float>( out_np );
-    }
-
-    gather( part::quant::x, data, out_offset );
-    zdf::add_quant_part_file( part_file, "x", data, out_np );
-
-    gather( part::quant::y, data, out_offset );
-    zdf::add_quant_part_file( part_file, "y", data, out_np );
-
-    gather( part::quant::ux, data, out_offset );
-    zdf::add_quant_part_file( part_file, "ux", data, out_np );
-
-    gather( part::quant::uy, data, out_offset );
-    zdf::add_quant_part_file( part_file, "uy", data, out_np );
-
-    gather( part::quant::uz, data, out_offset );
-    zdf::add_quant_part_file( part_file, "uz", data, out_np );
-
-    // Close the file
-    zdf::close_file( part_file );
-
-    // Cleanup
-    if ( out_np > 0 ) {
-        memory::free( data );
-    }
-    memory::free( out_offset );
 }
 
 /**
@@ -218,14 +257,13 @@ void Particles::save( zdf::part_info &metadata, zdf::iteration &iter, std::strin
  * @warning This kernel expects that sort.new_np has been zeroed before being
  *          called.
  * 
- * @param part      (in) Particle data
- * @param sort      (out) Sort data (new number of particles per tile, indices
- *                  particles leaving the tile, etc.)
- * @param periodic  (in) Correct for periodic boundaries
+ * @param part          (in) Particle data
+ * @param sort          (out) Sort data (new number of particles per tile, indices
+ *                      particles leaving the tile, etc.)
+ * @param local_bnd     (in) Information on local node boundaries
  */
 void bnd_check( 
-    ParticleData part, ParticleSortData sort, 
-    int2 const periodic )
+    ParticleData part, ParticleSortData sort, const part::bnd_type local_bnd)
 {
     // ntiles needs to be set to signed because of the comparisons below
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
@@ -233,8 +271,6 @@ void bnd_check(
 
     #pragma omp parallel for schedule(dynamic)
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-
-        // if ( tid == 0 ) std::cout << "(omp) calling bnd_check_kernel, nthreads(" << omp_get_num_threads() << ")\n";
 
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
@@ -284,24 +320,11 @@ void bnd_check(
         for( int i =0; i < 9; ++i ) {
             
             // Find target node
-            int target_tx = tx + ( i % 3 - 1 );
-            int target_ty = ty + ( i / 3 - 1 );
+            int2 target = make_int2( tx + i % 3 - 1, ty + i / 3 - 1 );
 
-            // Correct for periodic boundaries
-            if ( periodic.x ) {
-                if ( target_tx < 0 )         target_tx += ntiles.x; 
-                if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-            }
+            int target_tid = part::tid_coords( target, ntiles, local_bnd );
             
-            if ( periodic.y ) {
-                if ( target_ty < 0 )         target_ty += ntiles.y;
-                if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-            }
-            
-            if ( ( target_tx >= 0 ) && ( target_tx < ntiles.x ) &&
-                    ( target_ty >= 0 ) && ( target_ty < ntiles.y ) ) {
-                int target_tid = target_ty * ntiles.x + target_tx;
-                
+            if ( target_tid >= 0 ) {
                 #pragma omp atomic
                 sort.new_np[ target_tid ] += _npt[i];
             }
@@ -327,7 +350,8 @@ void bnd_check(
  */
 uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
 
-    const auto ntiles = tmp.ntiles.x * tmp.ntiles.y;
+    // Include ghost tiles in calculations
+    const auto ntiles = part::all_tiles( tmp.ntiles );
 
     int * __restrict__ offset = tmp.offset;
     int * __restrict__ np     = tmp.np;
@@ -355,7 +379,8 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
 uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np, 
     const int * __restrict__ extra ) {
 
-    const auto ntiles = tmp.ntiles.x * tmp.ntiles.y;
+    // Include ghost tiles in calculations
+    const auto ntiles = part::all_tiles( tmp.ntiles );
 
     int * __restrict__ offset = tmp.offset;
     int * __restrict__ np     = tmp.np;
@@ -392,7 +417,7 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np,
  */
 void copy_out( 
     ParticleData part, ParticleData tmp, const ParticleSortData sort,
-    const int2 periodic )
+    const part::bnd_type local_bnd )
 {
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
     const int2 lim = make_int2( part.nx.x, part.nx.y );
@@ -419,7 +444,7 @@ void copy_out(
         int _dir_offset[9];
 
         // The _dir_offset variables hold the offset for each of the 9 target
-        // tiles so the tmp_* variables just point to the beggining of the buffers
+        // tiles so the tmp_* variables just point to the beginning of the buffers
         int2* __restrict__  tmp_ix  = tmp.ix;
         float2* __restrict__ tmp_x  = tmp.x;
         float3* __restrict__ tmp_u  = tmp.u;
@@ -452,31 +477,14 @@ void copy_out(
             
             if ( i != 4 ) {
                 // Find target node
-                int target_tx = tx + i % 3 - 1;
-                int target_ty = ty + i / 3 - 1;
+                int2 target = make_int2( tx + i % 3 - 1, ty + i / 3 - 1 );
 
-                bool valid = true;
-
-                // Correct for periodic boundaries
-                if ( periodic.x ) {
-                    if ( target_tx < 0 )         target_tx += ntiles.x; 
-                    if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-                } else {
-                    valid &= ( target_tx >= 0 ) && ( target_tx < ntiles.x ); 
-                }
-
-                if ( periodic.y ) {
-                    if ( target_ty < 0 )         target_ty += ntiles.y;
-                    if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-                } else {
-                    valid &= ( target_ty >= 0 ) && ( target_ty < ntiles.y ); 
-                }
-
-                if ( valid ) {
+                int target_tid = part::tid_coords( target, ntiles, local_bnd );
+                
+                if ( target_tid >= 0 ) {
                     // If valid neighbour tile reserve space on tmp. array
-                    int target_tid = target_ty * ntiles.x + target_tx;
-                    _dir_offset[i] = tmp.offset[ target_tid ] + omp::atomic_fetch_add( &tmp.np[ target_tid ], npt[ i ] );
-
+                    _dir_offset[i] = tmp.offset[ target_tid ] + 
+                        omp::atomic_fetch_add( &tmp.np[ target_tid ], npt[ i ] );
                 } else {
                     // Otherwise mark offset as invalid
                     _dir_offset[i] = -1;
@@ -641,7 +649,7 @@ void copy_in( ParticleData part, ParticleData tmp )
  */
 void copy_sorted( 
     ParticleData part, ParticleData tmp, const ParticleSortData sort,
-    const int2 periodic )
+    const part::bnd_type local_bnd )
 {
     // Copy all particles to correct tile in tmp buffer
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
@@ -676,30 +684,13 @@ void copy_sorted(
             for( int i = 0; i < 9; i++ ) {
                 
                 // Find target node
-                int target_tx = tx + i % 3 - 1;
-                int target_ty = ty + i / 3 - 1;
+                int2 target = make_int2( tx + i % 3 - 1, ty + i / 3 - 1 );
 
-                bool valid = true;
+                int target_tid = part::tid_coords( target, ntiles, local_bnd );
 
-                // Correct for periodic boundaries
-                if ( periodic.x ) {
-                    if ( target_tx < 0 )         target_tx += ntiles.x; 
-                    if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-                } else {
-                    valid &= ( target_tx >= 0 ) && ( target_tx < ntiles.x ); 
-                }
-
-                if ( periodic.y ) {
-                    if ( target_ty < 0 )         target_ty += ntiles.y;
-                    if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-                } else {
-                    valid &= ( target_ty >= 0 ) && ( target_ty < ntiles.y ); 
-                }
-
-                if ( valid ) {
+                if ( target_tid >= 0 ) {
                     // If valid neighbour tile reserve space on tmp. array
-                    int target_tid = target_ty * ntiles.x + target_tx;
-
+ 
                     // _dir_offset[i] = atomicAdd( & tmp_tiles.offset2[ tid2 ], npt[ i ] );
                     _dir_offset[i] = tmp.offset[ target_tid ] + tmp.np[ target_tid ]; tmp.np[ target_tid ] += npt[ i ];
 
@@ -781,84 +772,6 @@ void copy_sorted(
  * @brief Moves particles to the correct tiles
  * 
  * @note Particles are only expected to have moved no more than 1 tile
- *       in each direction
- * 
- * @param tmp       Temporary particle buffer
- * @param sort      Temporary sort index 
- * @param extra     Additional space to add to each tile. Leaves  room for
- *                  particles to be injected later.
- */
-void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
-
-    // Reset sort data
-    sort.reset();
-
-    // Get new number of particles per tile
-    bnd_check ( *this, sort, periodic );
-
-    // Get new offsets (prefix scan of np)
-    if ( extra ) {
-        // Includes extra values in offset calculations
-        // Used to reserve space in particle buffer for later injection
-        update_tile_info ( tmp, sort.new_np, extra );
-    } else {
-        update_tile_info ( tmp, sort.new_np );
-    }
-
-    // Copy outgoing particles (and particles needing shifting) to staging area
-    copy_out ( *this, tmp, sort, periodic );
-
-    // Copy particles from staging area into final positions in partile buffer
-    copy_in ( *this, tmp );
-
-    // For debug only, remove from production code
-    // validate( "After tile_sort");
-}
-#endif
-
-#if 0
-/**
- * @brief Moves particles to the correct tiles
- * 
- * @note Particles are only expected to have moved no more than 1 tile
- *       in each direction. If necessary the code will grow the particle buffer
- * 
- * @param tmp       Temporary particle buffer
- * @param sort      Temporary sort index 
- * @param extra     Additional space to add to each tile. Leaves  room for
- *                  particles to be injected later.
- */
-void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
-
-    // Reset sort data
-    sort.reset();
-
-    // Get new number of particles per tile
-    bnd_check ( *this, sort, periodic );
-
-    // Get new offsets
-    if ( extra ) {
-        update_tile_info ( tmp, sort.new_np, extra );
-    } else {
-        update_tile_info ( tmp, sort.new_np );
-    }
-
-    // copy all particles to correct tiles in tmp buffer
-    copy_sorted( *this, tmp, sort, periodic );
-
-    // swap buffers
-    swap_buffers( *this, tmp );
-
-    // For debug only, remove from production code
-    // validate( "After tile_sort" );
-}
-#endif
-
-#if 1
-/**
- * @brief Moves particles to the correct tiles
- * 
- * @note Particles are only expected to have moved no more than 1 tile
  *       in each direction. If necessary the code will grow the particle buffer
  * 
  * @param tmp       Temporary particle buffer
@@ -912,6 +825,64 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
         copy_in ( *this, tmp );
     }
 
+
+    // For debug only, remove from production code
+    // validate( "After tile_sort" );
+}
+#endif
+
+#if 1
+/**
+ * @brief Moves particles to the correct tiles
+ * 
+ * @note Particles are only expected to have moved no more than 1 tile
+ *       in each direction. If necessary the code will grow the particle buffer
+ * 
+ * @param tmp       Temporary particle buffer
+ * @param sort      Temporary sort index 
+ * @param extra     Additional space to add to each tile. Leaves  room for
+ *                  particles to be injected later.
+ */
+void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
+
+    // Reset sort data
+    sort.reset();
+
+    // Get new number of particles per tile
+    bnd_check ( *this, sort, local_bnd );
+
+    // Exchange number of particles in edge cells
+    sort.exchange_np();
+
+    // Post particle data receives
+    recv.irecv();
+
+    // Get new offsets, including extra values in offset calculations
+    // Used to reserve space in particle buffer for later injection
+    auto total_np = update_tile_info ( tmp, sort.new_np, extra );
+
+    if ( total_np > max_part ) { 
+        std::cerr << "Particles::tile_sort() - particle buffer requires growing,";
+        std::cerr << " not implemented yet.";
+        exit(1);
+    }
+
+    // Copy outgoing particles (and particles needing shifting) to staging area
+    copy_out ( *this, tmp, sort, local_bnd );
+
+    // Pack particle data and start sending
+    pack_msg( tmp, sort, send );
+    send.isend();
+
+    // Copy local particles from staging area into final positions in partile buffer
+    copy_in ( *this, tmp );
+
+    // Wait for messages to be received and unpack data
+    recv.wait();
+    unpack_msg( sort, recv );
+
+    // Wait for sends to complete
+    recv.wait();
 
     // For debug only, remove from production code
     // validate( "After tile_sort" );
@@ -1108,5 +1079,119 @@ void Particles::validate( std::string msg, int const over ) {
 }
 
 #endif
+
+
+/**
+ * @brief Pack particles moving out of the node into a message buffer
+ * 
+ * @param tmp       Temporary buffer holding particles moving away from tiles
+ * @param sort      Temporary sort index
+ * @param send      Send message object
+ */
+void Particles::pack_msg( Particles &tmp, ParticleSortData &sort, ParticleMessage &send ) {
+
+    /// @brief Total number of particles being sent
+    uint32_t send_np = 0;
+    /// @brief Offset in particle buffer for each message data
+    uint32_t off[8];
+
+    // Get offsets and check send buffer size
+    for( int i = 0; i < 8; i++ ) {
+        off[i] = send_np;
+        send.size[i] = sort.send.msg_np[i] * particle_size();
+        send_np += sort.send.msg_np[i];
+    }
+    send.check_buffer( send_np * particle_size() );
+
+    // Pack data
+
+    const auto tile_off = ntiles.x * ntiles.y;
+    int2   * const __restrict__ ix = &tmp.ix[ tile_off ];
+    float2 * const __restrict__ x  = &tmp.x[ tile_off ];
+    float3 * const __restrict__ u  = &tmp.u[ tile_off ];
+
+    #pragma omp parallel for schedule(dynamic)
+    for( int i = 0; i < 8; i++) {
+        uint8_t * __restrict__ buffer = &send.data[ off[i] * particle_size() ];
+        size_t pos = 0;
+        size_t n;
+
+        n = sort.send.msg_np[i] * sizeof(int2);
+        memcpy( &buffer[pos], &ix[ off[i] ], n );
+        pos += n;
+
+        n = sort.send.msg_np[i] * sizeof(float2);
+        memcpy( &buffer[pos],  &x[ off[i] ], n);
+        pos += n;
+
+        n = sort.send.msg_np[i] * sizeof(float3);
+        memcpy( &buffer[pos],  &u[ off[i] ], n);
+        // pos += n; // unnecessary
+    }
+
+    // Start sending messages
+    send.irecv();
+}
+
+/**
+ * @brief Unpack received particle data into main particle data buffer
+ * 
+ * @param sort      Temporary sort index
+ * @param recv      Receive message object
+ */
+void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
+
+    // Total number of tiles in receive message buffer
+    auto ntiles_msg = part::msg_tiles( ntiles );
+
+    /// @brief number of particles per received tile
+    int * msg_tile_np = sort.recv.buffer;
+    
+    /// @brief offset (in number of particles) in message buffer per tile
+    int msg_offset[ ntiles_msg ];
+
+    int sum = 0;
+    for( int i = 0; i < ntiles_msg; ) {
+        msg_offset[i] = sum; sum += msg_tile_np[i];
+    }
+
+    // Wait for messages to complete
+    recv.wait();
+
+    // Unpack all data - multiple message tiles may write to the same local tile
+    #pragma omp parallel for schedule(dynamic)
+    for( auto i = 0; i < ntiles_msg; i ++ ) {
+
+        // Number of particles received
+        int recv_np = msg_tile_np[i];
+
+        // If any particles received in that tile
+        if ( recv_np > 0 ) {
+            // Get target tile for msg data
+            int msg_target = part::tid_recv_target( i, ntiles );
+
+            // destination buffers (in main particle buffer)
+            int tgt_offset  = offset[ msg_target ] + 
+                omp::atomic_fetch_add( &np[ msg_target ], recv_np );
+
+            int2   * __restrict__ const dst_ix = &ix[ tgt_offset ];
+            float2 * __restrict__ const dst_x  = &x [ tgt_offset ];
+            float3 * __restrict__ const dst_u  = &u [ tgt_offset ];
+
+            // source buffers (in packed data buffer)
+            int src_offset = msg_offset[ i ] * particle_size();
+            int2   * __restrict__ const src_ix = (int2 *)   & recv.data[ src_offset ];
+            float2 * __restrict__ const src_x  = (float2 *) & recv.data[ src_offset + recv_np * sizeof(int2) ];
+            float3 * __restrict__ const src_u  = (float3 *) & recv.data[ src_offset + recv_np * (sizeof(int2) + sizeof(float2))];
+
+            // Copy data
+            for( int j = 0; j < recv_np; j++ ) {
+                dst_ix[j] = src_ix[j];
+                dst_x [j] = src_x [j];
+                dst_u [j] = src_u [j];
+            }
+        }
+    }
+}
 
 #undef __ULIM
