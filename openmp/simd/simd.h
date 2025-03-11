@@ -119,90 +119,44 @@ constexpr int vecwidth = 1;
 #endif
 
 /**
- * Memory alingment routines
+ * Memory alignment routines
  */
-
 
 /**
- * @brief Check if address is 64 bit aligned
+ * @brief Checks if supplied address is aligned to the n-bit boundary
  * 
- * @tparam T 
- * @param addr  Address to check 
- * @return int 
+ * @tparam n        Number of bits (must be a power of 2)
+ * @tparam T        Address type (determined from the caller variable)
+ * @param addr      Address
+ * @return true     The address is n-bit aligned
+ * @return false    The address is not n-bit aligned
  */
-template< typename T >
-int is_aligned_64( T * addr ) {
-    return (((uintptr_t)addr & 0x3F) == 0);
+template< unsigned int n, typename T >
+constexpr bool is_aligned( T * addr ) {
+    static_assert( (n & (n-1)) == 0, "n must be a power of 2" );
+    return (((uintptr_t)addr & (n-1)) == 0);
 }
 
 /**
- * @brief Assert that address is 64 bit aligned
+ * @brief Assert the address is n bit aligned
  * 
- * @tparam T 
- * @param addr  Address to check 
- * @param msg 
- */
-template< typename T >
-void assert_aligned_64( T * addr, std::string msg ) { 
-    if ( ! is_aligned_64(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 64 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}
-
-/**
- * @brief Check if address is 32 bit aligned
+ * If the address is not aligned the routine will call `abort()` stopping the
+ * program
  * 
- * @tparam T 
- * @param addr  Address to check
- * @return constexpr int 
+ * @tparam n        Number of bits (must be a power of 2)
+ * @tparam T        Address type (determined from the caller variable)
+ * @param addr      Address
+ * @param msg       (optional) Message to print in case the address is not
+ *                  aligned
  */
-template< typename T >
-constexpr int is_aligned_32( T * addr ) { 
-    return (((uintptr_t)addr & 0x1F) == 0);
-}
-
-/**
- * @brief Assert that address is 32 bit aligned
- * 
- * @tparam T 
- * @param addr  Address to check
- * @param msg 
- */
-template< typename T >
-void assert_aligned_32( T * addr, std::string msg ) { 
-    if ( ! is_aligned_32(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 32 bit aligned, aborting." << std::endl;
-        abort();
-    }
-}
-
-/**
- * @brief Assert that address is 16 bit aligned
- * 
- * @tparam T 
- * @param addr  Address to check
- * @return constexpr int 
- */
-template< typename T >
-constexpr int is_aligned_16( T * addr ) {
-    return (((uintptr_t)addr & 0x0F) == 0);
-}
-
-/**
- * @brief Assert that address is 16 bit aligned
- * 
- * @tparam T 
- * @param addr  Address to check
- * @param msg   Message to print if the assert fails
- */
-template< typename T >
-void assert_aligned_16( T * addr, std::string msg ) { 
-    if ( ! is_aligned_16(addr) ) {
-        std::cerr << msg << '\n';
-        std::cerr << "Address " << addr << " is not 16 bit aligned, aborting." << std::endl;
+template< unsigned int n, typename T >
+void assert_aligned( T * addr, std::string msg = "" ) {
+    if ( ! is_aligned<n>(addr) ) {
+        if ( ! msg.empty() ) std::cerr << msg << '\n';
+        // We cast the address to int* to avoid the address being interpreted
+        // as a string in case we call the function with char*
+        std::cerr << "Address " << (int*) addr << " is not ";
+        std::cerr << n << " bit aligned, aborting." << std::endl;
         abort();
     }
 }

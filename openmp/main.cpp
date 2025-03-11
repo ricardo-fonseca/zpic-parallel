@@ -1,14 +1,8 @@
-
-/**
- * OMP_NUM_THREADS=16 GOMP_CPU_AFFINITY="0-15" ./zpic
- */
-
 #include <iostream>
 
 #include <stdint.h>
 
 #include "utils.h"
-#include "vec_types.h"
 #include "grid.h"
 
 #include "vec3grid.h"
@@ -19,14 +13,28 @@
 #include "simulation.h"
 #include "cathode.h"
 
+/**
+ * OpemMP support
+ */
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-#include "simd/simd.h"
-
+/**
+ * ARM SVE support
+ * Currently only supported on Linux
+ */
+#ifdef __ARM_FEATURE_SVE_BITS
+#ifdef __linux__
 #include <sys/prctl.h>
+#else
+#error "ARM SVE support only available on Linux"
+#endif
+#endif
 
+/**
+ * Print information about SIMD and OpenMP support
+ */
 void info( void ) {
 
 #ifdef SIMD
