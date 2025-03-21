@@ -15,16 +15,19 @@ MPI_Datatype data_type () {
     return MPI_DATATYPE_NULL;
 };
 
-template<> constexpr MPI_Datatype data_type<int8_t  >(void) { return MPI_INT8_T; };
-template<> constexpr MPI_Datatype data_type<uint8_t >(void) { return MPI_UNSIGNED_CHAR; };
-template<> constexpr MPI_Datatype data_type<int16_t >(void) { return MPI_INT16_T; };
-template<> constexpr MPI_Datatype data_type<uint16_t>(void) { return MPI_UINT16_T; };
-template<> constexpr MPI_Datatype data_type<int32_t >(void) { return MPI_INT32_T; };
-template<> constexpr MPI_Datatype data_type<uint32_t>(void) { return MPI_UINT32_T; };
-template<> constexpr MPI_Datatype data_type<int64_t >(void) { return MPI_INT64_T; };
-template<> constexpr MPI_Datatype data_type<uint64_t>(void) { return MPI_INT64_T; };
-template<> constexpr MPI_Datatype data_type<float   >(void) { return MPI_FLOAT; };
-template<> constexpr MPI_Datatype data_type<double  >(void) { return MPI_DOUBLE; };
+// On some MPI implementations (namely OpenMPI 5.*) the MPI_* datatypes are
+// not known at compile time so we cannot declare these as constexpr
+
+template<> inline MPI_Datatype data_type<int8_t  >(void) { return MPI_INT8_T; };
+template<> inline MPI_Datatype data_type<uint8_t >(void) { return MPI_UNSIGNED_CHAR; };
+template<> inline MPI_Datatype data_type<int16_t >(void) { return MPI_INT16_T; };
+template<> inline MPI_Datatype data_type<uint16_t>(void) { return MPI_UINT16_T; };
+template<> inline MPI_Datatype data_type<int32_t >(void) { return MPI_INT32_T; };
+template<> inline MPI_Datatype data_type<uint32_t>(void) { return MPI_UINT32_T; };
+template<> inline MPI_Datatype data_type<int64_t >(void) { return MPI_INT64_T; };
+template<> inline MPI_Datatype data_type<uint64_t>(void) { return MPI_UINT64_T; };
+template<> inline MPI_Datatype data_type<float   >(void) { return MPI_FLOAT; };
+template<> inline MPI_Datatype data_type<double  >(void) { return MPI_DOUBLE; };
 
 static const MPI_Op sum = MPI_SUM;
 static const int proc_null = MPI_PROC_NULL;
@@ -38,10 +41,17 @@ namespace type {
 
 // These cannot be declared constexpr as their value is unknown at compile time
 template<> inline MPI_Datatype data_type<int2 >(void)   { return mpi::type::int2; };
-template<> inline MPI_Datatype data_type<float3 >(void) { return mpi::type::float3; };
+template<> inline MPI_Datatype data_type<float2 >(void) { return mpi::type::float2; };
 template<> inline MPI_Datatype data_type<float3 >(void) { return mpi::type::float3; };
 template<> inline MPI_Datatype data_type<double3>(void) { return mpi::type::double3; };
 
+/**
+ * @brief Initialize MPI environment and extra MPI types
+ * 
+ * @param argc      Pointer to command line argument count
+ * @param argv      Pointer to command line arguments
+ * @return int      MPI_SUCCESS on success, MPI_ERROR on failure
+ */
 static inline int init( int *argc, char ***argv ) {
     int ierr = MPI_Init( argc, argv );
 
@@ -58,10 +68,17 @@ static inline int init( int *argc, char ***argv ) {
         
         MPI_Type_contiguous( 3, MPI_DOUBLE, &mpi::type::double3 );
         MPI_Type_commit( &mpi::type::double3 );
+    } else {
+        std::cerr << "Failed to initialize MPI\n";
     }
     return ierr;
 }
 
+/**
+ * @brief Finialize MPI environment
+ * 
+ * @return int  MPI_SUCCESS on success, MPI_ERROR on failure
+ */
 static inline int finalize( void ) {
 
     // These aren't strictly necessary
@@ -73,6 +90,46 @@ static inline int finalize( void ) {
     return MPI_Finalize();
 }
 
+/**
+ * @brief Returns size of the global MPI communicator (MPI_COMM_WORLD)
+ * 
+ * @return int  Number of parallel nodes
+ */
+static inline int world_size( void ) {
+    int size;
+    MPI_Comm_size( MPI_COMM_WORLD, &size );
+    return size;
+}
+
+/**
+ * @brief Returns MPI rank on the global MPI communicator (MPI_COMM_WORLD)
+ * 
+ * @return int  Node rank
+ */
+static inline int world_rank( void ) {
+    int rank;
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    return rank;
+}
+
+/**
+ * @brief Returns true if the calling node is the root node of the global MPI
+ *        communicator
+ * 
+ * @return int  1 if the calling node is the root node, 0 otherwise 
+ */
+static inline int world_root( void ) { 
+    int rank;
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    return rank == 0;
+}
+
+/**
+ * @brief Abort the parallel code using an MPI_Abort()
+ * 
+ * @param errorcode     Error code to return to invoking environment
+ * @return int          MPI_Abort() return value (should not return)
+ */
 static inline int abort( int errorcode ) { 
     return MPI_Abort(MPI_COMM_WORLD, errorcode );
 }
@@ -371,12 +428,27 @@ class Partition {
         }
     }
 
+    /**
+     * @brief Aborts the parallel code using an MPI_Abort()
+     * 
+     * @param errorcode     Error code to be issued
+     * @return int          MPI_Abort() return value
+     */
     int abort( int errorcode ) {
         return MPI_Abort( comm, errorcode );
     }
 
+    /**
+     * @brief Returns true if the local node is the root node
+     * 
+     * @return int 
+     */
     int root() { return rank == 0;}
 
+    /**
+     * @brief Performs an MPI_Barrier accross the partition
+     * 
+     */
     void barrier() {
         if ( MPI_Barrier( comm ) != MPI_SUCCESS ) {
             std::cerr << "Error on MPI_Barrier() call\n";
@@ -397,14 +469,137 @@ class Partition {
     template< typename T >
     int reduce( T * data, int count, MPI_Op op, int root = 0 ) {
 
-        if ( MPI_Reduce( MPI_IN_PLACE, data, count, mpi::data_type<T>(), op, root,
+        void *sendbuf = ( rank == root ) ? MPI_IN_PLACE : data;
+
+        if ( MPI_Reduce( sendbuf, data, count, mpi::data_type<T>(), op, root,
                          comm ) != MPI_SUCCESS ) {
             std::cerr << "MPI_Reduce operation failed, aborting\n";
+            MPI_Abort( comm, 1 );
+        }
+
+        return 0;
+    }
+
+    /**
+     * @brief Performs an MPI_Allreduce operation in this parallel partition
+     * 
+     * 
+     * @tparam T        Data type, must be supported by MPI
+     * @param sendbuf   Input data
+     * @param recvbuf   Output data (reduction result)
+     * @param count     Number of data elements
+     * @param op        Reduction operation
+     * @return int      0 on success. On error the routine will abort the code.
+     */
+    template< typename T >
+    int allreduce( T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
+        if ( MPI_Allreduce( sendbuf, recvbuf, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
+            std::cerr << "MPI_Allreduce operation failed, aborting\n";
             MPI_Abort( comm, 1 );
         }
         return 0;
     }
 
+    /**
+     * @brief 
+     * 
+     * @note The operation is performed "in-place", i.e., the original data is
+     * replaced by the reduction result
+     * 
+     * @tparam T 
+     * @param data 
+     * @param count 
+     * @param op 
+     * @return int 
+     */
+    template< typename T >
+    int allreduce( T * data, int count, MPI_Op op ) {
+        if ( MPI_Allreduce( MPI_IN_PLACE, data, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
+            std::cerr << "MPI_Allreduce operation failed, aborting\n";
+            MPI_Abort( comm, 1 );
+        }
+        return 0;
+    }
+
+    /**
+     * @brief Returns the local dimensions of a parallel grid
+     * 
+     * @note If the number of parallel nodes does not divide the global grid
+     *       size evenly, the local grid will not have the same size on all
+     *       nodes
+     * 
+     * @param global_size   Global grid size (x,y)
+     * @return uint2        Local grid size (x,y)
+     */
+    inline uint2 grid_size( const uint2 global_size ) {
+        uint2 local_size{ global_size.x / dims.x, global_size.y / dims.y };
+
+        if ( coords.x < (int) (global_size.x % dims.x) ) local_size.x += 1;
+        if ( coords.y < (int) (global_size.y % dims.y) ) local_size.y += 1;
+
+        return local_size;
+    }
+
+    /**
+     * @brief Returns the local offset of a parallel grid
+     * 
+     * @note If the number of parallel nodes does not divide the global grid
+     *       size evenly, the local grid will not have the same size on all
+     *       nodes
+     * 
+     * @param global_size   Global grid size (x,y)
+     * @return uint2        Local offset on global grid (x,y)
+     */
+    inline uint2 grid_off( const int2 global_size ) {
+        uint2 grid_size = { global_size.x / dims.x, global_size.y / dims.y };
+        uint2 grid_off  = { coords.x * grid_size.x, coords.y * grid_size.y };
+
+        if ( coords.x < (int) (global_size.x % dims.x) ) {
+            grid_off.x += coords.x;
+        } else {
+            grid_off.x += global_size.x % dims.x;
+        }
+
+        if ( coords.y < (int) (global_size.y % dims.y) ) {
+            grid_off.y += coords.y;
+        } else {
+            grid_off.y += global_size.y % dims.y;
+        }
+
+        return grid_off;
+    }
+
+    /**
+     * @brief Get local dimensions / offset of a parallel grid
+     *
+     * @note If the number of parallel nodes does not divide the global grid
+     *       size evenly, the local grid will not have the same size on all
+     *       nodes
+     * 
+     * @param global_size   Global grid size (x,y)
+     * @param local_size    Local grid size (x,y)
+     * @param local_off     Local offset on global grid (x,y)
+     */
+    void grid_local( const uint2 global_size, uint2 & local_size, uint2 & local_off ) {
+        // Size and offset for matched size / parallel dims
+        local_size = { global_size.x / dims.x, global_size.y / dims.y };
+        local_off  = { coords.x * local_size.x, coords.y * local_size.y };
+
+        // Correct for unmatched global_size / parallel dims
+        if ( coords.x < (int) (global_size.x % dims.x) ) {
+            local_size.x += 1;
+            local_off.x += coords.x;
+        } else {
+            local_off.x += global_size.x % dims.x;
+        }
+
+        if ( coords.y < (int) (global_size.y % dims.y) ) {
+            local_size.y += 1;
+            local_off.y += coords.y;
+        } else {
+            local_off.y += global_size.y % dims.y;
+        }
+    }
 };
 
 template< typename T >

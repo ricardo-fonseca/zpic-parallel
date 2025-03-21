@@ -46,6 +46,9 @@ static inline \
 V& operator*= ( V& lhs, const V& rhs ) { lhs.x *= rhs.x; lhs.y *= rhs.y; return lhs; } \
 \
 static inline \
+V& operator/= ( V& lhs, const V& rhs ) { lhs.x /= rhs.x; lhs.y /= rhs.y; return lhs; } \
+\
+static inline \
 V operator+ ( V lhs, const V& rhs ) { lhs += rhs; return lhs; } \
 \
 static inline \
@@ -53,6 +56,9 @@ V operator- ( V lhs, const V& rhs ) { lhs -= rhs; return lhs; } \
 \
 static inline \
 V operator* ( V lhs, const V& rhs ) { lhs *= rhs; return lhs;  }\
+\
+static inline \
+V operator/ ( V lhs, const V& rhs ) { lhs /= rhs; return lhs;  }\
 \
 static inline std::ostream& operator<<(std::ostream& os, const V& obj) { \
     os << "(" << obj.x << ", " << obj.y << ")"; return os; } \
@@ -124,6 +130,9 @@ static inline \
 V& operator*= ( V& lhs, const V& rhs ) { lhs.x *= rhs.x; lhs.y *= rhs.y; lhs.z *= rhs.z; return lhs; }\
 \
 static inline \
+V& operator/= ( V& lhs, const V& rhs ) { lhs.x /= rhs.x; lhs.y /= rhs.y; lhs.z /= rhs.z; return lhs; }\
+\
+static inline \
 V operator+ ( V lhs, const V& rhs ) { lhs += rhs; return lhs; }\
 \
 static inline \
@@ -131,6 +140,9 @@ V operator- ( V lhs, const V& rhs ) { lhs -= rhs; return lhs; }\
 \
 static inline \
 V operator* ( V lhs, const V& rhs ) { lhs *= rhs; return lhs; }\
+\
+static inline \
+V operator/ ( V lhs, const V& rhs ) { lhs /= rhs; return lhs; }\
 \
 static inline std::ostream& operator<<(std::ostream& os, const V& obj) { \
     os << "(" << obj.x << ", " << obj.y << ", " << obj.z << ")"; return os; } \

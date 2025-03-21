@@ -237,7 +237,6 @@ inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd 
     return tid;
 }
 
-
 /**
  * @brief Total number of edge tiles
  * 
@@ -269,7 +268,6 @@ inline constexpr int local_tiles( const uint2 ntiles ) {
 inline constexpr int all_tiles( const uint2 ntiles ) {
     return local_tiles( ntiles ) + msg_tiles( ntiles );
 }
-
 
 /**
  * @brief Gets local target tile id from receive message buffer tile
@@ -379,7 +377,7 @@ class ParticleSort : public ParticleSortData {
     /**
      * @brief Construct a new Particle Sort object
      * 
-     * @param ntiles        Number of tiles
+     * @param ntiles        Local number of tiles
      * @param max_part      Maximum number of particles in buffer
      * @param par           Parallel partition
      */
@@ -391,8 +389,8 @@ class ParticleSort : public ParticleSortData {
         auto local_tiles = ntiles.x * ntiles.y;
 
         auto edge_tiles = 2 * ntiles.y + // x boundary
-                           2 * ntiles.x + // y boundary
-                           4;             // corners
+                          2 * ntiles.x + // y boundary
+                          4;             // corners
 
         // Include send / receive buffers for number of particles leaving/entering node
         new_np = memory::malloc<int>( local_tiles + 2 * edge_tiles );
@@ -500,7 +498,7 @@ class ParticleSort : public ParticleSortData {
                         0, comm, &send.requests[dir]);
 
                 uint32_t send_np = 0;
-                for( int k = 0; k < size(dir); k++ ) send_np += send.buffer[idx + k];
+                for( unsigned int k = 0; k < size(dir); k++ ) send_np += send.buffer[idx + k];
                 send.msg_np[dir] = send_np;
 
                 idx += size(dir);
@@ -518,7 +516,7 @@ class ParticleSort : public ParticleSortData {
         for( auto dir = 0; dir < 9; dir++ ) {
             if ( dir != 4 ) {
                 uint32_t recv_np = 0;
-                for( int k = 0; k < size(dir); k++ ) {
+                for( unsigned int k = 0; k < size(dir); k++ ) {
                     new_np[ k * stride(dir) + offset(dir) ] += recv.buffer[ idx ];
                     recv_np += recv.buffer[ idx ];
                     idx++;
@@ -548,8 +546,8 @@ class ParticleMessage {
     ParticleMessage::Type active;
     /// @brief Maximum data size (bytes)
     uint32_t max_size;
-    /// @brief Neighbor ranks
-    int neighbor[8];
+    /// @brief Neighbor ranks (includes self)
+    int neighbor[9];
     /// @brief MPI communicator for messages
     MPI_Comm comm;
     /// @brief Message handles
@@ -690,10 +688,15 @@ class ParticleMessage {
  */
 struct ParticleData {
 
-    /// @brief Number of tiles (x,y)
-    const uint2 ntiles;  
+    /// @brief Global number of tiles (x,y)
+    uint2 global_ntiles;
+    /// @brief Local Number of tiles (x,y)
+    uint2 ntiles;
     /// @brief Tile grid size
     const uint2 nx;
+    /// @brief Offset of local tiles in global tile grid
+    uint2 tile_off;
+
     /// @brief Number of particles in tile
     int * np;
     /// @brief Tile particle position on global array
@@ -709,8 +712,10 @@ struct ParticleData {
     /// @brief Maximum number of particles in the buffer
     uint32_t max_part;
 
-    ParticleData( const uint2 ntiles, const uint2 nx, const uint32_t max_part ) :
-        ntiles( ntiles ), nx( nx ), max_part( max_part ) {};
+    ParticleData( const uint2 global_ntiles, const uint2 nx, const uint32_t max_part ) :
+        global_ntiles( global_ntiles ),
+        nx( nx ),
+        max_part( max_part ) {};
 };
 
 /**
@@ -718,6 +723,14 @@ struct ParticleData {
  * 
  */
 class Particles : public ParticleData {
+
+    protected:
+
+    /// @brief Local grid size
+    uint2 local_nx;
+
+    /// @brief Global grid size
+    uint2 global_nx;
 
     /// @brief Global periodic boundaries (x,y)
     int2 periodic;
@@ -736,22 +749,29 @@ class Particles : public ParticleData {
     /// @brief Parallel partition
     Partition & parallel;
 
-    /// Global grid size
-    const uint2 gnx;
-
     /**
      * @brief Construct a new Particles object
      * 
-     * @param ntiles    Number of tiles
-     * @param nx        Tile grid size
-     * @param max_part  Maximum number of particles
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individual tile grid size
+     * @param max_part          Maximum number of particles
      */
-    Particles( const uint2 ntiles, const uint2 nx, const uint32_t max_part, Partition & parallel ) :
-        ParticleData( ntiles, nx, max_part ),
-        parallel( parallel ), send( parallel ), recv( parallel ),
-        gnx ( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y ) )
+    Particles( const uint2 global_ntiles, const uint2 nx, const uint32_t max_part, Partition & parallel ) :
+        ParticleData( global_ntiles, nx, max_part ),
+        send( parallel ), recv( parallel ),
+        parallel( parallel )
     {
 
+        // Get local number of tiles and position on tile grid
+        parallel.grid_local( global_ntiles, ntiles, tile_off );
+
+        // Global grid size
+        global_nx = global_ntiles * nx;
+
+        // Local grid size
+        local_nx = ntiles * nx;
+        
+        ///@brief Total number of local tiles including edge tiles
         const size_t bsize = part::all_tiles( ntiles );
 
         // Tile information
@@ -801,10 +821,10 @@ class Particles : public ParticleData {
 
         // Correct for local node periodic
         if ( periodic.x && parallel.dims.x == 1 ) 
-            local_bnd.x.lower = local_bnd.x.lower = part::bnd_t::periodic;
+            local_bnd.x.lower = local_bnd.x.upper = part::bnd_t::periodic;
 
         if ( periodic.y && parallel.dims.y == 1 ) 
-            local_bnd.y.lower = local_bnd.y.lower = part::bnd_t::periodic;
+            local_bnd.y.lower = local_bnd.y.upper = part::bnd_t::periodic;
 
     }
 
@@ -842,7 +862,14 @@ class Particles : public ParticleData {
      * 
      * @return int2 
      */
-    int2 get_periodic( ) { return periodic; }
+    auto get_periodic( ) { return periodic; }
+
+    /**
+     * @brief Get the local grid size
+     * 
+     * @return auto
+     */
+    auto get_local_nx() { return local_nx; }
 
     /**
      * @brief Sets the number of particles per tile to 0
@@ -896,19 +923,21 @@ class Particles : public ParticleData {
     }
 
     /**
-     * @brief Gets local number of particles
+     * @brief Gets (node) local number of particles
      * 
      * @return uint32_t 
      */
     uint32_t np_local() {
 
+        // sum up number of particles in each tile
+        // This works even if the buffer is not compact
         uint32_t np_local = 0;
         for( unsigned i = 0; i < ntiles.x*ntiles.y; i++ )
             np_local += np[i];
 
 /*
-        // Since the buffer is kept compact we can just look at the last tile
-        auto idx = part::local_tiles( ntiles.x*ntiles.y ) - 1;
+        // Since the buffer is kept compact we could just look at the last tile
+        auto idx = ntiles.x*ntiles.y - 1;
         uint32_t np_total = offset[idx] + np[idx];
 */
         return np_local;
@@ -917,20 +946,25 @@ class Particles : public ParticleData {
     /**
      * @brief Gets global number of particles
      * 
-     * @return uint32_t 
+     * @param all           Return result on all parallel nodes (defaults to false)
+     * @return uint64_t     Global number of particles
      */
-    uint64_t np_global() {
+    uint64_t np_global( bool all = false ) {
 
         uint64_t local = np_local();
-        uint64_t global;
 
         if ( parallel.get_size() > 1 ) {
-            MPI_Allreduce( &local, &global, 1, MPI_UINT64_T, MPI_SUM, parallel.get_comm() );
-        } else {
-            global = local;
+            if ( all ) {
+                uint64_t global;
+                parallel.allreduce( &local, &global, 1, mpi::sum );
+                return global;
+            } else {
+                parallel.reduce( &local, 1, mpi::sum );
+                return local;
+            }
         }
 
-        return global;
+        return local;
     }
 
     /**
@@ -959,14 +993,14 @@ class Particles : public ParticleData {
         return min_np;
     }
     /**
-     * @brief Returns global grid range
+     * @brief Returns local grid range
      * 
      * @return bnd<uint32_t> 
      */
-    bnd<uint32_t> g_range() { 
+    bnd<uint32_t> local_range() { 
         bnd<uint32_t> range;
-        range.x = pair<uint32_t>( 0, gnx.x - 1 );
-        range.y = pair<uint32_t>( 0, gnx.y - 1 );
+        range.x = pair<uint32_t>( 0, local_nx.x - 1 );
+        range.y = pair<uint32_t>( 0, local_nx.y - 1 );
 
         return range;
     };
@@ -1058,6 +1092,7 @@ class Particles : public ParticleData {
      */
     void save( const part::quant quants[], zdf::part_info &metadata, zdf::iteration &iter, std::string path );
 
+
     /**
      * @brief Size (in bytes) of a single particle
      * 
@@ -1083,7 +1118,7 @@ class Particles : public ParticleData {
      * @param count     Number of particles to unpack
      * @param target    Target tile
      */
-    void unpack( uint8_t __restrict__ * buffer, int const count, int2 const target );
+    void unpack( uint8_t * __restrict__ buffer, int const count, int2 const target );
 
     /**
      * @brief Unpack received particle data into main particle data buffer

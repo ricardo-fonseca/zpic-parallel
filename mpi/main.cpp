@@ -15,44 +15,27 @@
 #include "simulation.h"
 #include "cathode.h"
 
+/**
+ * OpemMP support
+ */
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-#include "simd.h"
+/**
+ * SIMD support
+ */
+#include "simd/simd.h"
 
+/**
+ * MPI support 
+ */
 #include "parallel.h"
-
-void info( void ) {
-
-#ifdef SIMD
-    std::cout << "SIMD support enabled\n";
-    std::cout << "  vector unit : " << vecname << '\n';
-    std::cout << "  vector width: " << vecwidth <<'\n';
-#else
-    std::cout << "SIMD support not enabled\n";
-#endif
-
-#ifdef _OPENMP
-
-    std::cout << "OpenMP enabled\n";
-    std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
-    std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
-    #pragma omp parallel
-    {
-        if ( omp_get_thread_num() == 0 )
-            std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
-    }
-#else
-    std::cout << "OpenMP support not enabled\n";
-#endif
-}
-
 
 void test_laser( void ) {
 
     // Parallel partition
-    uint2 partition = make_uint2( 4, 4 );
+    uint2 partition = make_uint2( 2, 2 );
 
     // Global number of tiles
     uint2 ntiles = make_uint2( 16, 8 );
@@ -115,7 +98,7 @@ void test_laser( void ) {
     }
 
     t0.stop();
-    t0.report("1500 iterations:");
+    if ( mpi::world_rank() == 0 )  t0.report("1500 iterations:");
 
     save_emf( );
 }
@@ -553,13 +536,83 @@ void test_grid() {
 
 }
 
+/**
+ * @brief Test particle injection
+ * 
+ */
+void test_particles() {
+    uint2 dims = make_uint2( 4, 2 );
+    Partition parallel( dims );
+
+    uint2 global_ntiles {16, 16};
+    uint2 nx {8, 8};
+    float2 box = make_float2( 12.8, 12.8 );
+    float dt = 0.07;
+
+    uint2 ppc = make_uint2( 8, 8 );
+
+    Species electrons("electrons", -1.0f, ppc );
+
+//    electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
+//    electrons.set_density(Density::Slab(coord::x, 1.0, 5.0, 7.0));
+    electrons.set_density(Density::Sphere( 1.0, make_float2( 5.0, 7.0 ), 2.0));
+
+    electrons.initialize( box, global_ntiles, nx, dt, 0, parallel );
+
+    electrons.save();
+
+    electrons.save_charge();
+
+    parallel.barrier();
+    if ( parallel.root() ) std::cout << "Done!\n";
+}
+
+/**
+ * @brief Print information about the environment
+ * 
+ */
+void info( void ) {
+
+    if ( mpi::world_rank() == 0 ) {
+
+        std::cout << "MPI running on " << mpi::world_size() << " processes\n";
+
+        #ifdef SIMD
+            std::cout << "SIMD support enabled\n";
+            std::cout << "  vector unit : " << vecname << '\n';
+            std::cout << "  vector width: " << vecwidth <<'\n';
+        #else
+            std::cout << "SIMD support not enabled\n";
+        #endif
+        
+        #ifdef _OPENMP
+            std::cout << "OpenMP enabled\n";
+            std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
+            std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
+            #pragma omp parallel
+            {
+                if ( omp_get_thread_num() == 0 )
+                    std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
+            }
+        #else
+            std::cout << "OpenMP support not enabled\n";
+        #endif
+
+    }
+}
+
 int main( int argc, char *argv[] ) {
 
     // Initialize the MPI environment
     mpi::init( & argc, & argv );
 
+    // Print information about the environment
+    info();
+
     // test_grid();
-    test_laser();
+    // test_laser();
+
+    test_particles();
 
     // Finalize the MPI environment
     mpi::finalize();

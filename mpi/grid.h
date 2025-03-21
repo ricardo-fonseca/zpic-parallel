@@ -39,21 +39,8 @@ class grid {
 
     /// @brief Buffers for sending messages
     pair< Message<T>* > msg_send;
-/*
-    struct {
-        Message<T> * lower;
-        Message<T> * upper;
-    } msg_send;
-*/
 
     /// @brief Buffers for receiving messages
-/*
-    struct {
-        Message<T> * lower;
-        Message<T> * upper;
-    } msg_recv;
-*/
-
     pair< Message<T>* > msg_recv;
 
     /**
@@ -65,35 +52,16 @@ class grid {
      */
     void initialize( ) {
 
-        int2 coords = part.get_coords();
-
-        ntiles.x = global_ntiles.x / part.dims.x;
-        tile_start.x = coords.x * ntiles.x;
-
-        if ( (unsigned) coords.x < global_ntiles.x % part.dims.x ) {
-            ntiles.x += 1;
-            tile_start.x += coords.x;
-        } else {
-            tile_start.x += global_ntiles.x % part.dims.x;
-        }
-
-        gnx.x = ntiles.x * nx.x;
-        periodic.x = part.periodic.x && (part.dims.x == 1);
-
-        ntiles.y = global_ntiles.y / part.dims.y;
-        tile_start.y = coords.y * ntiles.y;
-
-        if ( (unsigned) coords.y < global_ntiles.y % part.dims.y ) {
-            ntiles.y += 1;
-            tile_start.y += coords.y;
-        } else {
-            tile_start.y += global_ntiles.y % part.dims.y;
-        }
-
-        gnx.y = ntiles.y * nx.y;
-        periodic.y = part.periodic.y && (part.dims.y == 1);
-
+        // Get local number of tiles and position
+        part.grid_local( global_ntiles, ntiles, tile_start );
         // std::cout << "[" << part.get_rank() << "] - offset: " << tile_start << ", ntiles: " << ntiles << '\n';
+
+        // Get local grid size
+        gnx = ntiles * nx;
+
+        // Get local periodic flag
+        periodic.x = part.periodic.x && (part.dims.x == 1);
+        periodic.y = part.periodic.y && (part.dims.y == 1);
 
         // Allocate main data buffer
         d_buffer = memory::malloc<T>( buffer_size() );
@@ -586,7 +554,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.lower-> buffer [ ty * nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_send.lower-> buffer [ ty * nx.y * gc.x.upper ];
 
                 auto lbound = (ty > 0 ) ? gc.y.lower : 0;
                 auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
@@ -611,7 +579,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.upper-> buffer[ ty *  nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_send.upper-> buffer[ ty *  nx.y * gc.x.lower ];
 
                 auto lbound = (ty > 0 ) ? gc.y.lower : 0;
                 auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
@@ -641,7 +609,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.lower-> buffer[ ty *  nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty *  nx.y * gc.x.lower ];
 
                 for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.lower; i++ ) {
@@ -662,7 +630,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.upper -> buffer[ ty *  nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_recv.upper -> buffer[ ty *  nx.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
@@ -704,7 +672,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_send.lower-> buffer[ tx * nx.x ];
                 
                 auto lbound = (tx > 0 ) ? gc.x.lower : 0;
                 auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1 ) ? 0 : gc.x.upper);
@@ -728,7 +696,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.upper -> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_send.upper -> buffer[ tx * nx.x ];
 
                 auto lbound = (tx > 0) ? gc.x.lower : 0;
                 auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1 ) ? 0 : gc.x.upper);
@@ -758,7 +726,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * nx.x ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
@@ -779,7 +747,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.upper-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.upper-> buffer[ tx * nx.x ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
@@ -1032,7 +1000,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.lower-> buffer [ ty * nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_send.lower-> buffer [ ty * nx.y * gc.x.lower ];
 
                 auto lbound = (ty > 0) ? gc.y.lower : 0;
                 auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
@@ -1057,7 +1025,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.upper-> buffer[ ty * nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_send.upper-> buffer[ ty * nx.y * gc.x.upper ];
 
                 auto lbound = (ty > 0) ? gc.y.lower : 0;
                 auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
@@ -1087,7 +1055,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.lower-> buffer[ ty * nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * nx.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < ext_nx.y ; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
@@ -1108,7 +1076,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.lower-> buffer[ ty * nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * nx.y * gc.x.lower ];
                 
                 for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.lower; i++ ) {
@@ -1149,7 +1117,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_send.lower-> buffer[ tx * nx.x ];
 
                 auto lbound = (tx > 0 ) ? gc.x.lower : 0;
                 auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1 ) ? 0 : gc.x.upper);
@@ -1175,7 +1143,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_send.upper-> buffer[ tx *  nx.x ];
+                T * __restrict__ msg = & msg_send.upper-> buffer[ tx *  nx.x ];
 
                 auto lbound = (tx > 0) ? gc.x.lower : 0;
                 auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1) ? 0 : gc.x.upper);
@@ -1205,7 +1173,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * nx.x ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
@@ -1226,7 +1194,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T __restrict__ * msg = & msg_recv.upper -> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.upper -> buffer[ tx * nx.x ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {

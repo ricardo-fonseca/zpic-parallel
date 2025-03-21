@@ -10,14 +10,14 @@
 
 #--------------------- ARM Clang Compilers --------------------
 # -march=native is not detecting the A64FX processor properly
-CC = armclang
-CFLAGS = -O3 -mcpu=a64fx
+# CC = armclang
+# CFLAGS = -O3 -mcpu=a64fx
 
-CXX = armclang++
-CXXFLAGS = -O3 -mcpu=a64fx
+# CXX = armclang++
+# CXXFLAGS = -O3 -mcpu=a64fx
 
 # OpenMP support
-CXXFLAGS += -fopenmp
+# CXXFLAGS += -fopenmp
 
 #------------------ Intel oneApi Compilers -----------------
 # CC = icx
@@ -30,14 +30,14 @@ CXXFLAGS += -fopenmp
 # CXXFLAGS += -qopenmp
 
 #------------------ LLVM Compilers -----------------
-# CC = clang
-# CFLAGS = -O3
+CC = clang
+CFLAGS = -O3
 
-# CXX = clang++
-# CXXFLAGS = -Ofast
+CXX = clang++
+CXXFLAGS = -O3 -ffast-math
 
 # OpenMP support
-# CXXFLAGS += -fopenmp
+CXXFLAGS += -fopenmp
 
 # --------------------------------------------------------------------------- #
 
@@ -48,10 +48,10 @@ CXXFLAGS += -fopenmp
 # CXXFLAGS += -DUSE_AVX512 -mavx512f
 
 # Enable ARM Neon extensions
-# CXXFLAGS += -DUSE_NEON
+CXXFLAGS += -DUSE_NEON
 
 # Enable ARM SVE extensions (512 bits)
-CXXFLAGS += -DUSE_SVE -msve-vector-bits=512
+# CXXFLAGS += -DUSE_SVE -msve-vector-bits=512
 
 # c11 compliance and full warnings
 CFLAGS += -Wall -std=c11

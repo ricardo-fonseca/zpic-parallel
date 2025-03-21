@@ -1718,13 +1718,13 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
 /**
  * @brief Initialize data structures and inject particles
  * 
- * @param box_      Simulation global box size
- * @param ntiles    Number of tiles
- * @param nx        Grid size per tile
- * @param dt_       Time step
- * @param id_       Species unique id
+ * @param box_              Simulation global box size
+ * @param global_ntiles     Global Number of tiles
+ * @param nx                Grid size per tile
+ * @param dt_               Time step
+ * @param id_               Species unique id
  */
-void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
+void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 const nx,
     float const dt_, int const id_, Partition & parallel ) {
     
     // Store simulation box size
@@ -1738,22 +1738,35 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
 
     // Set charge normalization factor
     q = copysign( density->n0 , m_q ) / (ppc.x * ppc.y);
-    
-    float2 gnx = make_float2( nx.x * ntiles.x, nx.y * ntiles.y );
+       
+    // Get global grid size
+    auto  gnx = nx * global_ntiles;
 
     // Set cell size
     dx.x = box.x / (gnx.x);
     dx.y = box.y / (gnx.y);
 
+    /// @brief Number of tiles in local parallel node
+    uint2 ntiles = parallel.grid_size( global_ntiles );
+
+    /// @brief Local parallel node grid size
+    auto  lnx = nx * ntiles;
+
     // Reference number maximum number of particles
-    unsigned int max_part = 1.2 * gnx.x * gnx.y * ppc.x * ppc.y;
+    unsigned int max_part = 1.2 * lnx.x * lnx.y * ppc.x * ppc.y;
 
-    particles = new Particles( ntiles, nx, max_part, parallel );
-    particles->periodic.x = ( bc.x.lower == species::bc::periodic );
-    particles->periodic.y = ( bc.y.lower == species::bc::periodic );
 
-    tmp = new Particles( ntiles, nx, max_part, parallel );
-    sort = new ParticleSort( ntiles, max_part );
+    particles = new Particles( global_ntiles, nx, max_part, parallel );
+    
+    int2 periodic = {
+        ( bc.x.lower == species::bc::periodic ),
+        ( bc.y.lower == species::bc::periodic )
+    };
+
+    particles -> set_periodic( periodic );
+
+    tmp = new Particles( global_ntiles, nx, max_part, parallel );
+    sort = new ParticleSort( ntiles, max_part, parallel );
     np_inj = memory::malloc<int>( ntiles.x * ntiles.y );
 
     // Initialize energy diagnostic
@@ -1768,7 +1781,7 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     // Inject initial distribution
 
     // Count particles to inject and store in np_inj
-    np_inject( particles -> g_range(), np_inj );
+    np_inject( particles -> local_range(), np_inj );
 
     // Do an exclusive scan to get the required offsets
     uint32_t off = 0;
@@ -1778,7 +1791,7 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     }
 
     // Inject the particles
-    inject( particles -> g_range() );
+    inject( particles -> local_range() );
 
     // Set inital velocity distribution
     udist -> set( *particles, id );
@@ -1804,9 +1817,13 @@ Species::~Species() {
  */
 void Species::inject( ) {
 
-    float2 ref = make_float2( moving_window.motion(), 0 );
+    /// @brief position of lower corner of local grid in simulation units
+    float2 ref = make_float2( 
+        particles->tile_off.x * particles->nx.x * dx.x + moving_window.motion(),
+        particles->tile_off.y * particles->nx.y * dx.y
+    );
 
-    density -> inject( *particles, ppc, dx, ref, particles -> g_range() );
+    density -> inject( *particles, ppc, dx, ref, particles -> local_range() );
 }
 
 /**
@@ -1815,7 +1832,14 @@ void Species::inject( ) {
  */
 void Species::inject( bnd<unsigned int> range ) {
 
-    float2 ref = make_float2( moving_window.motion(), 0 );
+    /// @brief local grid position in global grid
+    auto local_off = particles -> tile_off * particles -> nx;
+
+    /// @brief position of lower corner of local grid in simulation units
+    float2 ref = make_float2( 
+        local_off.x * dx.x + moving_window.motion(),
+        local_off.y * dx.y
+    );
 
     density -> inject( *particles, ppc, dx, ref, range );
 }
@@ -1832,7 +1856,14 @@ void Species::inject( bnd<unsigned int> range ) {
  */
 void Species::np_inject( bnd<unsigned int> range, int * np ) {
 
-    float2 ref = make_float2( moving_window.motion(), 0 );
+    /// @brief local grid position in global grid
+    auto local_off = particles -> tile_off * particles -> nx;
+
+    /// @brief position of lower corner of local grid in simulation units
+    float2 ref = make_float2( 
+        local_off.x * dx.x + moving_window.motion(),
+        local_off.y * dx.y
+    );
 
     density -> np_inject( *particles, ppc, dx, ref, range, np );
 }
@@ -2079,6 +2110,10 @@ void Species::advance( EMF const &emf, Current &current ) {
  */
 void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
+    std::cerr << "Species::advance_mov_window() is not implemented yet, aborting\n";
+    exit(1);
+
+#if 0
     // Advance momenta
     push( emf.E, emf.B );
 
@@ -2123,6 +2158,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
     // Increase internal iteration number
     iter++;
 
+#endif
 
 }
 
@@ -2464,7 +2500,7 @@ void Species::save_charge() const {
     gc.y = {0,1};
 
     // Deposit charge on device
-    grid<float> charge( particles -> ntiles, particles -> nx, gc, particles -> part );
+    grid<float> charge( particles -> global_ntiles, particles -> nx, gc, particles -> parallel );
 
     charge.zero();
 
@@ -2535,7 +2571,8 @@ void dep_pha1_kernel(
     ParticleData const part )
 {
     const uint2 ntiles  = part.ntiles;
-    uint2 const tile_nx = part.nx;
+    const uint2 tile_nx = part.nx;
+    const uint2 tile_off = tile_idx + part.tile_off;
 
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
@@ -2550,8 +2587,8 @@ void dep_pha1_kernel(
     for( int i = 0; i < np; i++ ) {
         float d;
         switch( q ) {
-        case( phasespace:: x ): d = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ): d = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
+        case( phasespace:: x ): d = ( tile_off.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
+        case( phasespace:: y ): d = ( tile_off.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
         case( phasespace:: ux ): d = u[i].x; break;
         case( phasespace:: uy ): d = u[i].y; break;
         case( phasespace:: uz ): d = u[i].z; break;
@@ -2711,10 +2748,10 @@ void Species::save_phasespace( phasespace::quant quant, float2 const range,
     dep_phasespace( d_data, quant, range, size );
 
     // Add contributions from all parallel nodes to root node
-    particles -> part.reduce( d_data, size, mpi::sum );
+    particles -> parallel.reduce( d_data, size, mpi::sum );
 
     // Save file (data is on root node)
-    if ( particles -> part.root() == 0 )
+    if ( particles -> parallel.root() == 0 )
         zdf::save_grid( d_data, info, iter_info, "PHASESPACE/" + name );
 
     memory::free( d_data );
@@ -2750,6 +2787,8 @@ void dep_pha2_kernel(
     
     const uint2 ntiles  = part.ntiles;
     const auto tile_nx  = part.nx;
+    const uint2 tile_off = tile_idx + part.tile_off;
+
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
     const int part_offset = part.offset[ tid ];
@@ -2764,8 +2803,8 @@ void dep_pha2_kernel(
     for( int i = 0; i < np; i++ ) {
         float d0;
         switch( quant0 ) {
-        case( phasespace:: x ):  d0 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ):  d0 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
+        case( phasespace:: x ):  d0 = ( tile_off.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
+        case( phasespace:: y ):  d0 = ( tile_off.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
         case( phasespace:: ux ): d0 = u[i].x; break;
         case( phasespace:: uy ): d0 = u[i].y; break;
         case( phasespace:: uz ): d0 = u[i].z; break;
@@ -3049,10 +3088,10 @@ void Species::save_phasespace(
     dep_phasespace( d_data, quant0, range0, size0, quant1, range1, size1 );
 
     // Add contributions from all parallel nodes to root node
-    particles -> part.reduce( d_data, size0 * size1, mpi::sum );
+    particles -> parallel.reduce( d_data, size0 * size1, mpi::sum );
 
     // Save file (data is on root node)
-    if ( particles -> part.root() == 0 )
+    if ( particles -> parallel.root() == 0 )
         zdf::save_grid( d_data, info, iter_info, "PHASESPACE/" + name );
 
     memory::free( d_data );

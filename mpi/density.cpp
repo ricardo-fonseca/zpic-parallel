@@ -186,6 +186,16 @@ inline void inject_uniform_kernel(
     }
 }
 
+/**
+ * @brief Injects a uniform density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
 void Density::Uniform::inject( Particles & part, 
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {
@@ -205,7 +215,12 @@ void Density::Uniform::inject( Particles & part,
     }
 
 #else
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+
+
+
+    // const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+
+    auto ntiles = part.ntiles;
 
     #pragma omp parallel for
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
@@ -219,11 +234,11 @@ void Density::Uniform::inject( Particles & part,
 }
 
 /**
- * @brief CUDA kernel for counting how many particles will be injected
+ * @brief Kernel for counting how many particles will be injected
  * 
- * Use only 1 thread per tile
+ * @note Uses only 1 thread per tile
  * 
- * @param range     Cell range (global) to inject particles in
+ * @param range     Cell range to inject particles in
  * @param ppc       Number of particles per cell
  * @param nx        Number of cells in tile
  * @param d_tiles   Particle tile information
@@ -280,6 +295,17 @@ inline void np_inject_uniform_kernel(
 
 }
 
+/**
+ * @brief Returns number of particles per tile that a uniform profile would inject
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ * @param np        (out) Number of particles to inject per tile
+ */
 void Density::Uniform::np_inject( Particles & part, 
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
@@ -299,20 +325,15 @@ void Density::Uniform::np_inject( Particles & part,
 }
 
 /**
- * @brief kernel for injecting step profile
+ * @brief Kernel for injecting step profile
  * 
- * This kernel must be launched using a 2D grid with 1 block per tile
- * 
- * @param range     Cell range (global) to inject particles in
- * @param step      Step position normalized to cell size
+ * @tparam dir      Step direction ( coord::x | coord::y )
+ * @param tile_idx  Tile index (x,y)
+ * @param range     Cell range to inject particles in
+ * @param step      Step position (normalized to node grid coordinates)
  * @param ppc       Number of particles per cell
- * @param nx        Tile size
- * @param d_tiles    Tile information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (positions)
- * @param d_u       Particle buffer (momenta)
+ * @param part      Particle data
  */
-
 template < coord::cart dir >
 void inject_step_kernel( 
     uint2 const tile_idx, 
@@ -413,13 +434,25 @@ void inject_step_kernel(
     }
 }
 
+/**
+ * @brief Injects a step density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
 void Density::Step::inject( Particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
-{
-    float step_pos = (pos - ref.x) / dx.x;
+{    
+    /// @brief Step position (normalized to node grid coordinates)
+    float step_pos;
 
     switch( dir ) {
     case( coord::x ):
+        step_pos = (pos - ref.x) / dx.x;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.x; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -430,6 +463,7 @@ void Density::Step::inject( Particles & part,
         }
         break;
     case( coord::y ):
+        step_pos = (pos - ref.y) / dx.y;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.y; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -443,6 +477,20 @@ void Density::Step::inject( Particles & part,
     }
 }
 
+/**
+ * @brief Kernel for counting how many particles will be injected by a step
+ *        profile
+ * 
+ * @note Uses only 1 thread per tile
+ * 
+ * @tparam dir          Step direction ( coord::x | coord::y )
+ * @param tile_idx      Tile index (x,y)
+ * @param range         Cell range to inject particles in
+ * @param step          Step position (normalized to node grid coordinates)
+ * @param ppc           Number of particles per cell
+ * @param part          Particle data
+ * @param np            (out) Number of particles per tile to inject
+ */
 template < coord::cart dir >
 void np_inject_step_kernel( 
     uint2 const tile_idx, 
@@ -527,14 +575,27 @@ void np_inject_step_kernel(
     }
 }
 
+/**
+ * @brief Returns number of particles per tile that a step profile would inject
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ * @param np        (out) Number of particles to inject per tile
+ */
 void Density::Step::np_inject( Particles & part, 
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
 {
-    float step_pos = (pos - ref.x) / dx.x;
+    /// @brief Step position (normalized to node grid coordinates)
+    float step_pos;
 
     switch( dir ) {
     case( coord::x ):
+        step_pos = (pos - ref.x) / dx.x;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.x; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -545,6 +606,7 @@ void Density::Step::np_inject( Particles & part,
         }
         break;
     case( coord::y ):
+        step_pos = (pos - ref.y) / dx.y;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.y; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -562,19 +624,14 @@ void Density::Step::np_inject( Particles & part,
 /**
  * @brief Kernel for injecting slab profile
  * 
- * This kernel must be launched using a 2D grid with 1 block per tile
- * 
- * @param range     Cell range (global) to inject particles in
- * @param slab      slab start/end position normalized to cell size
- * @param ppc       Number of particles per cell
- * @param nx        Tile size
- * @param d_tiles   Tile information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (positions)
- * @param d_u       Particle buffer (momenta)
+ * @tparam dir          Slab direction ( coord::x | coord::y )
+ * @param tile_idx      Tile index (x,y)
+ * @param range         Cell range to inject particles in
+ * @param start         Slab start position (normalized to node grid coordinates)
+ * @param finish        Slab end position (normalized to node grid coordinates)
+ * @param ppc           Number of particles per cell
+ * @param part          Particle data
  */
-
-
 template < coord::cart dir >
 void inject_slab_kernel( 
     uint2 const tile_idx,
@@ -674,15 +731,28 @@ void inject_slab_kernel(
     }
 }
 
+/**
+ * @brief Injects a slab density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
 void Density::Slab::inject( Particles & part,
     uint2 const ppc,float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {
-
-    float slab_begin = (begin - ref.x)/ dx.x;
-    float slab_end = (end - ref.x)/ dx.x;
+    /// @brief Slab start position (normalized to node grid coordinates) 
+    float slab_begin;
+    /// @brief Slab end position (normalized to node grid coordinates) 
+    float slab_end;
 
     switch( dir ) {
     case( coord::x ):
+        slab_begin = (begin - ref.x)/ dx.x;
+        slab_end   = (end - ref.x)/ dx.x;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.x; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -693,6 +763,8 @@ void Density::Slab::inject( Particles & part,
         }
         break;
     case( coord::y ):
+        slab_begin = (begin - ref.y)/ dx.y;
+        slab_end   = (end - ref.y)/ dx.y;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.x; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -709,16 +781,14 @@ void Density::Slab::inject( Particles & part,
 /**
  * @brief Kernel for counting how many particles will be injected by slab profie
  * 
- * @tparam dir 
- * @param ntiles 
- * @param tile_idx 
- * @param range 
- * @param start 
- * @param finish 
- * @param ppc 
- * @param nx 
- * @param tiles 
- * @param np 
+ * @tparam dir          Slab direction ( coord::x | coord::y )
+ * @param tile_idx      Tile index (x,y)
+ * @param range         Cell range to inject particles in
+ * @param start         Slab start position (normalized to node grid coordinates)
+ * @param finish        Slab end position (normalized to node grid coordinates)
+ * @param ppc           Number of particles per cell
+ * @param part          Particle data
+ * @param np            (out) Number of particles to inject per tile
  */
 template < coord::cart dir >
 void np_inject_slab_kernel( 
@@ -807,15 +877,30 @@ void np_inject_slab_kernel(
 
 }
 
+/**
+ * Returns number of particles per tile that a slab profile would inject
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ * @param np        (out) Number of particles to inject per tile
+ */
 void Density::Slab::np_inject( Particles & part, 
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
 {
-    float slab_begin = (begin - ref.x)/ dx.x;
-    float slab_end = (end - ref.x)/ dx.x;
+    /// @brief Slab start position (normalized to node grid coordinates) 
+    float slab_begin;
+    /// @brief Slab end position (normalized to node grid coordinates) 
+    float slab_end;
 
     switch( dir ) {
     case( coord::x ):
+        slab_begin = (begin - ref.x)/ dx.x;
+        slab_end   = (end - ref.x)/ dx.x;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.x; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -827,6 +912,8 @@ void Density::Slab::np_inject( Particles & part,
         }
         break;
     case( coord::y ):
+        slab_begin = (begin - ref.y)/ dx.y;
+        slab_end   = (end - ref.y)/ dx.y;
         for( unsigned ty = 0; ty < part.ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.ntiles.x; ++tx ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -839,22 +926,16 @@ void Density::Slab::np_inject( Particles & part,
     }
 }
 
-
 /**
  * @brief Kernel for injecting sphere profile
  * 
- * This kernel must be launched using a 2D grid with 1 block per tile
- * 
- * @param range     Cell range (global) to inject particles in
- * @param center    sphere center in simulation units
- * @param radius    sphere radius in simulation units
- * @param dx        cell size in simulation units
- * @param ppc       Number of particles per cell
- * @param nx        Tile size
- * @param d_tiles   Tile information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (positions)
- * @param d_u       Particle buffer (momenta)
+ * @param tile_idx      Tile index (x,y)
+ * @param range         Cell range to inject particles in
+ * @param center        Sphere center in simulation units
+ * @param radius        Sphere radius in simulation units
+ * @param dx            Cell size
+ * @param ppc           Number of particles per cell
+ * @param part          Particle data
  */
 inline void inject_sphere_kernel( 
     uint2 const tile_idx,
@@ -950,6 +1031,16 @@ inline void inject_sphere_kernel(
     }
 }
 
+/**
+ * @brief Injects a sphere density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
 void Density::Sphere::inject( Particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {
@@ -968,7 +1059,19 @@ void Density::Sphere::inject( Particles & part,
     }
 }
 
-
+/**
+ * @brief Kernel for counting how many particles will be injected by a sphere
+ *        profile
+ * 
+ * @param tile_idx  Tile index (x,y)
+ * @param range     Cell range to inject particles in
+ * @param center    Sphere center in simulation units
+ * @param radius    Sphere radius in simulation units
+ * @param dx        Cell size
+ * @param ppc       Number of particles per cell
+ * @param part      Particle data
+ * @param np        (out) Number of particles per tile to inject
+ */
 void np_inject_sphere_kernel(
     uint2 const tile_idx,
     bnd<unsigned int> range,

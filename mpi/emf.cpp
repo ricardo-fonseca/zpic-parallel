@@ -8,7 +8,7 @@
 /**
  * @brief Construct a new EMF::EMF object
  * 
- * @param ntiles    Number of tiles
+ * @param ntiles    Global number of tiles
  * @param nx        Tile grid size
  * @param box       Simulation box size
  * @param dt        Time step
@@ -51,7 +51,10 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     // Reset iteration number
     iter = 0;
 
-//    std::cout << "EMF object created." << '\n';
+    if ( mpi::world_rank() == 0 ) {
+        std::cout << "EMF tile size"  << E->nx << '\n';
+        std::cout << "EMF tile start" << E->get_tile_start() << '\n';
+    }
 
 }
 

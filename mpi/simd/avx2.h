@@ -1,3 +1,6 @@
+#ifndef AVX2_H_
+#define AVX2_H_
+
 #include <immintrin.h>
 
 #include <iostream>
@@ -1029,5 +1032,4 @@ class Vec8Mask {
     }
 };
 
-
-
+#endif

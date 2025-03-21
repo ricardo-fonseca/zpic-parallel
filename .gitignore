@@ -30,7 +30,21 @@
 *.exe
 *.out
 *.app
-.vscode/settings.json
+
+# VS Code
+.vscode/
 
 # Python caches
 __pycache__/
+
+# macOS Finder metadata
+.DS_Store
+
+# ZPIC specific
+zpic
+test/
+.deps/
+.objs/
+EMF/
+PARTICLES/
+CHARGE

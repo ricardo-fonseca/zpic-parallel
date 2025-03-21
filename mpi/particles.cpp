@@ -20,6 +20,7 @@ void gather_quant(
     int * const __restrict__ d_off )
 {
     const uint2 tile_nx = part.nx;
+    const uint2 tile_off = part.tile_off;
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
@@ -38,8 +39,8 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if constexpr ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if constexpr ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::x )  val = ((tile_off.x + tx) * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::y )  val = ((tile_off.y + ty) * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
             if constexpr ( quant == part::ux ) val = u[idx].x;
             if constexpr ( quant == part::uy ) val = u[idx].y;
             if constexpr ( quant == part::uz ) val = u[idx].z;
@@ -97,6 +98,7 @@ void gather_quant(
     int * const __restrict__ d_off )
 {
     const uint2 tile_nx = part.nx;
+    const uint2 tile_off = part.tile_off;
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
@@ -114,8 +116,8 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if constexpr ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if constexpr ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::x )  val = ((tile_off.x + tx) * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::y )  val = ((tile_off.y + ty) * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
             if constexpr ( quant == part::ux ) val = u[idx].x;
             if constexpr ( quant == part::uy ) val = u[idx].y;
             if constexpr ( quant == part::uz ) val = u[idx].z;
@@ -169,7 +171,11 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
     // Get total number of particles to save
     uint64_t local = np_local();
     uint64_t global;
-    MPI_Allreduce( &local, &global, 1, MPI_UINT64_T, MPI_SUM, parallel.get_comm() );
+
+    parallel.allreduce( &local, &global, 1, mpi::sum );
+    
+    // Update metadata entry
+    metadata.np = global;
 
     if ( global > 0 ) {
         // Create a communicator including only the nodes with local particles
@@ -191,7 +197,7 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
             // create the datasets
             zdf::dataset dsets[ metadata.nquants ];
 
-            for( int i = 0; i < metadata.nquants; i++ ) {
+            for( uint32_t i = 0; i < metadata.nquants; i++ ) {
                 dsets[i].name      = metadata.quants[i];
                 dsets[i].data_type = zdf::data_type<float>();
                 dsets[i].ndims     = 1;
@@ -220,7 +226,7 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
             chunk.data = data;
 
             // Write the data
-            for ( int i = 0; i < metadata.nquants; i ++) {
+            for ( uint32_t i = 0; i < metadata.nquants; i ++) {
                 gather( quants[i], data, offset );
                 zdf::write_cdset( part_file, dsets[i], chunk, file_off );
             }
@@ -229,7 +235,7 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
             memory::free( data );
 
             // close the datasets
-            for( int i = 0; i < metadata.nquants; i++ ) 
+            for( uint32_t i = 0; i < metadata.nquants; i++ ) 
                 zdf::end_cdset( part_file, dsets[i] );
 
             // Close the file
@@ -237,11 +243,11 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
         }
     } else {
         // No particles - root node creates an empty file
-        if ( parallel.get_rank() == 0 ) {
+        if ( parallel.root() ) {
             zdf::file part_file;
             zdf::open_part_file( part_file, metadata, iter, path+"/"+metadata.name );
 
-            for ( int i = 0; i < metadata.nquants; i ++) {
+            for ( uint32_t i = 0; i < metadata.nquants; i ++) {
                 zdf::add_quant_part_file( part_file, metadata.quants[i],  nullptr, 0 );
             }
 
@@ -357,7 +363,7 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
     int * __restrict__ np     = tmp.np;
 
     uint32_t total = 0;
-    for( unsigned i = 0; i < ntiles; i++ ) {
+    for( auto i = 0; i < ntiles; i++ ) {
         offset[i] = total;
         np[i] = 0;
         total += new_np[i];
@@ -386,7 +392,7 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np,
     int * __restrict__ np     = tmp.np;
 
     uint32_t total = 0;
-    for( unsigned i = 0; i < ntiles; i++ ) {
+    for( auto i = 0; i < ntiles; i++ ) {
         offset[i] = total;
         np[i] = 0;
         total += new_np[i] + extra[i];
@@ -1151,7 +1157,7 @@ void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
     int msg_offset[ ntiles_msg ];
 
     int sum = 0;
-    for( int i = 0; i < ntiles_msg; ) {
+    for( int i = 0; i < ntiles_msg; i++) {
         msg_offset[i] = sum; sum += msg_tile_np[i];
     }
 

@@ -177,7 +177,7 @@ public:
      * 
      * @param box       Simulation global box size
      * @param ntiles    Number of tiles
-     * @param nx        Title grid dimension
+     * @param nx        Tile grid dimension
      * @param dt        
      * @param id 
      */
@@ -264,8 +264,10 @@ public:
 
         // Set periodic flags on tile grids
         if ( particles ) {
-            particles->periodic.x = ( bc.x.lower == species::bc::periodic );
-            particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+            particles -> set_periodic( make_int2( 
+                bc.x.lower == species::bc::periodic,
+                bc.y.lower == species::bc::periodic
+            ));
         }
     }
 
@@ -288,8 +290,14 @@ public:
         if ( iter == 0 ) {
             moving_window.init( dx.x );
 
+            // Set global open boundary conditions
             bc.x.lower = bc.x.upper = species::bc::open;
-            particles->periodic.x = false;
+
+            // Disable periodic.x boundaries for particles object
+            auto periodic = particles -> get_periodic();
+            periodic.x = false;
+            particles -> set_periodic( periodic );
+
             return 0;
         } else {
             std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
@@ -420,12 +428,23 @@ public:
     }
 
     /**
-     * @brief Returns the total number of particles
+     * @brief Returns the (node) local number of particles
      * 
-     * @return auto 
+     * @return uint64_t     Local number of particles
      */
-    uint64_t np_total() const {
-        return particles -> np_total();
+    uint64_t np_local() const {
+        return particles -> np_local();
+    }
+
+    /**
+     * @brief Gets global number of particles
+     * @note By default, the correct result is only returned on root node
+     * 
+     * @param all           Return result on all parallel nodes (defaults to false)
+     * @return uint64_t     Global number of particles
+     */
+    uint64_t np_global( bool all = false ) {
+        return particles -> np_global( all );
     }
 
     /**

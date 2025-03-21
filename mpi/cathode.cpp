@@ -116,13 +116,7 @@ Cathode::~Cathode() {
 void Cathode::inject() {
     
     if ( iter == 0 && start < 0 ) {
-
-        uint2 g_nx = particles -> gnx;
-        bnd<unsigned int> range;
-        range.x = pair<unsigned int>( 0, g_nx.x - 1 );
-        range.y = pair<unsigned int>( 0, g_nx.y - 1 );
-
-        Species::inject( range );
+        Species::inject( );
     }
 }
 

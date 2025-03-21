@@ -180,6 +180,17 @@ class ZDF_Part_Info:
         self.qunits = dict()
         self.nparts = 0
 
+    def __str__( self ):
+        msg = "<ZDF_Part_info>\n"
+        msg += "name    : {}\n".format(self.name)
+        msg += "label   : {}\n".format(self.label)
+        msg += "nparts  : {}\n".format(self.nparts)
+        msg += "nquants : {}\n".format(self.nquants)
+        msg += "quants  : {}\n".format(self.quants)
+        msg += "qlabels : {}\n".format(self.qlabels)
+        msg += "qunits  : {}\n".format(self.qunits)
+        return msg
+
 class ZDF_Tracks_Info:
     """ZDF_Tracks_Info()
 
