@@ -570,9 +570,6 @@ void copy_out(
             int2 nix  = ix[k];
             float2 nx = x[k];
             float3 nu = u[k];
-            
-            // Invalidate particle for debug purposes
-            ix[k] = make_int2(-10,0);
 
             int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
             int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
@@ -623,8 +620,6 @@ void copy_out(
                 tmp_ix[ new_idx + i ] = ix[ i ];
                 tmp_x[ new_idx + i ]  = x [ i ];
                 tmp_u[ new_idx + i ]  = u [ i ];
-
-                ix[i] = make_int2(-20,0);
             }
 
         } else {
@@ -635,9 +630,6 @@ void copy_out(
                 tmp_ix[ new_idx + i ] = ix[ old_idx + i ];
                 tmp_x[ new_idx + i ]  = x [ old_idx + i ];
                 tmp_u[ new_idx + i ]  = u [ old_idx + i ];
-
-                ix[old_idx + i] = make_int2(-30,0);
-
             }
         }
 
@@ -709,18 +701,6 @@ void copy_in( ParticleData part, ParticleData tmp )
         // Store the new offset and number of particles
         part.np[ tid ]     = old_np + tmp_np;
         part.offset[ tid ] = new_offset;
-
-/*
-        {
-            int2   * __restrict__ _ix = &part.ix[ part.offset[ tid ] ];
-            for( int k = 0; k < part.np[ tid ]; k++ ) {
-                if ( _ix[k].x < 0 ) {
-                    mpi::cout << " copy_in(), tid: " << tid << ", invalid ix[" << k << "] = " << _ix[k] << '\n';
-                    exit(1);
-                }
-            }
-        }
-*/
     }
 }
 
@@ -934,42 +914,14 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
  */
 void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
 
-/*
-    mpi::cout << "[start      ] self.np:    ";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << np[i];
-    }
-    mpi::cout << std::endl;
-
-    mpi::cout << "[start      ] self.offset:";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << offset[i];
-    }
-    mpi::cout << std::endl;
-*/
     // Reset sort data
     sort.reset();
 
     // Get new number of particles per tile
     bnd_check ( *this, sort, local_bnd );
-/*
-    mpi::cout << "[bnd_check  ] sort.new_np:";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << sort.new_np[i];
-    }
-    mpi::cout << std::endl;
-*/
 
     // Exchange number of particles in edge cells
     sort.exchange_np();
-
-/*
-    mpi::cout << "[exchange_np] sort.new_np:";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << sort.new_np[i];
-    }
-    mpi::cout << std::endl;
-*/
 
     // Post particle data receives
     irecv_msg( sort, recv );
@@ -978,14 +930,6 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // - Incoming particles from other MPI nodes
     // - New particles that will be injected (if any)
     auto total_np = update_tile_info ( tmp, sort, extra );
-
-/*
-    mpi::cout << "[update_tile_info] tmp.offset:";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << tmp.offset[i];
-    }
-    mpi::cout << std::endl;
-*/
 
     if ( total_np > max_part ) { 
         std::cerr << "Particles::tile_sort() - particle buffer requires growing,";
@@ -996,58 +940,21 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // Copy outgoing particles (and particles needing shifting) to staging area
     copy_out ( *this, tmp, sort, local_bnd );
 
-/*
-    mpi::cout << "[copy_out   ] self.np:    ";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << np[i];
-    }
-    mpi::cout << std::endl;
-
-    // info_np( "Particles::tile_sort - after copy_out()");
-*/
     // Pack particle data and start sending
     isend_msg( tmp, sort, send );
 
     // Copy local particles from staging area into final positions in partile buffer
     copy_in ( *this, tmp );
 
-/*
-    mpi::cout << "[copy_in    ] self.np:    ";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << np[i];
-    }
-    mpi::cout << std::endl;
-
-    mpi::cout << "[copy_in    ] self.offset:";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << offset[i];
-    }
-    mpi::cout << std::endl;
-*/
-
     // Wait for messages to be received and unpack data
     unpack_msg( sort, recv );
 
-/*
-    mpi::cout << "[unpack_msg ] self.np:    ";
-    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        mpi::cout << " " << np[i];
-    }
-    mpi::cout << std::endl;
-
-    // info_np( "Particles::tile_sort - after unpack_msg()");
-*/
     // Wait for sends to complete
     send.wait();
 
-    /*
-    _np_global = np_global();
-    if ( mpi::world_root() ) std::cout << "[info] total_np after sort:" << _np_global << '\n';
-    */
-
     // For debug only, remove from production code
-    parallel.barrier();
-    validate( "After tile_sort" );
+    // parallel.barrier();
+    // validate( "after tile_sort" );
 }
 #endif
 
@@ -1091,7 +998,7 @@ void Particles::cell_shift( int2 const shift ) {
 /**
  * @brief Checks particle buffer data for error
  * 
- * WARNING: This routine is meant for debug only and should not be called 
+ * @warning This routine is meant for debug only and should not be called 
  *          for production code.
  * 
  * The routine will check for:
@@ -1107,7 +1014,11 @@ void Particles::cell_shift( int2 const shift ) {
  */
 void Particles::validate( std::string msg, int const over ) {
 
-    mpi::cout << "validating particle set, " << msg << "...\n";
+    if ( msg.empty() ) {
+        mpi::cout << "validating particle set...";
+    } else {
+        mpi::cout << "validating particle set (" << msg << ")...";
+    }
 
     uint32_t err = 0;
     int2 const lb = make_int2( -over, -over );
@@ -1116,27 +1027,27 @@ void Particles::validate( std::string msg, int const over ) {
     // Check offset / np buffer
     for( unsigned tile_id = 0; tile_id < ntiles.x * ntiles.y; ++tile_id ) {
         if ( np[tile_id] < 0 ) {
-            std::cerr << "tile[" << tile_id << "] - bad np (" << np[ tile_id ] << "), should be >= 0\n";
+            mpi::cout << "\n tile[" << tile_id << "] - bad np (" << np[ tile_id ] << "), should be >= 0";
             err = 1;
         }
 
         if ( tile_id > 0 ) {
             auto prev = offset[ tile_id-1] + np[ tile_id-1];
             if ( prev != offset[ tile_id ] ) {
-                std::cerr << "tile[" << tile_id << "] - bad offset (" << offset[ tile_id ] << ")"
-                    << ", does not match previous tile info, should be " << prev << '\n';
+                mpi::cout << "\n tile[" << tile_id << "] - bad offset (" << offset[ tile_id ] << ")"
+                          << ", does not match previous tile info, should be " << prev;
                 err = 1;
             }
         } else {
             if ( offset[ tile_id ] != 0 ) {
-                std::cerr << "tile[" << tile_id << "] - bad offset (" << offset[ tile_id ] << "), should be 0\n";
+                mpi::cout << "tile[" << tile_id << "] - bad offset (" << offset[ tile_id ] << "), should be 0";
                 err = 1;
             }
         }   
     }
 
     if ( err ) {
-        mpi::cout << "(*error*) Invalid tile information, aborting..." << std::endl;
+        mpi::cout << "\n(*error*) Invalid tile information, aborting..." << std::endl;
         mpi::abort(1);
     }
 
@@ -1151,43 +1062,45 @@ void Particles::validate( std::string msg, int const over ) {
 
         for( int i = 0; i < tile_np; i++ ) {
             if ((t_ix[i].x < lb.x) || (t_ix[i].x >= ub.x )) { 
-                std::cerr << "tile[" << tile_id << "] Invalid ix[" << i << "].x position (" << t_ix[i].x << ")"
-                            << ", range = [" << lb.x << "," << ub.x << "]\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid ix[" << i << "].x position (" << t_ix[i].x << ")"
+                          << ", range = [" << lb.x << "," << ub.x << "]";
                 err=1; break;
             }
             if ((t_ix[i].y < lb.y) || (t_ix[i].y >= ub.y )) { 
-                std::cerr << "tile[" << tile_id << "] Invalid ix[" << i << "].y position (" << t_ix[i].y << ")"
-                            << ", range = [" << lb.y << "," << ub.y << "]\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid ix[" << i << "].y position (" << t_ix[i].y << ")"
+                          << ", range = [" << lb.y << "," << ub.y << "]";
                 err=1; break;
             }
             if ( std::isnan(t_u[i].x) || std::isinf(t_u[i].x) || std::abs(t_u[i].x) >= __ULIM ) {
-                std::cerr << "tile[" << tile_id << "] Invalid u[" << i << "].x gen. velocity (" << t_u[i].x <<")\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid u[" << i << "].x gen. velocity (" << t_u[i].x <<")";
                 err=1; break;
             }
             if ( std::isnan(t_u[i].y) || std::isinf(t_u[i].y) || std::abs(t_u[i].y) >= __ULIM ) {
-                std::cerr << "tile[" << tile_id << "] Invalid u[" << i << "].y gen. velocity (" << t_u[i].y <<")\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid u[" << i << "].y gen. velocity (" << t_u[i].y <<")";
                 err=1; break;
             }
             if ( std::isnan(t_u[i].z) || std::isinf(t_u[i].z) || std::abs(t_u[i].z) >= __ULIM ) {
-                std::cerr << "tile[" << tile_id << "] Invalid u[" << i << "].z gen. velocity (" << t_u[i].z <<")\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid u[" << i << "].z gen. velocity (" << t_u[i].z <<")";
                 err=1; break;
             }
             if ( t_x[i].x < -0.5f || t_x[i].x >= 0.5f ) {
-                std::cerr << "tile[" << tile_id << "] Invalid x[" << i << "].x position (" << t_x[i].x << "), range = [-0.5,0.5[\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid x[" << i << "].x position (" 
+                          << t_x[i].x << "), range = [-0.5,0.5[";
                 err=1; break;
             }
             if ( t_x[i].y < -0.5f || t_x[i].y >= 0.5f ) {
-                std::cerr << "tile[" << tile_id << "] Invalid x[" << i << "].y position (" << t_x[i].y << "), range = [-0.5,0.5[\n";
+                mpi::cout << "\ntile[" << tile_id << "] Invalid x[" << i << "].y position ("
+                          << t_x[i].y << "), range = [-0.5,0.5[\n";
                 err=1; break;
             }
         }
     }
 
     if ( err ) {
-        mpi::cout << "(*error*) Invalid particle(s) found, aborting..." << std::endl;
+        mpi::cout << "\n(*error*) Invalid particle(s) found, aborting..." << std::endl;
         mpi::abort(1);
     } else {
-        mpi::cout << "... particle set ok.\n";
+        mpi::cout << " particle set ok.\n";
     }
 }
 
@@ -1309,24 +1222,24 @@ void Particles::isend_msg( Particles &tmp, ParticleSortData &sort, ParticleMessa
     float3 * const __restrict__ u  = &tmp.u[ tile_off ];
 
     #pragma omp parallel for schedule(dynamic)
-    for( int i = 0; i < 9; i++) {
-        if ( sort.send.msg_np[i] > 0 ) {
-            uint8_t * __restrict__ buffer = &send.buffer[ off[i] * particle_size() ];
+    for( int dir = 0; dir < 9; dir++) {
+        if ( sort.send.msg_np[dir] > 0 ) {
+            uint8_t * __restrict__ buffer = &send.buffer[ off[dir] * particle_size() ];
             size_t pos = 0;
             
-            uint32_t np = sort.send.msg_np[i];
+            uint32_t np = sort.send.msg_np[dir];
             size_t nbytes;
 
             nbytes = np * sizeof(int2);
-            memcpy( &buffer[pos], &ix[ off[i] ], nbytes );
+            memcpy( &buffer[pos], &ix[ off[dir] ], nbytes );
             pos += nbytes;
 
             nbytes = np * sizeof(float2);
-            memcpy( &buffer[pos],  &x[ off[i] ], nbytes);
+            memcpy( &buffer[pos],  &x[ off[dir] ], nbytes);
             pos += nbytes;
 
             nbytes = np * sizeof(float3);
-            memcpy( &buffer[pos],  &u[ off[i] ], nbytes);
+            memcpy( &buffer[pos],  &u[ off[dir] ], nbytes);
             pos += nbytes; // unnecessary
 
         }
@@ -1429,6 +1342,7 @@ void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
                         dst_x [j] = src_x [j];
                         dst_u [j] = src_u [j];     
                     }
+
                     np_unpack += recv_np;
                 }
             
@@ -1440,49 +1354,3 @@ void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
     }
 }
 
-#if 0
-    // Total number of tiles in receive message buffer
-    auto ntiles_msg = part::msg_tiles( ntiles );
-
-    #pragma omp parallel for schedule(dynamic)
-    for( auto i = 0; i < ntiles_msg; i ++ ) {
-
-        // If any particles received in that tile
-        if ( msg_tile_np[i] > 0 ) {
-            // Get target tile for msg data
-            int msg_target = part::tid_recv_target( i, ntiles );
-
-            // destination buffers (in main particle buffer)
-            int tgt_offset  = offset[ msg_target ] + 
-                omp::atomic_fetch_add( &np[ msg_target ], msg_tile_np[i] );
-
-            int2   * __restrict__ const dst_ix = &ix[ tgt_offset ];
-            float2 * __restrict__ const dst_x  = &x [ tgt_offset ];
-            float3 * __restrict__ const dst_u  = &u [ tgt_offset ];
-
-            // ... this is wrong!
-
-            // source buffers (in packed data buffer)
-            int src_offset = msg_offset[ i ] * particle_size();
-            int2   * __restrict__ const src_ix = (int2 *)   & recv.buffer[ msg_offset[ i ] * sizeof(int2) ];
-
-/*
-            src_offset += msg_tile_np[i]  * sizeof(int2);
-            float2 * __restrict__ const src_x  = (float2 *) & recv.buffer[ src_offset ];
-            src_offset += msg_tile_np[i]  * sizeof(float2);
-            float3 * __restrict__ const src_u  = (float3 *) & recv.buffer[ src_offset ];
-*/
-            // #warning Remove from production code - in unpack_msg()
-            // std::cout << "msg_tile_np[" << i << "] = " << msg_tile_np[i] << '\n';
-
-            // Copy data
-            for( int j = 0; j < msg_tile_np[i]; j++ ) {
-                std::cout << "src_ix[" << j << "] = " << src_ix[j] << '\n';
-               // std::cout << "src_x[] = " << src_x[j] << '\n';
-               // std::cout << "src_u[] = " << src_u[j] << '\n';
-                dst_ix[j] = src_ix[j];
-               // dst_x [j] = src_x [j];
-               // dst_u [j] = src_u [j];
-            }
-        }
-#endif

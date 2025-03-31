@@ -15,12 +15,10 @@
 
 #--------------------- Clang Compilers --------------------
 CC = mpicc
-#CFLAGS = -O3 -march=native
-CFLAGS = -Og -g3
+CFLAGS = -O3 -march=native
 
 CXX = mpic++
-#CXXFLAGS = -O3 -march=native
-CXXFLAGS = -Og -g3
+CXXFLAGS = -O3 -march=native
 
 # OpenMP support
 # CXXFLAGS += -fopenmp

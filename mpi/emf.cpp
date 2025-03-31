@@ -50,12 +50,6 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
 
     // Reset iteration number
     iter = 0;
-
-    if ( mpi::world_rank() == 0 ) {
-        std::cout << "EMF tile size"  << E->nx << '\n';
-        std::cout << "EMF tile start" << E->get_tile_start() << '\n';
-    }
-
 }
 
 

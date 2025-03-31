@@ -167,16 +167,19 @@ inline int edge_tile_off( const int dir, const uint2 ntiles ) {
  */
 inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd ) {
 
+    // Local (non-parallel) x periodic
     if ( local_bnd.x.lower == part::bnd_t::periodic ) {
         if      ( coords.x < 0 )         coords.x += ntiles.x; 
         else if ( coords.x >= ntiles.x ) coords.x -= ntiles.x;
     }
 
+    // Local (non-parallel) y periodic
     if ( local_bnd.y.lower == part::bnd_t::periodic ) {
         if      ( coords.y < 0 )         coords.y += ntiles.y;
         else if ( coords.y >= ntiles.y ) coords.y -= ntiles.y;
     }
 
+    // Parallel shift
     int xshift = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
     int yshift = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
     int dir    = edge_dir_shift( xshift, yshift );
@@ -187,48 +190,73 @@ inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd 
     case 0: // lower y, lower x
         if (( local_bnd.y.lower == part::bnd_t::comm ) &&
             ( local_bnd.x.lower == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x;
+            tid = ntiles.y * ntiles.x; // base
         break;
     case 1: // lower y
         if ( local_bnd.y.lower == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + 1 +
-                coords.x;
+            tid = ntiles.y * ntiles.x + // base
+                  1 +                   // 0
+                  coords.x;
         break;
     case 2: // lower y, upper x
         if (( local_bnd.y.lower == part::bnd_t::comm ) &&
             ( local_bnd.x.upper == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x + 1 +
-                ntiles.x;
+            tid = ntiles.y * ntiles.x + // base
+                  1 +                   // 0
+                  ntiles.x;             // 1
         break;
     case 3: // lower x
         if ( local_bnd.x.lower == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + 2 + ntiles.x +
-                coords.y;
+            tid = ntiles.y * ntiles.x + // base
+                  1 +                   // 0
+                  ntiles.x +            // 1
+                  1 +                   // 2
+                  coords.y;
         break;
     case 4: // local tiles
         tid = coords.y * ntiles.x + coords.x;
         break;
     case 5: // upper x
         if ( local_bnd.x.upper == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + 2 + ntiles.x + ntiles.y +
+            tid = ntiles.y * ntiles.x + // base
+                1 +                     // 0
+                ntiles.x +              // 1
+                1 +                     // 2
+                ntiles.y +              // 3
                 coords.y;
         break;
     case 6: // upper y, lower x
         if (( local_bnd.y.upper == part::bnd_t::comm ) &&
             ( local_bnd.x.lower == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x + 2 + ntiles.x + ntiles.y +
-                ntiles.y;
+            tid = ntiles.y * ntiles.x + // base
+                1 +                     // 0
+                ntiles.x +              // 1
+                1 +                     // 2
+                ntiles.y +              // 3
+                ntiles.y;               // 5
         break;
     case 7: // upper y
         if ( local_bnd.y.upper == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + 3 + ntiles.x + 2 * ntiles.y +
+            tid = ntiles.y * ntiles.x + // base
+                1 +                     // 0
+                ntiles.x +              // 1
+                1 +                     // 2
+                ntiles.y +              // 3
+                ntiles.y +              // 5
+                1 +                     // 6
                 coords.x;
         break;
     case 8: // upper y, upper x
         if (( local_bnd.y.upper == part::bnd_t::comm ) &&
             ( local_bnd.x.upper == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x + 3 + ntiles.x + 2 * ntiles.y +
-                ntiles.x;
+            tid = ntiles.y * ntiles.x + // base
+                1 +                     // 0
+                ntiles.x +              // 1
+                1 +                     // 2
+                ntiles.y +              // 3
+                ntiles.y +              // 5
+                1 +                     // 6
+                ntiles.x;               // 7
         break;
     default:
         tid = -1;
@@ -478,19 +506,6 @@ class ParticleSort : public ParticleSortData {
      */
     void exchange_np( ) {
 
-/*
-        if ( mpi::world_rank() == 1 ) {
-            mpi::cout << "start exchange_np()" << '\n';
-            for( int j = 0; j < ntiles.y; j++ ) {
-                mpi::cout << j << ':';
-                for( int i = 0; i < ntiles.x; i++ ) {
-                    mpi::cout << ' ' << new_np[ j * ntiles.x + i ];
-                }
-                mpi::cout << '\n';
-            }
-        }
-*/
-
         const int ntx = ntiles.x;
         const int nty = ntiles.y;
 
@@ -502,25 +517,6 @@ class ParticleSort : public ParticleSortData {
             return s;
         };
 
-/*
-
-        // Stride for storing received data according to direction
-        auto stride = [ ntx ]( int dir ) -> int { 
-            int s = 1;
-            if ( dir == 3 || dir == 5 ) s = ntx;
-            return s;
-        };
-
-        // Offset for storing received data according to direction
-        auto offset = [ntx, nty]( int dir ) -> int {
-            int y = dir / 3;
-            int x = dir % 3;
-            int xoff = 0; int yoff = 0;
-            if ( x == 2 ) xoff = ntx-1;
-            if ( y == 2 ) yoff = (nty-1) * ntx;
-            return yoff + xoff;
-        };
-*/
         // Post receives
         unsigned int idx = 0;
         for( auto dir = 0; dir < 9; dir++ ) {            
@@ -561,7 +557,6 @@ class ParticleSort : public ParticleSortData {
 
                 uint32_t recv_np = 0;
                 for( int k = 0; k < size(dir); k++ ) {
-                    // new_np[ k * stride(dir) + offset(dir) ] += recv.buffer[ idx ];
                     recv_np += recv.buffer[ idx ];
                     idx++;
                 }
@@ -572,19 +567,6 @@ class ParticleSort : public ParticleSortData {
             }
         }
 
-/*
-        if ( mpi::world_rank() == 1 ) {
-            mpi::cout << "finish exchange_np()" << '\n';
-            for( int j = 0; j < ntiles.y; j++ ) {
-                mpi::cout << j << ':';
-                for( int i = 0; i < ntiles.x; i++ ) {
-                    mpi::cout << ' ' << new_np[ j * ntiles.x + i ];
-                }
-                mpi::cout << '\n';
-            }
-            std::cout << '\n';
-        }
-*/
         // Wait for sends to complete
         MPI_Waitall( 9, send.requests, MPI_STATUSES_IGNORE );
     }

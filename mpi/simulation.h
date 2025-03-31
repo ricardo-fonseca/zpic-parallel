@@ -166,37 +166,74 @@ class Simulation {
 
     /**
      * @brief Print global energy diagnostic
-     * 
+     * @note must be called by all MPI nodes
      */
     void energy_info() {
-        std::cout << "(*info*) Energy at n = " << iter << ", t = " << iter * double(dt)  << '\n';
+        if ( parallel.root() ) {
+            std::cout << "(*info*) Energy at n = " << iter << ", t = " << iter * double(dt)  << '\n';
+        }
+        
         double part_ene = 0;
         for (unsigned i = 0; i < species.size(); i++) {
             double kin = species[i]->get_energy();
-            std::cout << "(*info*) " << species[i]->name << " = " << kin << '\n';
+            parallel.reduce( &kin, 1, mpi::sum );
+            
+            if ( parallel.root() )
+                std::cout << "(*info*) " << species[i]->name << " = " << kin << '\n';
+
             part_ene += kin;
         }
 
-        if ( species.size() > 1 )
+        if ( species.size() > 1 && parallel.root() ) 
             std::cout << "(*info*) Total particle energy = " << part_ene << '\n';
 
         double3 ene_E, ene_B;
         emf.get_energy( ene_E, ene_B );
-        std::cout << "(*info*) Electric field = " << ene_E.x + ene_E.y + ene_E.z << '\n';
-        std::cout << "(*info*) Magnetic field = " << ene_B.x + ene_B.y + ene_B.z << '\n';
 
-        double total = part_ene + ene_E.x + ene_E.y + ene_E.z + ene_B.x + ene_B.y + ene_B.z;
-        std::cout << "(*info*) total = " << total << '\n';
+        // MPI does not natively support MPI_SUM for double3
+        // We could implement it, but this is simpler
+        double ene_fld[6] = {ene_E.x,ene_E.y,ene_E.z,ene_B.x, ene_B.y, ene_B.z};
+
+        parallel.reduce( ene_fld, 6, mpi::sum );
+
+        if ( parallel.root() ) {
+            std::cout << "(*info*) Electric field = " << ene_fld[0] + ene_fld[1] + ene_fld[2] << '\n';
+            std::cout << "(*info*) Magnetic field = " << ene_fld[3] + ene_fld[4] + ene_fld[5] << '\n';
+
+            double total = part_ene;
+            for( int i = 0; i < 6; i++ ) total += ene_fld[i];
+            std::cout << "(*info*) total = " << total << '\n';
+        }
     }
 
     /**
      * @brief Returns total number of particles moved
      * 
+     * @note Only root MPI node gets the proper result
+     * 
      * @return unsigned long long 
      */
-    uint64_t get_nmove() {
+
+    /**
+     * @brief Returns total number of particles moved
+     * 
+     * @note The default behavior is to only return the global result on the
+     *       root MPI node.
+     * 
+     * @param all           (optional) Set to true to return value on all MPI
+     *                      nodes, defaults to false
+     * @return uint64_t 
+     */
+    uint64_t get_nmove( bool all = false ) {
         uint64_t nmove = 0;
         for (unsigned i = 0; i < species.size(); i++) nmove += species[i] -> get_nmove();
+        
+        if ( all ) {
+            parallel.allreduce( &nmove, 1, mpi::sum );
+        } else {
+            parallel.reduce( &nmove, 1, mpi::sum );
+        }
+
         return nmove;
     }
 };

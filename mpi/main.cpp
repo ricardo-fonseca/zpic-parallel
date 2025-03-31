@@ -430,11 +430,13 @@ void test_weibel_large( )
 
 }
 
+#endif
+
 void test_weibel_96( )
 {
                             
     // Create simulation box
-    uint2 partition { 2, 2 };
+    uint2 partition { 4, 2 };
     uint2 ntiles {12, 16};
     uint2 nx {32, 32};
     uint2 ppc {8, 8};
@@ -467,8 +469,9 @@ void test_weibel_96( )
                      
     // Run simulation    
     int const imax = 500;
-                                                          
-    printf("Running Weibel(96) test up to n = %d...\n", imax);
+                
+    if ( mpi::world_root() )
+        std::cout << "Running Weibel(96) test up to n = " << imax << "...\n";
                 
     Timer timer;
                   
@@ -481,8 +484,9 @@ void test_weibel_96( )
     }
                  
     timer.stop();
-                                                              
-    std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+    
+    if ( mpi::world_root() )
+        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
                       
     sim.energy_info();
                                     
@@ -492,12 +496,11 @@ void test_weibel_96( )
                                                                   
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
+    if ( mpi::world_root() ) {
+        std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+                  << ", Performance: " << perf << " GPart/s\n";
+    }
 }
-
-#endif
 
 void test_partition() {
     uint2 dims = make_uint2( 2, 3 );
@@ -541,7 +544,7 @@ void test_grid() {
  * 
  */
 void test_particles() {
-    uint2 par_dims = make_uint2( 4, 4 );
+    uint2 par_dims = make_uint2( 2, 2 );
     uint2 global_ntiles {16, 16};
 
 //    uint2 dims = make_uint2( 2, 1 );
@@ -551,20 +554,31 @@ void test_particles() {
 
     uint2 nx {8, 8};
     float2 box = make_float2( 12.8, 12.8 );
-    float dt = 0.07;
 
-//    uint2 ppc = make_uint2( 8, 8 );
+    uint2 gnx = nx * global_ntiles;
+    float2 dx = { box.x / gnx.x, box.y / gnx.y };
+    float dt = 1. / sqrt( 1./(dx.x*dx.x) + 1./(dx.y*dx.y) ); // max time step
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "gnx = " << gnx << '\n';
+        std::cout << "dx  = " << dx << '\n';
+        std::cout << "dt  = " << dt;
+        std::cout << ansi::reset << '\n';
+    }
+
+//    uint2 ppc = make_uint2( 5, 5 );
     uint2 ppc = make_uint2( 8, 8 );
+//    uint2 ppc = make_uint2( 1, 1 );
 
     Species electrons("electrons", -1.0f, ppc );
 
 //    electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
 //    electrons.set_density(Density::Slab(coord::x, 1.0, 5.0, 7.0));
-    electrons.set_density(Density::Sphere( 1.0, make_float2( 5.0, 7.0 ), 3.0));
+    electrons.set_density(Density::Sphere( 1.0, make_float2( 6.4, 6.4 ), 2.8));
 
 //    electrons.set_udist( UDistribution::Cold( make_float3( 1e6, 0., 0. ) ) );
-    electrons.set_udist( UDistribution::Cold( make_float3( 0, -1e6, 0. ) ) );
-//    electrons.set_udist( UDistribution::Cold( make_float3( 2e6, 1e6, 0. ) ) );
+//    electrons.set_udist( UDistribution::Cold( make_float3( 0, -1e6, 0. ) ) );
+    electrons.set_udist( UDistribution::Cold( make_float3( -1e6, -1e6, 0. ) ) );
 //    electrons.set_udist( UDistribution::Thermal( make_float3( 0.1, 0.2, 0.3 ) ) );
 
     electrons.initialize( box, global_ntiles, nx, dt, 0, parallel );
@@ -637,8 +651,9 @@ int main( int argc, char *argv[] ) {
 
     // test_grid();
     // test_laser();
+    // test_particles();
 
-    test_particles();
+    test_weibel_96();
 
     // Finalize the MPI environment
     mpi::finalize();

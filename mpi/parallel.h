@@ -17,6 +17,9 @@ namespace {
         _mpi_cout() : std::ostream(this), new_line(true) {}
     
         private:
+
+        bool new_line;
+
         int overflow(int c) override
         {
             if (c != std::char_traits<char>::eof() && new_line ) {
@@ -35,7 +38,6 @@ namespace {
             return 0;
         }
     
-        bool new_line;
     };
 }
 
