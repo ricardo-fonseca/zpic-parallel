@@ -9,6 +9,38 @@
 #include <iostream>
 
 namespace mpi {
+
+namespace {
+    class _mpi_cout : private std::streambuf, public std::ostream
+    {   
+        public:
+        _mpi_cout() : std::ostream(this), new_line(true) {}
+    
+        private:
+        int overflow(int c) override
+        {
+            if (c != std::char_traits<char>::eof() && new_line ) {
+                int rank;
+                int ierr = MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+                if ( ierr == MPI_SUCCESS ) {
+                    std::cout << "[" << rank << "] ";
+                } else {
+                    std::cout << "[--] ";
+                }
+            }
+            
+            new_line = ( c == '\n' );
+            std::cout.put(c);
+    
+            return 0;
+        }
+    
+        bool new_line;
+    };
+}
+
+static _mpi_cout cout;
+
 template< typename T > 
 MPI_Datatype data_type () { 
     static_assert(0,"Invalid data type"); 
@@ -184,29 +216,34 @@ class Partition {
         MPI_Initialized( &flag );
 
         if ( ! flag ) {
-            std::cerr << "Unable to create partition object, MPI has not been initialized\n";
+            std::cerr << "(*error*) Unable to create partition object, MPI has not been initialized\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
         // Get communicator size
         if ( MPI_Comm_size( MPI_COMM_WORLD, &size ) != MPI_SUCCESS ) {
-            std::cerr << "Unable to get communicator size, aborting\n";
+            std::cerr << "(*error*) Unable to get communicator size, aborting\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
         // Check dimensions
         if ( dims.x < 1 ) {
-            std::cerr << "Invalid partition dims.x = " << dims.x << "\n";
+            std::cerr << "(*error*) Invalid partition dims.x = " << dims.x << "\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
         if ( dims.y < 1 ) {
-            std::cerr << "Invalid partition dims.y = " << dims.x << "\n";
+            std::cerr << "(*error*) Invalid partition dims.y = " << dims.x << "\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
         if ( dims.x * dims.y != (unsigned) size ) {
-            std::cerr << "Partition size (" << dims.x * dims.y << ") and number of parallel nodes (" << size << ") don't match\n";
+            std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of parallel nodes (" << size << ") don't match\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
@@ -216,19 +253,22 @@ class Partition {
 
         // Create partition
         if ( MPI_Cart_create(MPI_COMM_WORLD, 2, _dims, periods, 0, &comm ) != MPI_SUCCESS ) {
-            std::cerr << "Unable to create cartesian topology\n";
+            std::cerr << "(*error*) Unable to create cartesian topology\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
         // Get rank
         if ( MPI_Comm_rank( comm, & rank ) != MPI_SUCCESS ) {
-            std::cerr << "Unable to get communicator rank, aborting\n";
+            std::cerr << "(*error*) Unable to get communicator rank, aborting\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }
 
         int lcoords[2];
         if ( MPI_Cart_coords( comm, rank, 2, lcoords ) != MPI_SUCCESS ) {
-            std::cerr << "Unable to get cartesian coordinates, aborting\n";
+            std::cerr << "(*error*) Unable to get cartesian coordinates, aborting\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         };
         coords = make_int2( lcoords[0], lcoords[1] );
@@ -264,16 +304,10 @@ class Partition {
             }
         }
 
-/*
-        std::cout << rank << " - neighbor:\n"
-                  << neighbor[2][0] << ',' << neighbor[2][1] << ',' << neighbor[2][2] << '\n'
-                  << neighbor[1][0] << ',' << neighbor[1][1] << ',' << neighbor[1][2] << '\n'
-                  << neighbor[0][0] << ',' << neighbor[0][1] << ',' << neighbor[0][2] << std::endl;
-*/
-
         // Sanity check - this should never happen
         if ( neighbor[1][1] != rank ) {
-            std::cerr << "Invalid neighbor\n";
+            std::cerr << "(*error*) Invalid neighbor (bad partition)\n";
+            std::cerr << "(*error*) aborting...\n";
             exit(1);
         }; 
     };
@@ -429,16 +463,6 @@ class Partition {
     }
 
     /**
-     * @brief Aborts the parallel code using an MPI_Abort()
-     * 
-     * @param errorcode     Error code to be issued
-     * @return int          MPI_Abort() return value
-     */
-    int abort( int errorcode ) {
-        return MPI_Abort( comm, errorcode );
-    }
-
-    /**
      * @brief Returns true if the local node is the root node
      * 
      * @return int 
@@ -492,11 +516,13 @@ class Partition {
      * @return int      0 on success. On error the routine will abort the code.
      */
     template< typename T >
-    int allreduce( T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
+    int allreduce( const T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
+                
         if ( MPI_Allreduce( sendbuf, recvbuf, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
             std::cerr << "MPI_Allreduce operation failed, aborting\n";
             MPI_Abort( comm, 1 );
         }
+
         return 0;
     }
 

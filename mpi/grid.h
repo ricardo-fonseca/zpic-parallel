@@ -91,12 +91,12 @@ class grid {
         // Grid parameters
         if ( global_ntiles.x == 0 || global_ntiles.y == 0 ) {
             std::cerr << "Invalid number of tiles " << global_ntiles << '\n';
-            part.abort(1);
+            mpi::abort(1);
         }
 
         if ( nx.x == 0 || nx.y == 0 ) {
             std::cerr << "Invalid tiles size" << nx << '\n';
-            part.abort(1);
+            mpi::abort(1);
         }
 
         // Parallel partition
@@ -104,14 +104,14 @@ class grid {
             std::cerr << "Number of parallel nodes along x (" ;
             std::cerr << part.dims.x << ") is larger than number of tiles along x(";
             std::cerr << global_ntiles.x << '\n';
-            part.abort(1);
+            mpi::abort(1);
         }
 
         if ( (unsigned) part.dims.y > global_ntiles.y ) {
             std::cerr << "Number of parallel nodes along y (" ;
             std::cerr << part.dims.y << ") is larger than number of tiles along y(";
             std::cerr << global_ntiles.y << '\n';
-            part.abort(1);
+            mpi::abort(1);
         }
     }
 

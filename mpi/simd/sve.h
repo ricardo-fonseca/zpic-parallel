@@ -519,15 +519,21 @@ static inline vec_f32 vec_gather( float const * base_addr, vec_i32 vindex ) {
  * 
  * @tparam imm      Which value to extract
  * @param v         Input vector
- * @return float    Selected value
+ * @return int      Selected value
  */
-
 template< int imm > 
 static inline int vec_extract( const vec_i32 v ) {
     static_assert( imm >= 0 && imm < sve_vec_width, "imm must be in the range [0..vec_width[" );
     return  v[imm];
 }
 
+/**
+ * @brief Extract a single integer from a vec_i32 vector
+ * 
+ * @param v         Input vector
+ * @param i         Which value to extract
+ * @return int      Selected value
+ */
 static inline int vec_extract( const vec_i32 v, int i ) {
     return svlastb_s32( svwhilele_b32( 0, i ), v );
 }
@@ -838,22 +844,45 @@ static inline int vec_any( const vec_mask mask ) {
     return svptest_any( svptrue_b32(), mask );
 }
 
-
+/**
+ * @brief Returns a mask of all true values
+ * 
+ * @return vec_mask 
+ */
 static inline vec_mask vec_true() { 
     return svptrue_b32();
 }
 
+/**
+ * @brief Returns a mask of all false values
+ * 
+ * @return vec_mask 
+ */
 static inline vec_mask vec_false() { 
     return svpfalse_b();
 }
 
+/**
+ * @brief Extract a single mask bit from a vec_mask
+ * 
+ * @param mask      Input vec_mask
+ * @param i         Which value to extract
+ * @return int      Selected value 
+ */
 static inline int vec_extract( const vec_mask mask, int i ) {
     vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
     return svlastb_s32( svwhilele_b32( 0, i ), v );
 }
 
+/**
+ * @brief Extract a single mask bit from a vec_mask
+ * 
+ * @tparam imm      Which value to extract
+ * @param mask      Input vec_mask
+ * @return int      Selected value 
+ */
 template< int imm > 
-static inline float vec_extract( const vec_mask mask ) {
+static inline int vec_extract( const vec_mask mask ) {
     static_assert( imm >= 0 && imm < sve_vec_width, "imm must be in the range [0..vec_width[" );
     vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
     return  v[imm];

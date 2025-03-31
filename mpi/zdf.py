@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 import sys
 import numpy as np
@@ -90,6 +90,15 @@ class ZDF_Iteration:
         self.t = 0.
         self.tunits = ""
 
+    def __str__( self ):
+        msg = "<ZDF_Iteration>\n"
+        msg += "name    : {}\n".format(self.name)
+        msg += "n       : {}\n".format(self.n)
+        msg += "t       : {}\n".format(self.t)
+        msg += "tunits  : {}\n".format(self.tunits)
+        return msg
+
+
 class ZDF_Grid_Axis:
     """ZDF_Grid_Axis()
 
@@ -117,6 +126,16 @@ class ZDF_Grid_Axis:
         self.max = 0.
         self.label = ''
         self.units = ''
+
+    def __str__( self ):
+        msg = "<ZDF_Grid_Axis>\n"
+        msg += "name     : {}\n".format(self.name)
+        msg += "label    : {}\n".format(self.label)
+        msg += "min      : {}\n".format(self.min)
+        msg += "max      : {}\n".format(self.max)
+        msg += "units    : {}\n".format(self.units)
+        return msg
+
 
 class ZDF_Grid_Info:
     """ZDF_Grid_Info()
@@ -148,6 +167,20 @@ class ZDF_Grid_Info:
         self.units = ''
         self.has_axis = 0
         self.axis = []
+
+    def __str__( self ):
+        msg = "<ZDF_Grid_info>\n"
+        msg += "name     : {}\n".format(self.name)
+        msg += "label    : {}\n".format(self.label)
+        msg += "ndims    : {}\n".format(self.ndims)
+        msg += "nx       : {}\n".format(self.nx)
+        msg += "units    : {}\n".format(self.units)
+        if ( self.has_axis ):
+            for axis in self.axis:
+                msg += axis
+        else:
+            msg += "has_axis : {}\n".format(self.has_axis)
+        return msg
 
 class ZDF_Part_Info:
     """ZDF_Part_Info()
@@ -227,7 +260,20 @@ class ZDF_Tracks_Info:
         self.quants = []
         self.qlabels = []
         self.qunits = []
-        
+
+    def __str__( self ):
+        msg = "<ZDF_Tracks_Info>\n"
+        msg += "name    : {}\n".format(self.name)
+        msg += "label   : {}\n".format(self.label)
+        msg += "ntracks : {}\n".format(self.ntracks)
+        msg += "ndump   : {}\n".format(self.ndump)
+        msg += "niter   : {}\n".format(self.niter)
+        msg += "nquants : {}\n".format(self.nquants)
+        msg += "quants  : {}\n".format(self.quants)
+        msg += "qlabels  : {}\n".format(self.qlabels)
+        msg += "qunits  : {}\n".format(self.qunits)
+        return msg
+
 class ZDFfile:
     """ZDFfile( file_name )
     
@@ -797,7 +843,6 @@ class ZDFfile:
                 
                 chunk  = self.__read_arr( data_type, count )
 
-
                 if ( ndims == 1 ) :
                     data[start[0]:start[0]+count[0]:stride[0]] = chunk
                 elif ( ndims == 2 ) :
@@ -1042,6 +1087,19 @@ class ZDF_Info:
         self.tracks = None
         self.iteration = None
 
+def __str__( self ):
+    if ( info.type == "grid" ):
+        return __str__(self.grid)
+    elif ( info.type == "particles" ):
+        return __str__(self.particles)
+    elif ( info.type == "tracks-2" ):
+        return __str__(self.tracks)
+    elif ( info.type == "iteration" ):
+        return __str__(self.iteration)
+    else:
+        msg = "<ZDF_Grid_info>\n"
+        msg += "undefined\n"
+        return msg
 
 def info( file_name ):
     """info( file_name )

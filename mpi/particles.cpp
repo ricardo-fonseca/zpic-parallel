@@ -170,10 +170,10 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
 
     // Get total number of particles to save
     uint64_t local = np_local();
-    uint64_t global;
+    uint64_t global = 0;
 
     parallel.allreduce( &local, &global, 1, mpi::sum );
-    
+
     // Update metadata entry
     metadata.np = global;
 
@@ -345,6 +345,8 @@ void bnd_check(
     }
 }
 
+#if 0
+
 /**
  * @brief Recalculates particle tile offset
  * 
@@ -372,30 +374,87 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
     return total;
 }
 
+#endif
+
 /**
  * @brief Recalculates particle tile offset, leaving room for additional particles
  * 
- * @note The number of particles in each tile is set to 0
- * 
- * @param tmp           (out) Particle buffer
- * @param new_np        (in/out) New number of particles per tile. Set to 0 after calculation.
- * @param extra         (in) Additional incoming particles
+ * @bnote The routine also leaves room for particles coming from other MPI nodes.
+ *        The number of particles in each tile is set to 0
+ * @param tmp           (out) Temp. Particle buffer
+ * @param sort          (in) Sort data (includes information from other MPI nodes)
+ * @param extra         (in) Additional particles (optional)
  * @return uint32_t     (out) Total number of particles (including additional ones)
  */
-uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np, 
-    const int * __restrict__ extra ) {
+uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort,  
+    const int * __restrict__ extra = nullptr ) {
+
+    const int * __restrict__ new_np = sort.new_np;
 
     // Include ghost tiles in calculations
-    const auto ntiles = part::all_tiles( tmp.ntiles );
+    const auto ntiles_all = part::all_tiles( tmp.ntiles );
 
     int * __restrict__ offset = tmp.offset;
     int * __restrict__ np     = tmp.np;
 
+    // Initialize offset[] with the new number of particles
+    if ( extra != nullptr ) {
+        for( auto i = 0; i < ntiles_all; i++ ) {
+            offset[i] = new_np[i] + extra[i];
+            np[i] = 0;
+        }
+    } else {
+        for( auto i = 0; i < ntiles_all; i++ ) {
+            offset[i] = new_np[i];
+            np[i] = 0;
+        }
+    }
+
+    // Add incoming particles
+    const int ntx = tmp.ntiles.x;
+    const int nty = tmp.ntiles.y;
+
+    // Size of message according to direction
+    auto tile_size = [ ntx, nty ]( int dir ) -> unsigned int {
+        unsigned int s = 1;                   // corners
+        if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
+        if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
+        return s;
+    };
+
+    // Stride for storing received data according to direction
+    auto tile_stride = [ ntx ]( int dir ) -> int { 
+        int s = 1;
+        if ( dir == 3 || dir == 5 ) s = ntx;
+        return s;
+    };
+
+    // Offset for storing received data according to direction
+    auto tile_offset = [ntx, nty]( int dir ) -> int {
+        int y = dir / 3;
+        int x = dir % 3;
+        int xoff = 0; int yoff = 0;
+        if ( x == 2 ) xoff = ntx-1;
+        if ( y == 2 ) yoff = (nty-1) * ntx;
+        return yoff + xoff;
+    };
+
+    uint32_t idx = 0;
+    for( auto dir = 0; dir < 9; dir++ ) {
+        if ( dir != 4 ) {
+            for( int k = 0; k < tile_size(dir); k++ ) {
+                offset[ k * tile_stride(dir) + tile_offset(dir) ] += sort.recv.buffer[ idx ];
+                idx++;
+            }
+        }
+    }
+
+    // Exclusive scan
     uint32_t total = 0;
-    for( auto i = 0; i < ntiles; i++ ) {
+    for( auto i = 0; i < ntiles_all; i++ ) {
+        uint32_t tmp = offset[i];
         offset[i] = total;
-        np[i] = 0;
-        total += new_np[i] + extra[i];
+        total += tmp;
     }
 
     return total;
@@ -483,7 +542,10 @@ void copy_out(
             
             if ( i != 4 ) {
                 // Find target node
-                int2 target = make_int2( tx + i % 3 - 1, ty + i / 3 - 1 );
+                int dx = i % 3 - 1;
+                int dy = i / 3 - 1;
+
+                int2 target = make_int2( tx + dx, ty + dy);
 
                 int target_tid = part::tid_coords( target, ntiles, local_bnd );
                 
@@ -509,6 +571,9 @@ void copy_out(
             float2 nx = x[k];
             float3 nu = u[k];
             
+            // Invalidate particle for debug purposes
+            ix[k] = make_int2(-10,0);
+
             int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
             int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
 
@@ -519,6 +584,7 @@ void copy_out(
 
                 int l = _dir_offset[dir]; _dir_offset[dir] += 1;
 
+                // Correct positions - nix is ok for new tile
                 nix.x -= xcross * lim.x;
                 nix.y -= ycross * lim.y;
 
@@ -534,8 +600,8 @@ void copy_out(
                 do {
                     c = _c; _c += 1;
 
-                    invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x) || 
-                                ( ix[c].y < 0 ) || ( ix[c].y >= lim.y);
+                    invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x ) || 
+                              ( ix[c].y < 0 ) || ( ix[c].y >= lim.y );
                 } while (invalid);
 
                 ix[ k ] = ix[ c ];
@@ -557,6 +623,8 @@ void copy_out(
                 tmp_ix[ new_idx + i ] = ix[ i ];
                 tmp_x[ new_idx + i ]  = x [ i ];
                 tmp_u[ new_idx + i ]  = u [ i ];
+
+                ix[i] = make_int2(-20,0);
             }
 
         } else {
@@ -567,6 +635,9 @@ void copy_out(
                 tmp_ix[ new_idx + i ] = ix[ old_idx + i ];
                 tmp_x[ new_idx + i ]  = x [ old_idx + i ];
                 tmp_u[ new_idx + i ]  = u [ old_idx + i ];
+
+                ix[old_idx + i] = make_int2(-30,0);
+
             }
         }
 
@@ -638,6 +709,18 @@ void copy_in( ParticleData part, ParticleData tmp )
         // Store the new offset and number of particles
         part.np[ tid ]     = old_np + tmp_np;
         part.offset[ tid ] = new_offset;
+
+/*
+        {
+            int2   * __restrict__ _ix = &part.ix[ part.offset[ tid ] ];
+            for( int k = 0; k < part.np[ tid ]; k++ ) {
+                if ( _ix[k].x < 0 ) {
+                    mpi::cout << " copy_in(), tid: " << tid << ", invalid ix[" << k << "] = " << _ix[k] << '\n';
+                    exit(1);
+                }
+            }
+        }
+*/
     }
 }
 
@@ -851,47 +934,120 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
  */
 void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
 
+/*
+    mpi::cout << "[start      ] self.np:    ";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << np[i];
+    }
+    mpi::cout << std::endl;
+
+    mpi::cout << "[start      ] self.offset:";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << offset[i];
+    }
+    mpi::cout << std::endl;
+*/
     // Reset sort data
     sort.reset();
 
     // Get new number of particles per tile
     bnd_check ( *this, sort, local_bnd );
+/*
+    mpi::cout << "[bnd_check  ] sort.new_np:";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << sort.new_np[i];
+    }
+    mpi::cout << std::endl;
+*/
 
     // Exchange number of particles in edge cells
     sort.exchange_np();
 
-    // Post particle data receives
-    recv.irecv();
+/*
+    mpi::cout << "[exchange_np] sort.new_np:";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << sort.new_np[i];
+    }
+    mpi::cout << std::endl;
+*/
 
-    // Get new offsets, including extra values in offset calculations
-    // Used to reserve space in particle buffer for later injection
-    auto total_np = update_tile_info ( tmp, sort.new_np, extra );
+    // Post particle data receives
+    irecv_msg( sort, recv );
+
+    // Get new offsets, including:
+    // - Incoming particles from other MPI nodes
+    // - New particles that will be injected (if any)
+    auto total_np = update_tile_info ( tmp, sort, extra );
+
+/*
+    mpi::cout << "[update_tile_info] tmp.offset:";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << tmp.offset[i];
+    }
+    mpi::cout << std::endl;
+*/
 
     if ( total_np > max_part ) { 
         std::cerr << "Particles::tile_sort() - particle buffer requires growing,";
         std::cerr << " not implemented yet.";
-        exit(1);
+        mpi::abort(1);
     }
 
     // Copy outgoing particles (and particles needing shifting) to staging area
     copy_out ( *this, tmp, sort, local_bnd );
 
+/*
+    mpi::cout << "[copy_out   ] self.np:    ";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << np[i];
+    }
+    mpi::cout << std::endl;
+
+    // info_np( "Particles::tile_sort - after copy_out()");
+*/
     // Pack particle data and start sending
-    pack_msg( tmp, sort, send );
-    send.isend();
+    isend_msg( tmp, sort, send );
 
     // Copy local particles from staging area into final positions in partile buffer
     copy_in ( *this, tmp );
 
+/*
+    mpi::cout << "[copy_in    ] self.np:    ";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << np[i];
+    }
+    mpi::cout << std::endl;
+
+    mpi::cout << "[copy_in    ] self.offset:";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << offset[i];
+    }
+    mpi::cout << std::endl;
+*/
+
     // Wait for messages to be received and unpack data
-    recv.wait();
     unpack_msg( sort, recv );
 
+/*
+    mpi::cout << "[unpack_msg ] self.np:    ";
+    for( int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        mpi::cout << " " << np[i];
+    }
+    mpi::cout << std::endl;
+
+    // info_np( "Particles::tile_sort - after unpack_msg()");
+*/
     // Wait for sends to complete
-    recv.wait();
+    send.wait();
+
+    /*
+    _np_global = np_global();
+    if ( mpi::world_root() ) std::cout << "[info] total_np after sort:" << _np_global << '\n';
+    */
 
     // For debug only, remove from production code
-    // validate( "After tile_sort" );
+    parallel.barrier();
+    validate( "After tile_sort" );
 }
 #endif
 
@@ -951,7 +1107,7 @@ void Particles::cell_shift( int2 const shift ) {
  */
 void Particles::validate( std::string msg, int const over ) {
 
-    std::cout << "Validating particle set, " << msg << "..." << std::endl;
+    mpi::cout << "validating particle set, " << msg << "...\n";
 
     uint32_t err = 0;
     int2 const lb = make_int2( -over, -over );
@@ -980,8 +1136,8 @@ void Particles::validate( std::string msg, int const over ) {
     }
 
     if ( err ) {
-        std::cerr << "(*error*) Invalid tile information, aborting..." << std::endl;
-        abort();
+        mpi::cout << "(*error*) Invalid tile information, aborting..." << std::endl;
+        mpi::abort(1);
     }
 
     // Loop over tiles
@@ -1028,10 +1184,10 @@ void Particles::validate( std::string msg, int const over ) {
     }
 
     if ( err ) {
-        std::cerr << "(*error*) Invalid particle(s) found, aborting..." << std::endl;
-        exit(1);
+        mpi::cout << "(*error*) Invalid particle(s) found, aborting..." << std::endl;
+        mpi::abort(1);
     } else {
-        std::cout << "Particle set ok." << std::endl;
+        mpi::cout << "... particle set ok.\n";
     }
 }
 
@@ -1086,57 +1242,98 @@ void Particles::validate( std::string msg, int const over ) {
 
 #endif
 
+/**
+ * @brief Prepare particle receive buffers and start receive
+ * 
+ * @param sort      Temporary sort index 
+ * @param recv      Receive message object 
+ */
+void Particles::irecv_msg( ParticleSortData &sort, ParticleMessage &recv ) {
+
+    /// @brief Total size (bytes) of data to be received
+    uint32_t total_size = 0;
+
+    // Set individual message sizes:
+    for( int i = 0; i < 9; i++) {
+        if ( i != 4 ) {
+            recv.size[i] = sort.recv.msg_np[i] * particle_size();
+            total_size += recv.size[i];
+        } else {
+            recv.size[i] = 0;
+        }
+    }
+
+    // Grow message buffer if need be
+    recv.check_buffer( total_size );
+
+    // Start receive
+    recv.irecv();
+
+}
 
 /**
- * @brief Pack particles moving out of the node into a message buffer
+ * @brief Pack particles moving out of the node into a message buffer and start send
  * 
  * @param tmp       Temporary buffer holding particles moving away from tiles
  * @param sort      Temporary sort index
  * @param send      Send message object
  */
-void Particles::pack_msg( Particles &tmp, ParticleSortData &sort, ParticleMessage &send ) {
+void Particles::isend_msg( Particles &tmp, ParticleSortData &sort, ParticleMessage &send ) {
 
     /// @brief Total number of particles being sent
     uint32_t send_np = 0;
     /// @brief Offset in particle buffer for each message data
-    uint32_t off[8];
+    uint32_t off[9];
 
     // Get offsets and check send buffer size
-    for( int i = 0; i < 8; i++ ) {
+    for( int i = 0; i < 9; i++ ) {
         off[i] = send_np;
-        send.size[i] = sort.send.msg_np[i] * particle_size();
-        send_np += sort.send.msg_np[i];
+        if (i != 4) {
+            send.size[i] = sort.send.msg_np[i] * particle_size();
+            send_np += sort.send.msg_np[i];
+        } else {
+            sort.send.msg_np[i] = 0;    // this should not be necessary
+            send.size[i] = 0;
+        }
     }
+
     send.check_buffer( send_np * particle_size() );
 
     // Pack data
 
-    const auto tile_off = ntiles.x * ntiles.y;
+    // Offset to first "communication" tile
+    const auto tile_off = tmp.offset[ ntiles.x * ntiles.y ];
+
     int2   * const __restrict__ ix = &tmp.ix[ tile_off ];
     float2 * const __restrict__ x  = &tmp.x[ tile_off ];
     float3 * const __restrict__ u  = &tmp.u[ tile_off ];
 
     #pragma omp parallel for schedule(dynamic)
-    for( int i = 0; i < 8; i++) {
-        uint8_t * __restrict__ buffer = &send.data[ off[i] * particle_size() ];
-        size_t pos = 0;
-        size_t n;
+    for( int i = 0; i < 9; i++) {
+        if ( sort.send.msg_np[i] > 0 ) {
+            uint8_t * __restrict__ buffer = &send.buffer[ off[i] * particle_size() ];
+            size_t pos = 0;
+            
+            uint32_t np = sort.send.msg_np[i];
+            size_t nbytes;
 
-        n = sort.send.msg_np[i] * sizeof(int2);
-        memcpy( &buffer[pos], &ix[ off[i] ], n );
-        pos += n;
+            nbytes = np * sizeof(int2);
+            memcpy( &buffer[pos], &ix[ off[i] ], nbytes );
+            pos += nbytes;
 
-        n = sort.send.msg_np[i] * sizeof(float2);
-        memcpy( &buffer[pos],  &x[ off[i] ], n);
-        pos += n;
+            nbytes = np * sizeof(float2);
+            memcpy( &buffer[pos],  &x[ off[i] ], nbytes);
+            pos += nbytes;
 
-        n = sort.send.msg_np[i] * sizeof(float3);
-        memcpy( &buffer[pos],  &u[ off[i] ], n);
-        // pos += n; // unnecessary
+            nbytes = np * sizeof(float3);
+            memcpy( &buffer[pos],  &u[ off[i] ], nbytes);
+            pos += nbytes; // unnecessary
+
+        }
     }
 
     // Start sending messages
-    send.irecv();
+    send.isend();
 }
 
 /**
@@ -1147,57 +1344,145 @@ void Particles::pack_msg( Particles &tmp, ParticleSortData &sort, ParticleMessag
  */
 void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
 
-    // Total number of tiles in receive message buffer
-    auto ntiles_msg = part::msg_tiles( ntiles );
-
     /// @brief number of particles per received tile
-    int * msg_tile_np = sort.recv.buffer;
-    
-    /// @brief offset (in number of particles) in message buffer per tile
-    int msg_offset[ ntiles_msg ];
+    int * __restrict__ msg_tile_np = sort.recv.buffer;
 
-    int sum = 0;
-    for( int i = 0; i < ntiles_msg; i++) {
-        msg_offset[i] = sum; sum += msg_tile_np[i];
-    }
+    const int ntx = ntiles.x;
+    const int nty = ntiles.y;
+
+    // Number of tiles in message according to direction
+    auto msg_ntiles = [ ntx, nty ]( int dir ) -> unsigned int {
+        unsigned int s = 1;                   // corners
+        if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
+        if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
+        return s;
+    };
+
+    // Tile stride for storing received data according to direction
+    auto tile_stride = [ ntx ]( int dir ) -> int { 
+        int s = 1;
+        if ( dir == 3 || dir == 5 ) s = ntx;
+        return s;
+    };
+
+    // Tile offset for storing received data according to direction
+    auto tile_offset = [ntx, nty]( int dir ) -> int {
+        int y = dir / 3;
+        int x = dir % 3;
+        int xoff = 0; int yoff = 0;
+        if ( x == 2 ) xoff = ntx-1;
+        if ( y == 2 ) yoff = (nty-1) * ntx;
+        return yoff + xoff;
+    };
 
     // Wait for messages to complete
     recv.wait();
 
     // Unpack all data - multiple message tiles may write to the same local tile
+    // This version does not work in OpenMP parallel
+    int recv_off = 0;
+    
+    // Edge tile id of received data (starting at 1st edge tile [dir 0])
+    int idx = 0;
+
+    // loop over messages
+    for( auto dir = 0; dir < 9; dir++ ) {
+        if ( dir != 4 ) {
+            ///@brief number of particles in this message
+            int msg_np = sort.recv.msg_np[dir];
+
+            ///@brief receive message buffer for this direction
+            uint8_t * msg_buffer = & recv.buffer[ recv_off * particle_size() ];
+            
+            int2   * ix_buffer = (int2 *)   & msg_buffer[ 0 ];
+            float2 * x_buffer  = (float2 *) & msg_buffer[ msg_np * sizeof(int2) ];
+            float3 * u_buffer  = (float3 *) & msg_buffer[ msg_np * (sizeof(int2)+sizeof(float2)) ];
+
+            ///@brief number of particles unpacked from this message
+            int np_unpack = 0;
+
+            for( int k = 0; k < msg_ntiles(dir); k++ ) {
+                
+                ///@brief number of particles received on this tile 
+                int recv_np  =  msg_tile_np[idx];
+                
+                // If any particles received in that tile
+                if ( recv_np > 0 ) {
+                    // Get target tile for msg data
+                    int target = k * tile_stride(dir) + tile_offset(dir);
+
+                    // destination buffers (in main particle buffer)
+                    int tgt_offset  = offset[ target ] + 
+                        omp::atomic_fetch_add( &np[ target ], recv_np );
+
+                    int2   * __restrict__ const dst_ix = &ix[ tgt_offset ];
+                    float2 * __restrict__ const dst_x  = &x [ tgt_offset ];
+                    float3 * __restrict__ const dst_u  = &u [ tgt_offset ];
+               
+                    // source buffers (in packed data buffer)
+                    int2   * __restrict__ const src_ix = & ix_buffer[ np_unpack ];
+                    float2 * __restrict__ const src_x  = & x_buffer[ np_unpack ];
+                    float3 * __restrict__ const src_u  = & u_buffer[ np_unpack ];
+
+                    for( int j = 0; j < recv_np; j++ ) {
+                        dst_ix[j] = src_ix[j];
+                        dst_x [j] = src_x [j];
+                        dst_u [j] = src_u [j];     
+                    }
+                    np_unpack += recv_np;
+                }
+            
+                // Advance to next tile in message
+                idx++;
+            }
+            recv_off += msg_np;
+        }
+    }
+}
+
+#if 0
+    // Total number of tiles in receive message buffer
+    auto ntiles_msg = part::msg_tiles( ntiles );
+
     #pragma omp parallel for schedule(dynamic)
     for( auto i = 0; i < ntiles_msg; i ++ ) {
 
-        // Number of particles received
-        int recv_np = msg_tile_np[i];
-
         // If any particles received in that tile
-        if ( recv_np > 0 ) {
+        if ( msg_tile_np[i] > 0 ) {
             // Get target tile for msg data
             int msg_target = part::tid_recv_target( i, ntiles );
 
             // destination buffers (in main particle buffer)
             int tgt_offset  = offset[ msg_target ] + 
-                omp::atomic_fetch_add( &np[ msg_target ], recv_np );
+                omp::atomic_fetch_add( &np[ msg_target ], msg_tile_np[i] );
 
             int2   * __restrict__ const dst_ix = &ix[ tgt_offset ];
             float2 * __restrict__ const dst_x  = &x [ tgt_offset ];
             float3 * __restrict__ const dst_u  = &u [ tgt_offset ];
 
+            // ... this is wrong!
+
             // source buffers (in packed data buffer)
             int src_offset = msg_offset[ i ] * particle_size();
-            int2   * __restrict__ const src_ix = (int2 *)   & recv.data[ src_offset ];
-            float2 * __restrict__ const src_x  = (float2 *) & recv.data[ src_offset + recv_np * sizeof(int2) ];
-            float3 * __restrict__ const src_u  = (float3 *) & recv.data[ src_offset + recv_np * (sizeof(int2) + sizeof(float2))];
+            int2   * __restrict__ const src_ix = (int2 *)   & recv.buffer[ msg_offset[ i ] * sizeof(int2) ];
+
+/*
+            src_offset += msg_tile_np[i]  * sizeof(int2);
+            float2 * __restrict__ const src_x  = (float2 *) & recv.buffer[ src_offset ];
+            src_offset += msg_tile_np[i]  * sizeof(float2);
+            float3 * __restrict__ const src_u  = (float3 *) & recv.buffer[ src_offset ];
+*/
+            // #warning Remove from production code - in unpack_msg()
+            // std::cout << "msg_tile_np[" << i << "] = " << msg_tile_np[i] << '\n';
 
             // Copy data
-            for( int j = 0; j < recv_np; j++ ) {
+            for( int j = 0; j < msg_tile_np[i]; j++ ) {
+                std::cout << "src_ix[" << j << "] = " << src_ix[j] << '\n';
+               // std::cout << "src_x[] = " << src_x[j] << '\n';
+               // std::cout << "src_u[] = " << src_u[j] << '\n';
                 dst_ix[j] = src_ix[j];
-                dst_x [j] = src_x [j];
-                dst_u [j] = src_u [j];
+               // dst_x [j] = src_x [j];
+               // dst_u [j] = src_u [j];
             }
         }
-    }
-}
-
-#undef __ULIM
+#endif

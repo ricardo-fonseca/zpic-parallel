@@ -135,7 +135,14 @@ T * zero( T * const __restrict__ data, unsigned int const size ) {
     return (T *) std::memset( (void *) data, 0, size * sizeof(T) );
 }
 
-
+/**
+ * @brief Allocates aligned block of memory
+ * 
+ * @tparam T        Data type
+ * @tparam align    Memory aligment, defaults to 64 bit. Must be a power of 2.
+ * @param size      Number of elements (not bytes)
+ * @return T*       Pointer to allocated memory
+ */
 template< typename T, int align = 64 >
 T * malloc( std::size_t const size ) {
 
@@ -154,6 +161,12 @@ T * malloc( std::size_t const size ) {
     return buffer;
 }
 
+/**
+ * @brief Deallocates block of memory. To be used with the memory::malloc() routines
+ * 
+ * @tparam T        Data type
+ * @param buffer    Pointer to allocated block of memory
+ */
 template< typename T >
 void free( T * buffer ) {
     if ( buffer != nullptr ) {
@@ -165,6 +178,17 @@ void free( T * buffer ) {
 
 namespace omp {
 
+/**
+ * @brief Atomic fetch/add operation
+ * 
+ * @note If OpenMP support is not enabled this just performs a standard 
+ *       fetch/add operation
+ * 
+ * @tparam T    Template data type
+ * @param addr  Target value address
+ * @param val   Value to be added
+ * @return T    Value at address before adding val
+ */
 template <class T>
 inline T atomic_fetch_add( T * addr, T val ) {
     T t;
@@ -174,5 +198,22 @@ inline T atomic_fetch_add( T * addr, T val ) {
 }
 
 }
+
+namespace ansi {
+    static const std::string bold(  "\033[1m" );
+    static const std::string reset( "\033[0m" );
+
+    static const std::string black   ( "\033[30m" );
+    static const std::string red     ( "\033[31m" );
+    static const std::string green   ( "\033[32m" );
+    static const std::string yellow  ( "\033[33m" );
+    static const std::string blue    ( "\033[34m" );
+    static const std::string magenta ( "\033[35m" );
+    static const std::string cyan    ( "\033[36m" );
+    static const std::string white   ( "\033[37m" );
+
+}
+
+
 
 #endif

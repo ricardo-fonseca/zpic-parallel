@@ -1794,7 +1794,9 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     inject( particles -> local_range() );
 
     // Set inital velocity distribution
-    udist -> set( *particles, id );
+    // This ensures a different seed on every parallel node
+    int rnd_seed = parallel.get_size() * id + parallel.get_rank(); 
+    udist -> set( *particles, rnd_seed );
 }
 
 /**
@@ -2025,7 +2027,7 @@ void Species::advance( ) {
 
     // Advance positions
     move( );
-    
+
     // Process physical boundary conditions
     process_bc();
 

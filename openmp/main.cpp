@@ -149,6 +149,7 @@ void test_inj( void ) {
     electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
     // electrons.set_density(Density::Slab(coord::y, 1.0, 5.0, 7.0));
     // electrons.set_density( Density::Sphere( 1.0, make_float2(5.0, 7.0), 2.0 ) );
+    
     electrons.set_udist( UDistribution::Cold( make_float3( 100, 50, 25 ) ) );
 
     sim.add_species(electrons);

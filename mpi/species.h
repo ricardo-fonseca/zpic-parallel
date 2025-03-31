@@ -419,6 +419,15 @@ public:
     }
 
     /**
+     * @brief Gets the number of iterations
+     * 
+     * @return auto 
+     */
+    auto get_iter() const {
+        return iter;
+    }
+
+    /**
      * @brief Returns the maximum number of particles per tile
      * 
      * @return auto 
@@ -485,6 +494,10 @@ public:
         phasespace::quant quant0, float2 const range0, int const size0,
         phasespace::quant quant1, float2 const range1, int const size1 ) const;
 
+
+    void info_np() {
+        particles->info_np();
+    }
 };
 
 

@@ -532,30 +532,40 @@ void test_grid() {
     data.save( "test/test.zdf" );
 
     parallel.barrier();
-    if ( parallel.root() ) std::cout << "Done!\n";
+    if ( mpi::world_root() ) std::cout << "Done!\n";
 
 }
 
 /**
- * @brief Test particle injection
+ * @brief Test particle injection and
  * 
  */
 void test_particles() {
-    uint2 dims = make_uint2( 4, 2 );
-    Partition parallel( dims );
-
+    uint2 par_dims = make_uint2( 4, 4 );
     uint2 global_ntiles {16, 16};
+
+//    uint2 dims = make_uint2( 2, 1 );
+//    uint2 global_ntiles {2, 2};
+
+    Partition parallel( par_dims );
+
     uint2 nx {8, 8};
     float2 box = make_float2( 12.8, 12.8 );
     float dt = 0.07;
 
+//    uint2 ppc = make_uint2( 8, 8 );
     uint2 ppc = make_uint2( 8, 8 );
 
     Species electrons("electrons", -1.0f, ppc );
 
 //    electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
 //    electrons.set_density(Density::Slab(coord::x, 1.0, 5.0, 7.0));
-    electrons.set_density(Density::Sphere( 1.0, make_float2( 5.0, 7.0 ), 2.0));
+    electrons.set_density(Density::Sphere( 1.0, make_float2( 5.0, 7.0 ), 3.0));
+
+//    electrons.set_udist( UDistribution::Cold( make_float3( 1e6, 0., 0. ) ) );
+    electrons.set_udist( UDistribution::Cold( make_float3( 0, -1e6, 0. ) ) );
+//    electrons.set_udist( UDistribution::Cold( make_float3( 2e6, 1e6, 0. ) ) );
+//    electrons.set_udist( UDistribution::Thermal( make_float3( 0.1, 0.2, 0.3 ) ) );
 
     electrons.initialize( box, global_ntiles, nx, dt, 0, parallel );
 
@@ -563,8 +573,24 @@ void test_particles() {
 
     electrons.save_charge();
 
-    parallel.barrier();
-    if ( parallel.root() ) std::cout << "Done!\n";
+#if 1
+    for( int i = 0; i < 100; i ++ ) {
+        electrons.advance();
+        if ( ( electrons.get_iter() % 10 ) == 0 ) {
+            if ( mpi::world_root() ) std::cout << "Now at iter = " << electrons.get_iter() << '\n';
+            electrons.save();
+            electrons.save_charge();
+        }
+    }
+#else
+    for( int i = 0; i < 1; i ++ ) {
+        electrons.advance();
+        electrons.save();
+        electrons.save_charge();
+    }
+#endif
+
+    if ( parallel.root() ) std::cout << ansi::bold << ansi::red << "Done!" << ansi::reset << "\n";
 }
 
 /**
@@ -573,7 +599,7 @@ void test_particles() {
  */
 void info( void ) {
 
-    if ( mpi::world_rank() == 0 ) {
+    if ( mpi::world_root() ) {
 
         std::cout << "MPI running on " << mpi::world_size() << " processes\n";
 

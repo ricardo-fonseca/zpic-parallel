@@ -41,10 +41,11 @@ __pycache__/
 .DS_Store
 
 # ZPIC specific
-zpic
 test/
 .deps/
 .objs/
 EMF/
 PARTICLES/
-CHARGE
+CHARGE/
+mpi/zpic
+openmp/zpic

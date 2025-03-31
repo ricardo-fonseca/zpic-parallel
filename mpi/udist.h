@@ -15,12 +15,20 @@ namespace UDistribution {
         virtual ~Type() = default;
     };
     
+    /**
+     * @brief No momentum distribution, all particles are set to u = 0
+     * 
+     */
     class None : public Type {
         public:
         None * clone() const override { return new None(); };
         void set( Particles & part, unsigned int seed ) const override ;
     };
 
+    /**
+     * @brief Cold momentum distribution, all particles are set to u = ufl
+     * 
+     */
     class Cold : public Type {
         public:
         const float3 ufl;
@@ -34,6 +42,7 @@ namespace UDistribution {
         const float3 uth;
         const float3 ufl;
         Thermal( float3 const uth, float3 const ufl ) : uth(uth), ufl(ufl) {};
+        Thermal( float3 const uth ) : uth(uth), ufl( make_float3(0,0,0) ) {};
 
         Thermal * clone() const override { return new Thermal(uth, ufl); };
         void set( Particles & part, unsigned int seed ) const override ;
