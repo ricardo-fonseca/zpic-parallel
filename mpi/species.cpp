@@ -1,7 +1,7 @@
 #include "species.h"
 #include <iostream>
 
-#include "simd.h"
+#include "simd/simd.h"
 
 /**
  * @brief Memory alignment of local buffers

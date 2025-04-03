@@ -434,10 +434,11 @@ void test_weibel_large( )
 
 void test_weibel_96( )
 {
+    // MPI partition
+    uint2 partition { 2, 2 };
                             
     // Create simulation box
-    uint2 partition { 4, 2 };
-    uint2 ntiles {12, 16};
+    uint2 ntiles {16, 16};
     uint2 nx {32, 32};
     uint2 ppc {8, 8};
                                                                                                                                                                       
@@ -646,6 +647,9 @@ int main( int argc, char *argv[] ) {
     // Initialize the MPI environment
     mpi::init( & argc, & argv );
 
+    // Initialize SIMD support
+    simd_init();
+    
     // Print information about the environment
     info();
 

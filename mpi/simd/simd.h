@@ -127,6 +127,7 @@ typedef VecMask   VecMask_s;
 
 constexpr char vecname[] = "none";
 constexpr int vecwidth = 1;
+#define simd_init()
 
 #endif
 

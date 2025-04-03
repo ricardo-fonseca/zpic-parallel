@@ -21,7 +21,7 @@ CXX = mpic++
 CXXFLAGS = -O3 -march=native
 
 # OpenMP support
-# CXXFLAGS += -fopenmp
+CXXFLAGS += -fopenmp
 
 #------------------ Intel oneApi Compilers -----------------
 # CC = mpiicx
