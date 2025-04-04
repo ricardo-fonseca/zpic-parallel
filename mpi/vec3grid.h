@@ -44,7 +44,7 @@ class vec3grid : public grid< V >
     using S = typename vec3_scalar<V>::type;
 
     using grid< V > :: ntiles;
-    using grid< V > :: tile_start;
+    using grid< V > :: tile_off;
     using grid< V > :: periodic;
 
     using grid< V > :: initialize;
@@ -193,8 +193,8 @@ class vec3grid : public grid< V >
         zdf::chunk chunk;
         chunk.count[0] = gnx.x;
         chunk.count[1] = gnx.y;
-        chunk.start[0] = tile_start.x * nx.x;
-        chunk.start[1] = tile_start.y * nx.y;
+        chunk.start[0] = tile_off.x * nx.x;
+        chunk.start[1] = tile_off.y * nx.y;
         chunk.stride[0] = chunk.stride[1] = 1;
         chunk.data = (void *) h_data;
 

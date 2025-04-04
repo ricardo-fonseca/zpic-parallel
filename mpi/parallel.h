@@ -7,6 +7,7 @@
 
 #include <mpi.h>
 #include <iostream>
+#include <cstdint>
 
 namespace mpi {
 
@@ -276,7 +277,7 @@ class Partition {
         coords = make_int2( lcoords[0], lcoords[1] );
 
         // Get neighbors
-        // Since we also need the corner neighbors we cannor use MPI_Cart_shift()
+        // Since we also need the corner neighbors we cannot use MPI_Cart_shift()
         for( int iy = 0; iy < 3; iy ++) {
             int neighbor_coords[2];
             neighbor_coords[1] = coords.y + iy - 1;

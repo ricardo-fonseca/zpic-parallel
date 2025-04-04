@@ -29,7 +29,7 @@ class grid {
     uint2 ntiles;
 
     /// @brief Offset of local tiles in global tile grid
-    uint2 tile_start;
+    uint2 tile_off;
 
     /// @brief Consider local boundaries periodic
     int2 periodic;
@@ -53,8 +53,7 @@ class grid {
     void initialize( ) {
 
         // Get local number of tiles and position
-        part.grid_local( global_ntiles, ntiles, tile_start );
-        // std::cout << "[" << part.get_rank() << "] - offset: " << tile_start << ", ntiles: " << ntiles << '\n';
+        part.grid_local( global_ntiles, ntiles, tile_off );
 
         // Get local grid size
         gnx = ntiles * nx;
@@ -68,8 +67,8 @@ class grid {
 
         // Get maximum message size
         int max_msg_size = max(
-            ( gnx.y + gc.y.lower + gc.y.upper ) * max( gc.x.lower, gc.x.upper ),
-            max( gc.y.lower, gc.y.upper ) * ( gnx.x + gc.x.lower + gc.x.upper )
+            ( ntiles.y * ext_nx.y ) * max( gc.x.lower, gc.x.upper ),
+            max( gc.y.lower, gc.y.upper ) * ( ntiles.x * ext_nx.x )
         );
 
         // Allocate message buffers
@@ -135,7 +134,7 @@ class grid {
     /// @brief Tile grize including guard cells
     const uint2 ext_nx;
 
-    /// @brief Offset in cells between lower tile corner and position (0,0)
+    /// @brief Local offset in cells between lower tile corner and position (0,0)
     const unsigned int offset;
 
     /// @brief Tile volume (may be larger than product of cells for alignment)
@@ -206,7 +205,12 @@ class grid {
      */
     uint2 get_ntiles() { return ntiles; };
 
-    uint2 get_tile_start() { return tile_start; };
+    /**
+     * @brief Returns the local tile offset in the global MPI tile grid
+     * 
+     * @return uint2 
+     */
+    uint2 get_tile_off() { return tile_off; };
 
     /**
      * @brief grid destructor
@@ -540,6 +544,9 @@ class grid {
         int lnode = part.get_neighbor(-1, 0 );
         int unode = part.get_neighbor(+1, 0 );
 
+        // Disable messages if local periodic
+        if ( periodic.x ) lnode = unode = -1;
+
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
         if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
@@ -656,6 +663,9 @@ class grid {
         int lnode = part.get_neighbor(0, -1);
         int unode = part.get_neighbor(0, +1);
 
+        // Disable messages if local periodic
+        if ( periodic.y ) lnode = unode = -1;
+        
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
         if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
@@ -976,16 +986,14 @@ class grid {
 
 #endif
 
-    /**
-     * @brief Adds values from neighboring x guard cells to local data,
-     *        including cells from other parallel nodes
-     * 
-     */
     void add_from_gc_x() {
 
         // Get x neighbors
         int lnode = part.get_neighbor(-1, 0 );
         int unode = part.get_neighbor(+1, 0 );
+
+        // Disable messages if local periodic
+        if ( periodic.x ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -993,6 +1001,7 @@ class grid {
 
         // Send message - lower neighbor
         if ( lnode >= 0 ) {
+
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -1000,24 +1009,23 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.lower-> buffer [ ty * nx.y * gc.x.lower ];
+                
+                T * __restrict__ msg = & msg_send.lower-> buffer [ ty * ext_nx.y * gc.x.lower ];
 
-                auto lbound = (ty > 0) ? gc.y.lower : 0;
-                auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
-
-                for( unsigned j = lbound; j < ubound; j++ ) {
+                for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.lower; i++ ) {
                         msg[ j * gc.x.lower + i ] = local[ j * ext_nx.x + i ];
                     }
                 }
             }
 
-            int msg_size = gc.x.lower * ( gc.y.lower + gnx.y + gc.y.upper );
+            int msg_size = ( ntiles.y * ext_nx.y ) * gc.x.lower;
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
         // Send message - upper neighbor
         if ( unode >= 0 ) {
+
             unsigned int tx = ntiles.x - 1;
             for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
                 const auto tile_idx = make_uint2( tx, ty );
@@ -1025,19 +1033,16 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.upper-> buffer[ ty * nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_send.upper-> buffer[ ty * ext_nx.y * gc.x.upper ];
 
-                auto lbound = (ty > 0) ? gc.y.lower : 0;
-                auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
-
-                for( unsigned j = lbound; j < ubound; j++ ) {
+                for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
                         msg[ j * gc.x.upper + i ] = local[ j * ext_nx.x + gc.x.lower + nx.x + i ];
                     }
                 }
             }
 
-            int msg_size = gc.x.upper * ( gc.y.lower + gnx.y + gc.y.upper );
+            int msg_size = ( ntiles.y * ext_nx.y ) * gc.x.upper;
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
 
@@ -1055,7 +1060,7 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * ext_nx.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < ext_nx.y ; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
@@ -1069,14 +1074,14 @@ class grid {
         if ( unode >= 0 ) {
             msg_recv.upper-> wait();
 
-           unsigned int tx = ntiles.x - 1;
+            unsigned int tx = ntiles.x - 1;
             for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
                 const auto tile_idx = make_uint2( tx, ty );
                 const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_recv.upper-> buffer[ ty * ext_nx.y * gc.x.lower ];
                 
                 for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.lower; i++ ) {
@@ -1101,12 +1106,12 @@ class grid {
         int lnode = part.get_neighbor( 0, -1 );
         int unode = part.get_neighbor( 0, +1 );
 
+        // Disable messages if local periodic
+        if ( periodic.y ) lnode = unode = -1;
+
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
         if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
-
-        /// @brief Message buffer y stride
-        const int msg_ystride = gc.x.lower + gnx.x + gc.x.upper;
 
         // Send message - lower neighbor
         if ( lnode >= 0 ) {
@@ -1117,19 +1122,16 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.lower-> buffer[ tx * nx.x ];
-
-                auto lbound = (tx > 0 ) ? gc.x.lower : 0;
-                auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1 ) ? 0 : gc.x.upper);
+                T * __restrict__ msg = & msg_send.lower-> buffer[ tx * ( ext_nx.x * gc.y.lower ) ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
-                    for( unsigned i = lbound; i < ubound; i++ ) {
-                        msg[ j * msg_ystride + i ] = local[ j * ext_nx.x + i ];
+                    for( unsigned i = 0; i < ext_nx.x; i++ ) {
+                        msg[ j * ext_nx.x + i ] = local[ j * ext_nx.x + i ];
                     }
                 }
             }
 
-            int msg_size = ( gc.x.lower + gnx.x + gc.x.upper ) * gc.y.lower;
+            int msg_size = gc.y.lower * ( ntiles.x * ext_nx.x );
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
@@ -1143,19 +1145,16 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.upper-> buffer[ tx *  nx.x ];
-
-                auto lbound = (tx > 0) ? gc.x.lower : 0;
-                auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1) ? 0 : gc.x.upper);
+                T * __restrict__ msg = & msg_send.upper-> buffer[ tx * gc.y.upper * ext_nx.x ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
-                    for( unsigned i = lbound; i < ubound; i++ ) {
-                        msg[ j * msg_ystride + i ] = local[ ( gc.y.lower + nx.y + j ) * ext_nx.x + i ];
+                    for( unsigned i = 0; i < ext_nx.x; i++ ) {
+                        msg[ j * ext_nx.x + i ] = local[ ( gc.y.lower + nx.y + j ) * ext_nx.x + i ];
                     }
                 }
             }
 
-            int msg_size    = ( gc.x.lower + gnx.x + gc.x.upper ) * gc.y.upper;
+            int msg_size    = gc.y.upper * ( ntiles.x * ext_nx.x );
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
 
@@ -1173,11 +1172,11 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * gc.y.upper * ext_nx.x ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                       local[ ( gc.y.lower + j ) * ext_nx.x + i ] += msg[ j * msg_ystride + i ];
+                       local[ ( gc.y.lower + j ) * ext_nx.x + i ] += msg[ j * ext_nx.x + i ];
                     }
                 }
             }
@@ -1194,11 +1193,11 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.upper -> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.upper -> buffer[ tx * (gc.y.lower * ext_nx.x) ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                        local[ ( nx.y + j ) * ext_nx.x + i ] +=  msg[ j * msg_ystride + i ];
+                        local[ ( nx.y + j ) * ext_nx.x + i ] +=  msg[ j * ext_nx.x + i ];
                     }
                 }
             }
@@ -1452,8 +1451,8 @@ class grid {
         zdf::chunk chunk;
         chunk.count[0] = gnx.x;
         chunk.count[1] = gnx.y;
-        chunk.start[0] = tile_start.x * nx.x;
-        chunk.start[1] = tile_start.y * nx.y;
+        chunk.start[0] = tile_off.x * nx.x;
+        chunk.start[1] = tile_off.y * nx.y;
         chunk.stride[0] = chunk.stride[1] = 1;
         chunk.data = (void *) h_data;
 
@@ -1477,7 +1476,7 @@ class grid {
         gather( h_data );
 
         uint64_t global[2] = { global_ntiles.x * nx.x, global_ntiles.y * nx.y };
-        uint64_t start[2] = { tile_start.x * nx.x, tile_start.y * nx.y };
+        uint64_t start[2] = { tile_off.x * nx.x, tile_off.y * nx.y };
         uint64_t local[2] = { gnx.x, gnx.y };
 
         zdf::save_grid( h_data, 2, global, start, local, name, filename, part.get_comm() );

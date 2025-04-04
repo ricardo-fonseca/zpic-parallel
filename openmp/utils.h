@@ -160,6 +160,14 @@ void free( T * buffer ) {
 
 namespace omp {
 
+/**
+ * @brief Atomic fetch-add operation. Returns the value before the operation.
+ * 
+ * @tparam T        Template type
+ * @param addr      Address of the value to be modified
+ * @param val       Value to be added
+ * @return T        Value before the operation
+ */
 template <class T>
 inline T atomic_fetch_add( T * addr, T val ) {
     T t;

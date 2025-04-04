@@ -56,18 +56,19 @@ class EMF {
     vec3grid<float3> * E;
     /// @brief Magnetic field
     vec3grid<float3> * B;
-    /// @brief Simulation box size
+    /// @brief Global simulation box size
     const float2 box;
 
     /**
      * @brief Construct a new EMF object
      * 
-     * @param ntiles    Number of tiles in x,y direction
-     * @param nx        Tile size (#cells)
-     * @param box       Simulation box size (sim. units)
-     * @param dt        Time step
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individual tile size
+     * @param box               Global simulation box size
+     * @param dt                Time step
+     * @param parallel          Parallel partition 
      */
-    EMF( uint2 const ntiles, uint2 const nx, float2 const box, double const dt, Partition & part );
+    EMF( uint2 const global_ntiles, uint2 const nx, float2 const box, double const dt, Partition & parallel );
     
     /**
      * @brief Destroy the EMF object
@@ -97,6 +98,11 @@ class EMF {
      */
     emf::bc_type get_bc( ) { return bc; }
 
+    /**
+     * @brief Set the boundary conditions
+     * 
+     * @param new_bc    New boundary condition values
+     */
     void set_bc( emf::bc_type new_bc ) {
 
         // Validate parameters
@@ -104,7 +110,7 @@ class EMF {
             if ( new_bc.x.lower != new_bc.x.upper ) {
                 std::cerr << "(*error*) EMF boundary type mismatch along x.\n";
                 std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::abort(1);
             }
         }
 
@@ -112,27 +118,29 @@ class EMF {
             if ( new_bc.y.lower != new_bc.y.upper ) {
                 std::cerr << "(*error*) EMF boundary type mismatch along y.\n";
                 std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::abort(1);
             }
         }
 
         if ( E -> part.periodic.x && new_bc.x.lower != emf::bc::periodic ) {
             std::cerr << "(*error*) Only periodic x boundaries are supported with periodic x parallel partitions.\n";
-            exit(1);
+            mpi::abort(1);
         }
 
         if ( E -> part.periodic.y && new_bc.y.lower != emf::bc::periodic ) {
             std::cerr << "(*error*) Only periodic y boundaries are supported with periodic y parallel partitions.\n";
-            exit(1);
+            mpi::abort(1);
         }
 
         // Store new values
         bc = new_bc;
 
-        std::string bc_name[] = {"none", "periodic", "pec", "pmc"};
-        std::cout << "(*info*) EMF boundary conditions\n";
-        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+        if ( mpi::world_root() ) {
+            std::string bc_name[] = {"none", "periodic", "pec", "pmc"};
+            std::cout << "(*info*) EMF boundary conditions\n";
+            std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
+            std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+        }
     }
 
     /**

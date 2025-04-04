@@ -4,16 +4,18 @@
 
 
 /**
- * @brief Construct a new Current:: Current object
+ * @brief Construct a new Current object
  * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- * @param box       Box size
- * @param dt        Time step
+ * @param global_ntiles     Global number of tiles
+ * @param nx                Individual tile size
+ * @param box               Global simulation box size
+ * @param dt                Time step
+ * @param parallel          Parallel partition 
  */
-Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
-    float const dt, Partition & part ) : box(box), 
-    dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
+Current::Current( uint2 const global_ntiles, uint2 const nx, float2 const box,
+    float const dt, Partition & parallel ) :
+    box(box), 
+    dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
     dt(dt)
 {
 
@@ -23,7 +25,7 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     gc.x = {1,2};
     gc.y = {1,2};
 
-    J = new vec3grid<float3> ( ntiles, nx, gc, part );
+    J = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
     J -> name = "Current density";
 
     // Zero initial current
@@ -33,8 +35,8 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     // Set default boundary conditions to be none or periodic
     // according to parallel partition
     bc = current::bc_type (current::bc::periodic);
-    if ( ! part.periodic.x ) bc.x.lower = bc.x.upper = current::bc::none;
-    if ( ! part.periodic.y ) bc.y.lower = bc.y.upper = current::bc::none;
+    if ( ! parallel.periodic.x ) bc.x.lower = bc.x.upper = current::bc::none;
+    if ( ! parallel.periodic.y ) bc.y.lower = bc.y.upper = current::bc::none;
 
     // Disable filtering by default
     filter = new Filter::None();
@@ -261,7 +263,7 @@ void Current::zero() {
 /**
  * @brief Save electric current data to diagnostic file
  * 
- * @param jc        Current component to save (0, 1 or 2)
+ * @param jc        Current component to save
  */
 void Current::save( fcomp::cart const jc ) {
 
@@ -282,14 +284,14 @@ void Current::save( fcomp::cart const jc ) {
     axis[0] = (zdf::grid_axis) {
     	.name = (char *) "x",
     	.min = 0.0 + moving_window.motion(),
-    	.max = box.x,
+    	.max = box.x + moving_window.motion(),
     	.label = (char *) "x",
     	.units = (char *) "c/\\omega_n"
     };
 
     axis[1] = (zdf::grid_axis) {
         .name = (char *) "y",
-    	.min = 0.0 + moving_window.motion(),
+    	.min = 0.0,
     	.max = box.y,
     	.label = (char *) "y",
     	.units = (char *) "c/\\omega_n"

@@ -34,7 +34,7 @@ CC = clang
 CFLAGS = -O3
 
 CXX = clang++
-CXXFLAGS = -O3 -ffast-math
+CXXFLAGS = -O3 -g
 
 # OpenMP support
 CXXFLAGS += -fopenmp

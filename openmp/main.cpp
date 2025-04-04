@@ -21,16 +21,9 @@
 #endif
 
 /**
- * ARM SVE support
- * Currently only supported on Linux
+ * SIMD support
  */
-#ifdef __ARM_FEATURE_SVE_BITS
-#ifdef __linux__
-#include <sys/prctl.h>
-#else
-#error "ARM SVE support only available on Linux"
-#endif
-#endif
+#include "simd/simd.h"
 
 /**
  * Print information about SIMD and OpenMP support
@@ -487,7 +480,7 @@ void test_weibel_96( )
     // Run simulation    
     int const imax = 500;
                                                           
-    printf("Running Weibel(96) test up to n = %d...\n", imax);
+    std::cout << "Running Weibel(96) test up to n = " << imax << "...\n";
                 
     Timer timer;
                   

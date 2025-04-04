@@ -250,7 +250,7 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
     const auto nx         = E.nx;
     const auto offset     = E.offset;
     const int  ystride    = E.ext_nx.x; // ystride should be signed
-    const auto tile_start = E.get_tile_start();
+    const uint2 global_tile_off  = E.get_tile_off();
 
     const float k = omega0;
     const float amp = omega0 * a0;
@@ -267,7 +267,7 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
             float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
             float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-            const int ix0 = ( tile_start.x + tile_idx.x ) * nx.x;
+            const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
 
             for( unsigned iy = 0; iy < nx.y; iy++ ) {
                 for( unsigned ix = 0; ix < nx.x; ix++ ) {

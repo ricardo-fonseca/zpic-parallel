@@ -20,39 +20,63 @@ class Simulation {
 
     public:
 
-    const uint2 ntiles;
+    /// @brief Global number of tiles
+    const uint2 global_ntiles;
+    /// @brief Tile grid size
     const uint2 nx;
+    /// @brief Global simulation box size
     const float2 box;
+    /// @brief Time step
     const float dt;
 
+    /// @brief MPI parallel partition
     Partition parallel;
+
+    /// @brief EM fields
     EMF emf;
+
+    /// @brief Current density
     Current current;
+
+    /// @brief Vector of particle species
     std::vector <Species*> species;
 
     /**
      * @brief Construct a new Simulation object
      * 
-     * @param ntiles    Global number of tiles
-     * @param nx        Tile grid size
-     * @param box       Simulation box size
-     * @param dt        Time step
+     * @note Global periodic boundaries are set to true
+     * 
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individual tile grid size
+     * @param box               Global simulation box size
+     * @param dt                Time step
+     * @param partition         Parallel partition (number of parallel nodes in each direction)
      */
-    Simulation( uint2 const ntiles, uint2 const nx, float2 const box, float const dt, uint2 partition ):
+    Simulation( uint2 const global_ntiles, uint2 const nx, float2 const box, float const dt, uint2 partition ):
         iter(0), 
-        ntiles( ntiles ), nx( nx ), box( box ), dt( dt ), 
+        global_ntiles( global_ntiles ), nx( nx ), box( box ), dt( dt ), 
         parallel( partition ),
-        emf( ntiles, nx, box, dt, parallel ),
-        current( ntiles, nx, box, dt, parallel ) {
+        emf( global_ntiles, nx, box, dt, parallel ),
+        current( global_ntiles, nx, box, dt, parallel ) {
     }
 
-    Simulation( uint2 const ntiles, uint2 const nx, float2 const box, float const dt, 
+    /**
+     * @brief Construct a new Simulation object
+     * 
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individual tile grid size
+     * @param box               Global simulation box size
+     * @param dt                Time step
+     * @param partition         Parallel partition (number of parallel nodes in each direction)
+     * @param periodic          Global periodic boundaries
+     */
+    Simulation( uint2 const global_ntiles, uint2 const nx, float2 const box, float const dt, 
         uint2 const partition, int2 const periodic ):
         iter(0), 
-        ntiles( ntiles ), nx( nx ), box( box ), dt( dt ), 
+        global_ntiles( global_ntiles ), nx( nx ), box( box ), dt( dt ), 
         parallel( partition, periodic ),
-        emf( ntiles, nx, box, dt, parallel ),
-        current( ntiles, nx, box, dt, parallel ) {
+        emf( global_ntiles, nx, box, dt, parallel ),
+        current( global_ntiles, nx, box, dt, parallel ) {
     }
 
     /**
@@ -80,7 +104,7 @@ class Simulation {
      */
     void add_species( Species & s ) {
         species.push_back( &s );
-        s.initialize( box, ntiles, nx, dt, species.size(), parallel );
+        s.initialize( box, global_ntiles, nx, dt, species.size(), parallel );
     }
 
     /**

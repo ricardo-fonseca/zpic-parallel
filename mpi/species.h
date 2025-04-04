@@ -181,8 +181,19 @@ public:
      * @param dt        
      * @param id 
      */
-    virtual void initialize( float2 const box, uint2 const ntiles, uint2 const nx,
-        float const dt, int const id_, Partition & parallel );
+
+    /**
+     * @brief Initialize data structures and inject initial particle distribution
+     * 
+     * @param box               Global simulation box size
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individutal tile grid size
+     * @param dt                Time step
+     * @param id                Species unique identifier
+     * @param parallel          Parallel configuration
+     */
+    virtual void initialize( float2 const box, uint2 const global_ntiles, uint2 const nx,
+        float const dt, int const id, Partition & parallel );
 
     /**
      * @brief Destroy the Species object

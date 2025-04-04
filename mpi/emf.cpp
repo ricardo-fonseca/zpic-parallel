@@ -6,27 +6,29 @@
 #include "zdf-cpp.h"
 
 /**
- * @brief Construct a new EMF::EMF object
+ * @brief Construct a new EMF object
  * 
- * @param ntiles    Global number of tiles
- * @param nx        Tile grid size
- * @param box       Simulation box size
- * @param dt        Time step
+ * @param global_ntiles     Global number of tiles
+ * @param nx                Individual tile size
+ * @param box               Global simulation box size
+ * @param dt                Time step
+ * @param parallel          Parallel partition 
  */
-EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
-    double const dt, Partition & part ) : 
-    dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
+EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
+    double const dt, Partition & parallel ) : 
+    dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
     dt( dt ), box(box)
 {
-//    std::cout << "Creating EMF object..." << '\n';
     
     // Verify Courant condition
     float cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
     if ( dt >= cour ){
-        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
-        std::cerr << "(*error*) For the current resolution " << dx;
-        std::cerr << " the maximum timestep is dt = " << cour <<'\n';
-        exit(-1);
+        if ( mpi::world_root() ) {
+            std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
+            std::cerr << "(*error*) For the current resolution " << dx;
+            std::cerr << " the maximum timestep is dt = " << cour <<'\n';
+        }
+        mpi::abort(-1);
     }
 
     // Guard cells (1 below, 2 above)
@@ -35,10 +37,10 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     gc.x = {1,2};
     gc.y = {1,2};
 
-    E = new vec3grid<float3> ( ntiles, nx, gc, part );
+    E = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
     E -> name = "Electric field";
 
-    B = new vec3grid<float3> ( ntiles, nx, gc, part );
+    B = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
     B -> name = "Magnetic field";
 
     // Zero fields

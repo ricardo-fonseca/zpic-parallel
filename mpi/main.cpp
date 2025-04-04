@@ -103,335 +103,6 @@ void test_laser( void ) {
     save_emf( );
 }
 
-#if 0
-
-void test_inj( void ) {
-
-    uint2 partition = make_uint2( 4, 4 );
-
-    uint2 ntiles = make_uint2( 2, 2 );
-    uint2 nx = make_uint2( 64, 64 );
-
-    float2 box = make_float2( 12.8, 12.8 );
-
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
-
-    Simulation sim( ntiles, nx, box, dt, partition );
-
-    uint2 ppc = make_uint2( 8, 8 );
-    Species electrons("electrons", -1.0f, ppc);
-
-    // electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
-    // electrons.set_density(Density::Slab(coord::y, 1.0, 5.0, 7.0));
-
-    electrons.set_density( Density::Sphere( 1.0, make_float2(5.0, 7.0), 2.0 ) );
-    electrons.set_udist( UDistribution::Cold( make_float3( 100, 50, 25 ) ) );
-
-    sim.add_species(electrons);
-
-    auto diag = [ & ]() {
-        electrons.save_charge();
-        sim.current.save(fcomp::x);
-        sim.current.save(fcomp::y);
-        sim.current.save(fcomp::z);
-    };
-
-    for( int i = 0; i < 1000; ++i ) {
-        if ( i % 100 == 0 ) diag();
-
-        sim.current.zero();
-        electrons.advance( sim.emf, sim.current );
-        sim.current.advance();
-    }
-
-    diag();
-
-    std::cout << __func__ << " complete.\n";
-}
-
-void test_weibel( void ) {
-    uint2 partition = make_uint2( 2, 2 );
-
-    uint2 gnx = make_uint2( 128, 128 );
-    uint2 ntiles = make_uint2( 8, 8 );
-
-    uint2 nx = make_uint2( gnx.x/ntiles.x, gnx.y/ntiles.y );
-    float2 box = make_float2( gnx.x/10.0, gnx.y/10.0 );
-    float dt = 0.07;
-
-/*
-    std::cout << "Starting Weibel test\n"
-              << "ntiles    : " << ntiles << '\n'
-              << "tile size : " << nx << '\n'
-              << "gnx       : " << uint2( ntiles.x * nx.x, ntiles.y * nx.y ) << '\n'
-              << "box       : " << box << '\n';
-*/
-
-    Simulation sim( ntiles, nx, box, dt, partition );
-
-    uint2 ppc = make_uint2( 4, 4 );
-
-    Species electrons("electrons", -1.0f, ppc);
-    electrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3(0, 0, 0.6 )
-        )
-    );
-
-    sim.add_species( electrons );
-
-    Species positrons("positrons", +1.0f, ppc);
-    positrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3( 0, 0, -0.6 )
-        )
-    );
-
-    sim.add_species( positrons );
-
-    // Lambda function for diagnostic output
-    auto diag = [ & ]( ) {
-        sim.emf.save(emf::b, fcomp::x);
-        sim.emf.save(emf::b, fcomp::y);
-        sim.emf.save(emf::b, fcomp::z);
-
-        electrons.save();
-
-        sim.energy_info();
-    };
-
-
-    Timer timer; timer.start();
-
-    while ( sim.get_t() <= 35.0 ) {
-        // if ( sim.get_iter() % 10 == 0 )
-            // std::cout << "t = " << sim.get_t() << '\n';
-        sim.advance();
-    }
-
-    timer.stop();
-
-    diag();
-
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cout << "[benchmark] " << perf << " GPart/s\n";
-
-    std::cout << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
-    
-}
-
-void test_cathode()
-{
-
-    Simulation sim(
-        make_uint2(    8,    8), // ntiles
-        make_uint2(   16,   16), // nx
-        make_float2(12.8, 12.8), // box
-        0.07,                    // dt
-        make_uint2( 2, 2 )       // partition
-    );
-
-    // Create cathode
-    Cathode cathode(
-        "cathode",
-        +1.0f,       // m_q
-        make_uint2(4, 4), // ppc
-        edge::lower, // edge
-        1.0e3f       // ufl
-    );
-
-    // Set additional cathode parameters
-    cathode.n0 = 1.0f;
-    cathode.wall = edge::lower;
-    cathode.start = -6.4;
-    //cathode.uth = float3(0.1, 0.1, 0.1);
-
-    cathode.uth = make_float3(0,0,0);
-
-    auto bc = cathode.get_bc();
-    bc.x = {
-        .lower = species::bc::open,
-        .upper = species::bc::open};
-
-    cathode.set_bc(bc);
-    sim.add_species(cathode);
-
-    // Lambda function for diagnostic output
-    auto diag = [ & ]( ) {
-        cathode.save_phasespace( 
-            phasespace::x, make_float2( 0, 12.8 ), 128,
-            phasespace::ux, make_float2( -1, 2.0e3 ), 512
-        );
-        cathode.save_charge();
-        cathode.save();
-        sim.current.save(fcomp::x);
-        sim.emf.save(emf::e, fcomp::x);
-    };
-
-    float const tmax = 12.8;
-
-    printf("Running Cathode test up to t = %g...\n", tmax);
-
-    Timer timer;
-    timer.start();
-
-    // diag();
-    while (sim.get_t() < tmax) {
-        std::cout << "Now at t = " << sim.get_t() << '\n';
-        sim.advance();
-    /*    if (sim.get_iter() % 50 == 0) {
-            std::cout << "Writing data\n";
-            diag();
-        } */
-    }
-
-    printf("Simulation complete at t = %g\n", sim.get_t());
-
-    timer.stop();
-
-    diag();
-
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
-}
-
-void benchmark( void ) {
-    uint2 gnx = make_uint2( 128, 128 );
-    uint2 ppc = make_uint2( 2, 2 );
-
-    auto dt = 0.07;
-    auto tmax = 35.0;
-
-    auto bench_weibel = [ & ]( uint2 const ntiles ) {
-        uint2 nx = make_uint2( gnx.x/ntiles.x, gnx.y/ntiles.y );
-        float2 box = make_float2( gnx.x/10., gnx.y/10. );
-
-        uint2 partition = make_uint2( 2, 2 );
-
-        Simulation sim( ntiles, nx, box, dt, partition );
-
-        Species electrons("electrons", -1.0f, ppc);
-        electrons.set_udist(
-            UDistribution::ThermalCorr( 
-                make_float3( 0.1, 0.1, 0.1 ),
-                make_float3(0, 0, 0.6 )
-            )
-        );
-
-        sim.add_species( electrons );
-
-        Species positrons("positrons", +1.0f, ppc);
-        positrons.set_udist(
-            UDistribution::ThermalCorr( 
-                make_float3( 0.1, 0.1, 0.1 ),
-                make_float3( 0, 0, -0.6 )
-            )
-        );
-
-        sim.add_species( positrons );
-
-        Timer timer; timer.start();
-        while ( sim.get_t() <= tmax ) { sim.advance(); }
-        timer.stop();
-
-        auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-        std::cout << ntiles << " : " <<  timer.elapsed(timer::s)
-                  << " s, " << perf << " GPart/s\n";
-    };
-
-
-    std::vector<uint2> ntiles_list{ {1,1}, {2,2}, {4,4}, {8,8}, {16,16} };
-    for( auto ntiles : ntiles_list ){
-        bench_weibel( ntiles );
-    }
-}
-
-void test_weibel_large( )
-{
-                            
-    // Create simulation box
-    uint2 partition { 2, 2 };
-    uint2 ntiles {64, 64};
-    uint2 nx {32, 32};
-    uint2 ppc {8, 8};
-                                                                                                    
-    uint64_t vol = static_cast<uint64_t>(nx.x * nx.y) *  static_cast<uint64_t>(ntiles.x * ntiles.y);
-                                             
-    std::cout << "** Large Weibel test **\n";                                   
-    std::cout << " # tiles          : " << ntiles.x << ", " << ntiles.y << "\n";
-    std::cout << " tile size        : " << nx.x << ", " << nx.y << "\n";                      
-    std::cout << " global size      : " << nx.x * ntiles.x << ", " << nx.y * ntiles.y << "\n";
-    std::cout << " # part / species : " << vol * (ppc.x * ppc.y) / (1048576.0) << " M \n";
-                                                                  
-    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
-                    
-    float dt = 0.07;
-                                        
-    Simulation sim(ntiles, nx, box, dt, partition);
-                            
-    Species electrons("electrons", -1.0f, ppc);
-    electrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3(0, 0, 0.6 )
-        )
-    );
-
-    sim.add_species( electrons );
-
-    Species positrons("positrons", +1.0f, ppc);
-    positrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3( 0, 0, -0.6 )
-        )
-    );
-
-    sim.add_species( positrons );
-                     
-    // Run simulation    
-    int const imax = 500;
-                                                          
-    printf("Running Weibel test up to n = %d...\n", imax);
-                
-    Timer timer;
-                  
-    timer.start();
-                                 
-    while (sim.get_iter() < imax)
-    {
-        // std::cout << "n = " << sim.get_iter() << '\n';
-        sim.advance();
-    }
-                 
-    timer.stop();
-                                                              
-    std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
-                      
-    sim.energy_info();
-                                    
-    sim.emf.save(emf::b, fcomp::x);
-    sim.emf.save(emf::b, fcomp::y);
-    sim.emf.save(emf::b, fcomp::z);
-                                                                  
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
-}
-
-#endif
-
 void test_weibel_96( )
 {
     // MPI partition
@@ -473,7 +144,7 @@ void test_weibel_96( )
                 
     if ( mpi::world_root() )
         std::cout << "Running Weibel(96) test up to n = " << imax << "...\n";
-                
+
     Timer timer;
                   
     timer.start();
@@ -608,6 +279,51 @@ void test_particles() {
     if ( parallel.root() ) std::cout << ansi::bold << ansi::red << "Done!" << ansi::reset << "\n";
 }
 
+void test_current() {
+    uint2 par_dims = make_uint2( 2, 2 );
+    uint2 global_ntiles {4, 4};
+
+//    uint2 dims = make_uint2( 2, 1 );
+//    uint2 global_ntiles {2, 2};
+
+    Partition parallel( par_dims );
+
+    uint2 nx {8, 8};
+    float2 box = make_float2( 12.8, 12.8 );
+
+    uint2 gnx = nx * global_ntiles;
+    float2 dx = { box.x / gnx.x, box.y / gnx.y };
+    float dt = 1. / sqrt( 1./(dx.x*dx.x) + 1./(dx.y*dx.y) ) *.9; // max time step
+
+    uint2 ppc = make_uint2( 8, 8 );
+
+    Species electrons("electrons", -1.0f, ppc );
+
+    electrons.set_density(Density::Sphere( 1.0, make_float2( 6.4, 6.4 ), 2.8));
+    electrons.set_udist( UDistribution::Cold( make_float3( -1e6, +1e6, 0.1 ) ) );
+
+    electrons.initialize( box, global_ntiles, nx, dt, 0, parallel );
+
+    electrons.save_charge();
+
+    Current current( global_ntiles, nx, box, dt, parallel );
+
+    for( int i = 0; i < 10; i ++ ) {
+        current.zero();
+        electrons.advance( current );
+
+        current.advance( );
+
+        current.save( fcomp::x );
+        current.save( fcomp::y );
+        current.save( fcomp::z );
+
+        electrons.save_charge();
+    }
+
+    if ( parallel.root() ) std::cout << ansi::bold << ansi::red << "Done!" << ansi::reset << "\n";
+}
+
 /**
  * @brief Print information about the environment
  * 
@@ -656,6 +372,7 @@ int main( int argc, char *argv[] ) {
     // test_grid();
     // test_laser();
     // test_particles();
+    // test_current();
 
     test_weibel_96();
 

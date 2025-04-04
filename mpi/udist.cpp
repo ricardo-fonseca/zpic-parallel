@@ -1,6 +1,9 @@
 #include "udist.h"
 #include "random.h"
 
+// For debug purposes only
+#include "parallel.h"
+
 /**
  * @brief Sets none(0 temperature, 0 fluid) u distribution
  * 
@@ -8,6 +11,7 @@
  */
 void UDistribution::None::set( Particles & part, unsigned int seed ) const {
 
+    #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < part.ntiles.x * part.ntiles.y; tid ++ ) {
 
         const int offset = part.offset[tid];
@@ -25,6 +29,7 @@ void UDistribution::None::set( Particles & part, unsigned int seed ) const {
  */
 void UDistribution::Cold::set( Particles & part, unsigned int seed ) const {
 
+    #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < part.ntiles.x * part.ntiles.y; tid ++ ) {
 
         const int offset = part.offset[tid];
@@ -43,12 +48,20 @@ void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
 
     uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
 
+    #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < part.ntiles.x * part.ntiles.y; tid ++ ) {
+
+        // Get global tile index
+        uint2 global_tile = make_uint2( 
+            part.tile_off.x + tid % part.ntiles.x,
+            part.tile_off.y + tid / part.ntiles.x
+        );
+        int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
 
         // Initialize random state variables
         uint2 state;
         double norm;
-        zrandom::rand_init( tid, rnd_seed, state, norm );
+        zrandom::rand_init( global_tid, rnd_seed, state, norm );
 
         const int offset = part.offset[tid];
         const int np     = part.np[tid];
@@ -75,6 +88,7 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
     const auto bsize = part.nx.x * part.nx.y;
     const int ystride = part.nx.x;
 
+    #pragma omp parallel for schedule(dynamic)   
     for( unsigned tid = 0; tid < part.ntiles.x * part.ntiles.y; tid ++ ) {
 
         // fluid[] and npcell[] should be in block shared memory
@@ -86,12 +100,19 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
             npcell[idx] = 0;
         }
 
-        //sync
+        //sync - not required with 1 thread per tile
+
+        // Get global tile index
+        uint2 global_tile = make_uint2( 
+            part.tile_off.x + tid % part.ntiles.x,
+            part.tile_off.y + tid / part.ntiles.x
+        );
+        int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
 
         // Initialize random state variables
         uint2 state;
         double norm;
-        zrandom::rand_init( tid, rnd_seed, state, norm );
+        zrandom::rand_init( global_tid, rnd_seed, state, norm );
 
         const int offset = part.offset[tid];
         const int np     = part.np[tid];
@@ -114,7 +135,7 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
             fluid[ idx ] += upart;
         }
 
-        // sync
+        //sync - not required with 1 thread per tile
 
         for( unsigned idx = 0; idx < bsize; idx++ ) {
             if ( npcell[idx] > npmin ) {
@@ -126,7 +147,7 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
             }
         }
 
-        // sync();
+        //sync - not required with 1 thread per tile
 
         for( int i = 0; i < np; i++ ) {
             int const idx = ix[i].x + ystride * ix[i].y;

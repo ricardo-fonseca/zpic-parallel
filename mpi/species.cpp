@@ -1716,13 +1716,14 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
 
 
 /**
- * @brief Initialize data structures and inject particles
+ * @brief Initialize data structures and inject initial particle distribution
  * 
- * @param box_              Simulation global box size
- * @param global_ntiles     Global Number of tiles
- * @param nx                Grid size per tile
+ * @param box_              Global simulation box size
+ * @param global_ntiles     Global number of tiles
+ * @param nx                Individutal tile grid size
  * @param dt_               Time step
- * @param id_               Species unique id
+ * @param id_               Species unique identifier
+ * @param parallel          Parallel configuration
  */
 void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 const nx,
     float const dt_, int const id_, Partition & parallel ) {
@@ -1755,9 +1756,10 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     // Reference number maximum number of particles
     unsigned int max_part = 1.2 * lnx.x * lnx.y * ppc.x * ppc.y;
 
-
+    // Create particle data structure
     particles = new Particles( global_ntiles, nx, max_part, parallel );
     
+    // Set periodic boundaries
     int2 periodic = {
         ( bc.x.lower == species::bc::periodic ),
         ( bc.y.lower == species::bc::periodic )
@@ -1794,9 +1796,7 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     inject( particles -> local_range() );
 
     // Set inital velocity distribution
-    // This ensures a different seed on every parallel node
-    int rnd_seed = parallel.get_size() * id + parallel.get_rank(); 
-    udist -> set( *particles, rnd_seed );
+    udist -> set( *particles, id );
 }
 
 /**
@@ -2191,7 +2191,7 @@ void Species::move( vec3grid<float3> * J )
         move_deposit_kernel(
             tile_idx, *particles,
             J -> d_buffer, J -> offset, J -> ext_nx, dt_dx, q, qnx
-            );
+        );
     }
 
     // This avoids the reduction overhead
