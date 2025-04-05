@@ -561,19 +561,17 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.lower-> buffer [ ty * nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_send.lower-> buffer [ ty * ext_nx.y * gc.x.upper ];
 
-                auto lbound = (ty > 0 ) ? gc.y.lower : 0;
-                auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
 
-                for( unsigned j = lbound; j < ubound; j++ ) {
+                for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
                         msg[ j * gc.x.upper + i ] = local[ j * ext_nx.x + gc.x.lower + i ];
                     }
                 }
             }
 
-            int msg_size = gc.x.upper * ( gc.y.lower + gnx.y + gc.y.upper );
+            int msg_size = ( ext_nx.y * ntiles.y ) * gc.x.upper;
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
@@ -586,19 +584,16 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.upper-> buffer[ ty *  nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_send.upper-> buffer[ ty * ext_nx.y * gc.x.lower ];
 
-                auto lbound = (ty > 0 ) ? gc.y.lower : 0;
-                auto ubound = gc.y.lower + nx.y + ((ty < ntiles.y - 1 ) ? 0 : gc.y.upper);
-
-                for( unsigned j = lbound; j < ubound; j++ ) {
+                for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.lower; i++ ) {
                         msg[ j * gc.x.lower + i ] = local[ j * ext_nx.x + nx.x + i ];
                     }
                 }
             }
 
-            int msg_size = gc.x.lower * ( gc.y.lower + gnx.y + gc.y.upper );
+            int msg_size = ( ext_nx.y * ntiles.y ) * gc.x.lower;
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
 
@@ -609,14 +604,14 @@ class grid {
         if ( lnode >= 0 ) {
             msg_recv.lower-> wait();
 
-           unsigned int tx = 0;
+            unsigned int tx = 0;
             for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
                 const auto tile_idx = make_uint2( tx, ty );
                 const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty *  nx.y * gc.x.lower ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * ext_nx.y * gc.x.lower ];
 
                 for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.lower; i++ ) {
@@ -630,14 +625,14 @@ class grid {
         if ( unode >= 0 ) {
             msg_recv.upper-> wait();
 
-           unsigned int tx = ntiles.x-1;
+            unsigned int tx = ntiles.x-1;
             for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
                 const auto tile_idx = make_uint2( tx, ty );
                 const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.upper -> buffer[ ty *  nx.y * gc.x.upper ];
+                T * __restrict__ msg = & msg_recv.upper -> buffer[ ty * ext_nx.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < ext_nx.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
@@ -670,9 +665,6 @@ class grid {
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
         if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
 
-        /// @brief Message buffer y stride
-        const int msg_ystride = gc.x.lower + gnx.x + gc.x.upper;
-
         // Post message sends
         if ( lnode >= 0 ) {
             unsigned int ty = 0;
@@ -682,19 +674,16 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_send.lower-> buffer[ tx * ext_nx.x * gc.y.upper ];
                 
-                auto lbound = (tx > 0 ) ? gc.x.lower : 0;
-                auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1 ) ? 0 : gc.x.upper);
-
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
-                    for( unsigned i = lbound; i < ubound; i++ ) {
-                        msg[ j * msg_ystride + i ] = local[ ( gc.y.lower + j ) * ext_nx.x + i ];
+                    for( unsigned i = 0; i < ext_nx.x; i++ ) {
+                        msg[ j * ext_nx.x + i ] = local[ ( gc.y.lower + j ) * ext_nx.x + i ];
                     }
                 }
             }
 
-            int msg_size =  ( gc.x.lower + gnx.x + gc.x.upper ) * gc.y.upper;
+            int msg_size =  gc.y.upper * ( ntiles.x * ext_nx.x );
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
@@ -706,19 +695,16 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_send.upper -> buffer[ tx * nx.x ];
-
-                auto lbound = (tx > 0) ? gc.x.lower : 0;
-                auto ubound = gc.x.lower + nx.x + ((tx < ntiles.x - 1 ) ? 0 : gc.x.upper);
+                T * __restrict__ msg = & msg_send.upper -> buffer[ tx * ext_nx.x * gc.y.lower ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
-                    for( unsigned i = lbound; i < ubound; i++ ) {
-                        msg[ j * msg_ystride + i ] = local[ ( nx.y + j ) * ext_nx.x + i ];
+                    for( unsigned i = 0; i < ext_nx.x; i++ ) {
+                        msg[ j * ext_nx.x + i ] = local[ ( nx.y + j ) * ext_nx.x + i ];
                     }
                 }
             }
 
-            int msg_size = ( gc.x.lower + gnx.x + gc.x.upper ) * gc.y.lower;;
+            int msg_size = gc.y.lower * ( ntiles.x * ext_nx.x );
             msg_send.upper -> isend( msg_size, unode, dest::upper );
         }
 
@@ -736,11 +722,11 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * ext_nx.x * gc.y.lower ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                        local[ j * ext_nx.x + i ] =  msg[ j * msg_ystride + i ];
+                        local[ j * ext_nx.x + i ] =  msg[ j * ext_nx.x + i ];
                     }
                 }
             }
@@ -757,11 +743,11 @@ class grid {
                 const auto tile_off = tid * tile_vol;
 
                 auto * __restrict__ local = & d_buffer[ tile_off ];
-                T * __restrict__ msg = & msg_recv.upper-> buffer[ tx * nx.x ];
+                T * __restrict__ msg = & msg_recv.upper-> buffer[ tx * ext_nx.x * gc.y.upper ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
                     for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                        local[ ( gc.y.lower + nx.y + j ) * ext_nx.x + i ] =  msg[ j * msg_ystride + i ];
+                        local[ ( gc.y.lower + nx.y + j ) * ext_nx.x + i ] =  msg[ j * ext_nx.x + i ];
                     }
                 }
             }
