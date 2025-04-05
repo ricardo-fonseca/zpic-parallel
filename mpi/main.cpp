@@ -1,4 +1,7 @@
 
+// For getopt
+#include <unistd.h>
+
 #include <iostream>
 
 #include "parallel.h"
@@ -32,6 +35,8 @@
  */
 #include "parallel.h"
 
+
+#if 0
 void test_laser( void ) {
 
     // Parallel partition
@@ -103,77 +108,6 @@ void test_laser( void ) {
     save_emf( );
 }
 
-void test_weibel_96( )
-{
-    // MPI partition
-    uint2 partition { 2, 2 };
-                            
-    // Create simulation box
-    uint2 ntiles {16, 16};
-    uint2 nx {32, 32};
-    uint2 ppc {8, 8};
-                                                                                                                                                                      
-    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
-                    
-    float dt = 0.07;
-                                        
-    Simulation sim(ntiles, nx, box, dt, partition );
-                            
-    Species electrons("electrons", -1.0f, ppc);
-    electrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3(0, 0, 0.6 )
-        )
-    );
-
-    sim.add_species( electrons );
-
-    Species positrons("positrons", +1.0f, ppc);
-    positrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3( 0, 0, -0.6 )
-        )
-    );
-
-    sim.add_species( positrons );
-                     
-    // Run simulation    
-    int const imax = 500;
-                
-    if ( mpi::world_root() )
-        std::cout << "Running Weibel(96) test up to n = " << imax << "...\n";
-
-    Timer timer;
-                  
-    timer.start();
-                                 
-    while (sim.get_iter() < imax)
-    {
-        // std::cout << "n = " << sim.get_iter() << '\n';
-        sim.advance();
-    }
-                 
-    timer.stop();
-    
-    if ( mpi::world_root() )
-        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
-                      
-    sim.energy_info();
-                                    
-    sim.emf.save(emf::b, fcomp::x);
-    sim.emf.save(emf::b, fcomp::y);
-    sim.emf.save(emf::b, fcomp::z);
-                                                                  
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    if ( mpi::world_root() ) {
-        std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-                  << ", Performance: " << perf << " GPart/s\n";
-    }
-}
-
 void test_partition() {
     uint2 dims = make_uint2( 2, 3 );
     Partition part( dims );
@@ -211,10 +145,6 @@ void test_grid() {
 
 }
 
-/**
- * @brief Test particle injection and
- * 
- */
 void test_particles() {
     uint2 par_dims = make_uint2( 2, 2 );
     uint2 global_ntiles {16, 16};
@@ -324,6 +254,172 @@ void test_current() {
     if ( parallel.root() ) std::cout << ansi::bold << ansi::red << "Done!" << ansi::reset << "\n";
 }
 
+#endif
+
+void test_weibel_96( )
+{
+    // MPI partition
+    uint2 partition { 2, 2 };
+                            
+    // Create simulation box
+    uint2 ntiles {16, 16};
+    uint2 nx {32, 32};
+    uint2 ppc {8, 8};
+                                                                                                                                                                      
+    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+                    
+    float dt = 0.07;
+                                        
+    Simulation sim(ntiles, nx, box, dt, partition );
+                            
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3(0, 0, 0.6 )
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3( 0, 0, -0.6 )
+        )
+    );
+
+    sim.add_species( positrons );
+                     
+    // Run simulation    
+    int const imax = 500;
+                
+    if ( mpi::world_root() )
+        std::cout << "Running Weibel(96) test up to n = " << imax << "...\n";
+
+    Timer timer;
+                  
+    timer.start();
+                                 
+    while (sim.get_iter() < imax)
+    {
+        // std::cout << "n = " << sim.get_iter() << '\n';
+        sim.advance();
+    }
+                 
+    timer.stop();
+    
+    if ( mpi::world_root() )
+        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+                      
+    sim.energy_info();
+                                    
+    sim.emf.save(emf::b, fcomp::x);
+    sim.emf.save(emf::b, fcomp::y);
+    sim.emf.save(emf::b, fcomp::z);
+                                                                  
+    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
+
+    if ( mpi::world_root() ) {
+        std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+                  << ", Performance: " << perf << " GPart/s\n";
+    }
+}
+
+void test_weibel( std::string param ) {
+    
+    // param is expected to be in the form "px, py, ntx, nty"
+    // Where (px,py) are the parallel MPI dimensions and (ntx,nty) the global number of tiles
+
+    // Parse parameters
+    uint2 partition { 0 };
+    uint2 ntiles { 0 };
+
+    if ( std::sscanf( param.c_str(), "%d, %d, %d, %d", 
+        &partition.x, &partition.y, 
+        &ntiles.x, &ntiles.y ) != 4 ) {
+        
+        if ( mpi::world_root() ) 
+            std::cerr << "Invalid test parameters: '" << param << "'\n";
+        mpi::abort(1);
+    };
+
+    if ( mpi::world_root() ) {
+        std::cout << "Running Weibel test\n";
+        std::cout << "MPI partition : " << partition << '\n';
+        std::cout << "Global tiles  : " << ntiles << '\n';
+    }
+
+
+    // Create simulation box
+    uint2 nx {32, 32};
+    uint2 ppc {8, 8};
+                                                                                                                                                                      
+    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+                    
+    float dt = 0.07;
+                                        
+    Simulation sim(ntiles, nx, box, dt, partition );
+                            
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3(0, 0, 0.6 )
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3( 0, 0, -0.6 )
+        )
+    );
+
+    sim.add_species( positrons );
+                     
+    // Run simulation    
+    int const imax = 500;
+                
+    if ( mpi::world_root() )
+        std::cout << "Running test up to n = " << imax << "...\n";
+
+    Timer timer;
+                  
+    timer.start();
+                                 
+    while (sim.get_iter() < imax)
+    {
+        // std::cout << "n = " << sim.get_iter() << '\n';
+        sim.advance();
+    }
+                 
+    timer.stop();
+    
+    if ( mpi::world_root() )
+        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+                      
+    sim.energy_info();
+
+/*
+    sim.emf.save(emf::b, fcomp::x);
+    sim.emf.save(emf::b, fcomp::y);
+    sim.emf.save(emf::b, fcomp::z);
+*/                                                                  
+    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
+
+    if ( mpi::world_root() ) {
+        std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+                  << ", Performance: " << perf << " GPart/s\n";
+    }   
+
+}
+
+
 /**
  * @brief Print information about the environment
  * 
@@ -358,6 +454,19 @@ void info( void ) {
     }
 }
 
+void cli_help( char * argv0 ) {
+    std::cerr << "Usage: " << argv0 << " [-h] [-s] [-t name] [-n parameter]\n";
+
+    std::cerr << '\n';
+    std::cerr << "Options:\n";
+    std::cerr << "  -h                  Display this message and exit\n";
+    std::cerr << "  -s                  Silence information about MPI/OpenMP/SIMD parameters\n";
+    std::cerr << "  -t <name>           Name of the test to run. Defaults to 'weibel'\n";
+    std::cerr << "  -p <parameters>     Test parameters (string). Purpose will depend on the \n";
+    std::cerr << "                      test chosen. Defaults to '2,2,16,16'\n";
+    std::cerr << '\n';
+}
+
 int main( int argc, char *argv[] ) {
 
     // Initialize the MPI environment
@@ -365,16 +474,48 @@ int main( int argc, char *argv[] ) {
 
     // Initialize SIMD support
     simd_init();
+
+    int opt;
+    int n = 1;
+    int silent = 0;
+    std::string test = "weibel";
+    std::string param = "2,2,16,16";
+    while ((opt = getopt(argc, argv, "ht:p:s")) != -1) {
+        switch (opt) {
+            case 't':
+            test = optarg;
+            break;
+        case 'p':
+            param = optarg;
+            break;
+        case 's':
+            silent = 1;
+            break;
+        case 'h':
+        case '?':
+            cli_help( argv[0] );
+            mpi::finalize();
+            exit(0);
+        default:
+            if ( mpi::world_root() ) cli_help( argv[0] );    
+            mpi::abort(1);
+        }
+    }
     
     // Print information about the environment
-    info();
+    if ( ! silent ) info();
 
-    // test_grid();
-    // test_laser();
-    // test_particles();
-    // test_current();
+    if ( test == "weibel" ) {
+        test_weibel( param );
+    } else {
+        if ( mpi::world_root() ) 
+            std::cerr << "Unknonw test '" << test << "', aborting...\n";
+        mpi::abort(1);
+    }
 
-    test_weibel_96();
+//    info();
+//    test_weibel_96();
+
 
     // Finalize the MPI environment
     mpi::finalize();
