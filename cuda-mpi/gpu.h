@@ -581,7 +581,6 @@ namespace device {
      * @param h_out     Output host buffer
      * @param d_in      Input device buffer
      * @param size      Buffer size (number of elements)
-     * @param q         Sycl queue
      */
     template< typename T >
     void memcpy_tohost( T * const __restrict__ h_out, T const * const __restrict__ d_in, size_t const size) {
@@ -595,6 +594,7 @@ namespace device {
         }
     }
     
+
     /**
      * @brief Atomic fetch-add operation. Returns the value before the operation.
      * 

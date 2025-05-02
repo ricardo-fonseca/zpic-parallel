@@ -39,11 +39,11 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if constexpr ( quant == part::x )  val = ((tile_off.x + tx) * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if constexpr ( quant == part::y )  val = ((tile_off.y + ty) * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
-            if constexpr ( quant == part::ux ) val = u[idx].x;
-            if constexpr ( quant == part::uy ) val = u[idx].y;
-            if constexpr ( quant == part::uz ) val = u[idx].z;
+            if constexpr( quant == part::x  ) val = ((tile_off.x + tx) * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr( quant == part::y  ) val = ((tile_off.y + ty) * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr( quant == part::ux ) val = u[idx].x;
+            if constexpr( quant == part::uy ) val = u[idx].y;
+            if constexpr( quant == part::uz ) val = u[idx].z;
             d_data[ data_offset + idx ] = val;
         }
     }
@@ -457,6 +457,7 @@ uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort,
         total += tmp;
     }
 
+    // Total number of particles
     return total;
 }
 

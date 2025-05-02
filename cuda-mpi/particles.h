@@ -130,7 +130,7 @@ inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
  *       in a contiguous buffer, following the same order as set by
  *      `edge_shift_dir()` and sizes according to `edge_ntiles()`
  * 
- * @param dir       Direction (0-9)
+ * @param dir       Direction (0-8)
  * @param ntiles    Number of local tiles (x,y)
  * @return int      Offset of edge tiles in the specified direction
  */
@@ -298,53 +298,6 @@ inline constexpr int all_tiles( const uint2 ntiles ) {
 
 }
 
-#if 0
-struct ParticleSortData {
-    /// @brief Particle index list [max_part]
-    int *idx;
-    /// @brief Number of particles in index list [ntiles]
-    int * nidx;
-    /// @brief Number of particles leaving tile in all directions [ntiles * 9]
-    int * npt;
-    /// @brief New number of particles per tile
-    int * new_np;
-    /// @brief Total number of tiles
-    const int ntiles;
-
-    ParticleSortData( const int ntiles ) : ntiles(ntiles) {};
-};
-
-class ParticleSort : public ParticleSortData {
-    public:
-
-    ParticleSort( uint2 const ntiles, uint32_t const max_part ) :
-        ParticleSortData( ntiles.x * ntiles.y )
-    {
-        idx    = device::malloc<int>( max_part );
-        new_np = device::malloc<int>( ParticleSortData::ntiles );
-        nidx   = device::malloc<int>( ParticleSortData::ntiles );
-        // Particles can move in 9 different directions
-        npt    = device::malloc<int>( 9 * ParticleSortData::ntiles );
-    }
-
-    ~ParticleSort() {
-        device::free( npt );
-        device::free( nidx );
-        device::free( new_np );
-        device::free( idx );
-    }
-
-    /**
-     * @brief Sets np values to 0
-     * 
-     */
-    void reset( ) {
-        device::zero( new_np, ntiles );
-    }
-};
-#endif
-
-
 /**
  * @brief   Data structure to hold particle sort data
  * 
@@ -370,10 +323,13 @@ struct ParticleSortData {
     const uint2 ntiles;
 
     struct Message {
-        /// @brief Buffer for all 8 messages
+        /// @brief Buffer for all 8 messages (in device memory)
         int * buffer;
         /// @brief Number of incoming particles per message
         int msg_np[9];
+
+        int * d_msg_np;
+
         /// @brief Total number of particles to be exchanged
         int total_np;
         /// @brief Message requests
@@ -391,7 +347,15 @@ struct ParticleSortData {
     int neighbor[9];
 
     ParticleSortData( const uint2 ntiles, Partition & par ) : 
-        ntiles(ntiles) {};
+        ntiles(ntiles) {
+            recv.d_msg_np = device::malloc<int>(9);
+            send.d_msg_np = device::malloc<int>(9);
+        };
+    
+    ~ParticleSortData() {
+        device::free( send.d_msg_np );
+        device::free( recv.d_msg_np );
+    }
 };
 
 /**
@@ -502,78 +466,9 @@ class ParticleSort : public ParticleSortData {
      * @brief Exchange number of particles in edge cells
      *
      */
-    void exchange_np( ) {
+    void exchange_np( );
 
-        const int ntx = ntiles.x;
-        const int nty = ntiles.y;
-
-        // Size of message according to direction
-        auto size = [ ntx, nty ]( int dir ) -> unsigned int {
-            unsigned int s = 1;                   // corners
-            if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
-            if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
-            return s;
-        };
-
-        // Post receives
-        unsigned int idx = 0;
-        for( auto dir = 0; dir < 9; dir++ ) {            
-            if ( dir != 4 ) {
-                MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
-                        source_tag(dir), comm, &recv.requests[dir]);
-                idx += size(dir);
-            } else {
-                recv.requests[dir] = MPI_REQUEST_NULL;
-            }
-        }
-
-        // Post sends and update send.msg_np[]
-        idx = 0;
-        for( auto dir = 0; dir < 9; dir++ ) {
-            if ( dir != 4 ) {
-                MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
-                    dest_tag(dir), comm, &send.requests[dir]);
-
-                #warning this needs to happen in the GPU
-                // Move outside the loop
-                uint32_t send_np = 0;
-                for( int k = 0; k < size(dir); k++ ) send_np += send.buffer[idx + k];
-                send.msg_np[dir] = send_np;
-
-                idx += size(dir);
-            } else {
-                send.msg_np[dir] = 0; // not needed
-                send.requests[dir] = MPI_REQUEST_NULL;
-            }
-        }
-
-        // Wait for receives to complete
-        MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );
-
-        // update recv.msg_np[]
-        #warning this needs to happen in the GPU 
-
-        idx = 0;
-        for( auto dir = 0; dir < 9; dir++ ) {
-            if ( dir != 4 ) {
-
-                uint32_t recv_np = 0;
-                for( int k = 0; k < size(dir); k++ ) {
-                    recv_np += recv.buffer[ idx ];
-                    idx++;
-                }
-                recv.msg_np[dir] = recv_np;
-
-            } else {
-                recv.msg_np[dir] =  0;
-            }
-        }
-
-        // Wait for sends to complete
-        MPI_Waitall( 9, send.requests, MPI_STATUSES_IGNORE );
-    }
-
-};
+}
 
 
 /**
