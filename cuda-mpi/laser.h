@@ -84,8 +84,8 @@ class Pulse {
      * @return      Returns 0 on success, -1 on error (invalid laser parameters)
      */
     int add( EMF & emf ) {
-        vec3grid<float3> tmp_E( emf.E -> ntiles, emf.E-> nx, emf.E -> gc );
-        vec3grid<float3> tmp_B( emf.B -> ntiles, emf.B-> nx, emf.B -> gc );
+        vec3grid<float3> tmp_E( emf.E -> global_ntiles, emf.E-> nx, emf.E -> gc, emf.E -> part );
+        vec3grid<float3> tmp_B( emf.E -> global_ntiles, emf.B-> nx, emf.B -> gc, emf.E -> part );
 
         // Get laser fields
         int ierr = launch( tmp_E, tmp_B, emf.box );

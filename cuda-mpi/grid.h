@@ -1,11 +1,13 @@
 #ifndef GRID_H_
 #define GRID_H_
 
-#include <iostream>
+#include "parallel.h"
 
-#include "utils.h"
+#include "vec_types.h"
 #include "bnd.h"
 #include "zdf-cpp.h"
+
+#include <iostream>
 
 /**
  * @brief CUDA Kernels for the various functions
@@ -364,12 +366,454 @@ void kernel3_y_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
         buffer[i] = B[i];
 }
 
+/**
+ * @brief CUDA kernel for packing x boundaries copy_to send messages
+ * 
+ * @note Must be called with grid( 2, ntiles.y )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor send message buffer
+ * @param upper         Upper neighbor send message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_x_lower    Number of guard cells in x lower boundary
+ * @param gc_x_upper    Number of guard cells in x upper boundary
+ */
+template< typename T >
+__global__
+void kernel_copy_to_gc_x_send( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_x_lower, const int gc_x_upper ) {
+
+    unsigned int tx = ( blockIdx.x == 0 ) ? 0 : ntiles.x - 1;    
+    unsigned int ty = blockIdx.y;
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.x is constant inside a block so there is no thread divergence
+    if ( blockIdx.x == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ ty * ext_nx.y * gc_x_upper ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_upper; idx += block_num_threads() ) {
+                const int i = idx % gc_x_upper;
+                const int j = idx / gc_x_upper;
+                msg[ j * gc_x_upper + i ] = local[ j * ext_nx.x + gc_x_lower + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ ty * ext_nx.y * gc_x_lower ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_lower; idx += block_num_threads() ) {
+                const int i = idx % gc_x_lower;
+                const int j = idx / gc_x_lower;
+                msg[ j * gc_x_lower + i ] = local[ j * ext_nx.x + nx.x + i ];
+            }
+        }
+    }
+}
+
+/**
+ * @brief CUDA kernel for unpacking x boundaries copy_to receive messages
+ * 
+ * @note Must be called with grid( 2, ntiles.y )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor receive message buffer
+ * @param upper         Upper neighbor receive message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_x_lower    Number of guard cells in x lower boundary
+ * @param gc_x_upper    Number of guard cells in x upper boundary
+ */
+template< typename T >
+__global__
+void kernel_copy_to_gc_x_recv( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx,
+    const int gc_x_lower, const int gc_x_upper ) {
+
+    unsigned int tx = ( blockIdx.x == 0 ) ? 0 : ntiles.x - 1;    
+    unsigned int ty = blockIdx.y;
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.x is constant inside a block so there is no thread divergence
+    if ( blockIdx.x == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ ty * ext_nx.y * gc_x_lower ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_lower; idx += block_num_threads() ) {
+                const int i = idx % gc_x_lower;
+                const int j = idx / gc_x_lower;
+                local[ j * ext_nx.x + i ] = msg[ j * gc_x_lower + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ ty * ext_nx.y * gc_x_upper ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_upper; idx += block_num_threads() ) {
+                const int i = idx % gc_x_upper;
+                const int j = idx / gc_x_upper;
+                local[ j * ext_nx.x + gc_x_lower + nx.x + i ] = msg[ j * gc_x_upper + i ];
+            }
+        }
+    }
+}
+
+/**
+ * @brief CUDA kernel for packing y boundaries copy_to send messages
+ * 
+ * @note Must be called with grid( ntiles.x, 2 )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor send message buffer
+ * @param upper         Upper neighbor send message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_y_lower    Number of guard cells in y lower boundary
+ * @param gc_y_upper    Number of guard cells in y upper boundary
+ */
+template< typename T >
+__global__
+void kernel_copy_to_gc_y_send( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_y_lower, const int gc_y_upper ) {
+
+    unsigned int tx = blockIdx.x;
+    unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.y is constant inside a block so there is no thread divergence
+    if ( blockIdx.y == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ tx * ext_nx.x * gc_y_upper ];
+            for( int idx = block_thread_rank(); idx < gc_y_upper * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                msg[ j * ext_nx.x + i ] = local[ ( gc_y_lower + j ) * ext_nx.x + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ tx * ext_nx.x * gc_y_lower ];
+            for( int idx = block_thread_rank(); idx < gc_y_lower * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                msg[ j * ext_nx.x + i ] = local[ ( nx.y + j ) * ext_nx.x + i ];
+            }
+        }
+    }
+}
+
+/**
+ * @brief CUDA kernel for unpacking y boundaries copy_to receive messages
+ * 
+ * @note Must be called with grid( ntiles.x, 2 )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor receive message buffer
+ * @param upper         Upper neighbor receive message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_y_lower    Number of guard cells in y lower boundary
+ * @param gc_y_upper    Number of guard cells in y upper boundary
+ */
+template< typename T >
+__global__
+void kernel_copy_to_gc_y_recv( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_y_lower, const int gc_y_upper ) {
+
+    unsigned int tx = blockIdx.x;
+    unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.y is constant inside a block so there is no thread divergence
+    if ( blockIdx.y == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ tx * ext_nx.x * gc_y_lower ];
+            for( int idx = block_thread_rank(); idx < gc_y_lower * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                local[ j * ext_nx.x + i ] =  msg[ j * ext_nx.x + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ tx * ext_nx.x * gc_y_upper ];
+            for( int idx = block_thread_rank(); idx < gc_y_upper * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                local[ ( gc_y_lower + nx.y + j ) * ext_nx.x + i ] =  msg[ j * ext_nx.x + i ];
+            }
+        }
+    }
+}
+
+/**
+ * @brief CUDA kernel for packing x boundaries add_from send messages
+ * 
+ * @note Must be called with grid( 2, ntiles.y )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor send message buffer
+ * @param upper         Upper neighbor send message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_x_lower    Number of guard cells in x lower boundary
+ * @param gc_x_upper    Number of guard cells in x upper boundary
+ */
+template< typename T >
+__global__
+void kernel_add_from_gc_x_send( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_x_lower, const int gc_x_upper ) {
+
+    unsigned int tx = ( blockIdx.x == 0 ) ? 0 : ntiles.x - 1;    
+    unsigned int ty = blockIdx.y;
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.x is constant inside a block so there is no thread divergence
+    if ( blockIdx.x == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ ty * ext_nx.y * gc_x_lower ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_lower; idx += block_num_threads() ) {
+                const int i = idx % gc_x_lower;
+                const int j = idx / gc_x_lower;
+                msg[ j * gc_x_lower + i ] = local[ j * ext_nx.x + gc_x_lower + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ ty * ext_nx.y * gc_x_upper ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_upper; idx += block_num_threads() ) {
+                const int i = idx % gc_x_upper;
+                const int j = idx / gc_x_upper;
+                msg[ j * gc_x_upper + i ] = local[ j * ext_nx.x + gc_x_lower + nx.x + i ];
+            }
+        }
+    }
+}
+
+
+/**
+ * @brief CUDA kernel for unpacking x boundaries add_from receive messages
+ * 
+ * @note Must be called with grid( 2, ntiles.y )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor receive message buffer
+ * @param upper         Upper neighbor receive message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_x_lower    Number of guard cells in x lower boundary
+ * @param gc_x_upper    Number of guard cells in x upper boundary
+ */
+template< typename T >
+__global__
+void kernel_add_from_gc_x_recv( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_x_lower, const int gc_x_upper ) {
+
+    unsigned int tx = ( blockIdx.x == 0 ) ? 0 : ntiles.x - 1;    
+    unsigned int ty = blockIdx.y;
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.x is constant inside a block so there is no thread divergence
+    if ( blockIdx.x == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ ty * ext_nx.y * gc_x_upper ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_upper; idx += block_num_threads() ) {
+                const int i = idx % gc_x_upper;
+                const int j = idx / gc_x_upper;
+                local[ j * ext_nx.x + gc_x_lower + i ] += msg[ j * gc_x_upper + i ] ;
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ ty * ext_nx.y * gc_x_lower ];
+            for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_lower; idx += block_num_threads() ) {
+                const int i = idx % gc_x_lower;
+                const int j = idx / gc_x_lower;
+                local[ j * ext_nx.x + nx.x + i ] += msg[ j * gc_x_lower + i ] ;
+            }
+        }
+    }
+}
+
+/**
+ * @brief CUDA kernel for packing x boundaries add_from send messages
+ * 
+ * @note Must be called with grid( ntiles.x, 2 )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor send message buffer
+ * @param upper         Upper neighbor send message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_y_lower    Number of guard cells in y lower boundary
+ * @param gc_y_upper    Number of guard cells in y upper boundary
+ */
+template< typename T >
+__global__
+void kernel_add_from_gc_y_send( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_y_lower, const int gc_y_upper ) {
+
+    unsigned int tx = blockIdx.x;
+    unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.y is constant inside a block so there is no thread divergence
+    if ( blockIdx.y == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ tx * ( ext_nx.x * gc_y_lower ) ];
+            for( int idx = block_thread_rank(); idx < gc_y_lower * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                msg[ j * ext_nx.x + i ] = local[ j * ext_nx.x + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ tx * gc_y_upper * ext_nx.x ];
+            for( int idx = block_thread_rank(); idx < gc_y_upper * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                msg[ j * ext_nx.x + i ] = local[ ( gc_y_lower + nx.y + j ) * ext_nx.x + i ];
+            }
+        }
+    }
+}
+
+/**
+ * @brief CUDA kernel for unpacking y boundaries add_from send messages
+ * 
+ * @note Must be called with grid( ntiles.x, 2 )
+ * 
+ * @tparam T            Data type
+ * @param lower         Lower neighbor send message buffer
+ * @param upper         Upper neighbor send message buffer
+ * @param d_buffer      Grid data
+ * @param ntiles        Number of local tiles (x,y)
+ * @param nx            Tile size
+ * @param ext_nx        External tile size
+ * @param gc_y_lower    Number of guard cells in y lower boundary
+ * @param gc_y_upper    Number of guard cells in y upper boundary
+ */
+template< typename T >
+__global__
+void kernel_add_from_gc_y_recv( 
+    T * const __restrict__ lower, T * const __restrict__ upper,
+    T * const __restrict__ d_buffer, const uint2 ntiles, 
+    const uint2 nx, const uint2 ext_nx, 
+    const int gc_y_lower, const int gc_y_upper ) {
+
+    unsigned int tx = blockIdx.x;
+    unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
+
+    const auto tid = ty * ntiles.x + tx;
+    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    auto * __restrict__ local = & d_buffer[ tile_off ];
+    
+    // Note that blockIdx.y is constant inside a block so there is no thread divergence
+    if ( blockIdx.y == 0 ) {
+        // lower message
+        if ( lower != nullptr ) {
+            T * __restrict__ msg = & lower [ tx * gc_y_upper * ext_nx.x ];
+            for( int idx = block_thread_rank(); idx < gc_y_upper * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                local[ ( gc_y_lower + j ) * ext_nx.x + i ] += msg[ j * ext_nx.x + i ];
+            }
+        }
+    } else {
+        // upper message
+        if ( upper != nullptr ) {
+            T * __restrict__ msg = & upper[ tx * (gc_y_lower * ext_nx.x) ];
+            for( int idx = block_thread_rank(); idx < gc_y_upper * ext_nx.x; idx += block_num_threads() ) {
+                const int i = idx % ext_nx.x;
+                const int j = idx / ext_nx.x;
+                local[ ( nx.y + j ) * ext_nx.x + i ] +=  msg[ j * ext_nx.x + i ];
+            }
+        }
+    }
+}
+
 
 /**
  * @brief End of CUDA kernels namespace
  * 
  */
 }
+
+namespace source {
+    enum tag { lower = 0, upper = 1 };
+}
+
+namespace dest {
+    enum tag { upper = 0, lower = 1 };
+}
+
 
 /**
  * @brief 
@@ -380,88 +824,204 @@ class grid {
 
     protected:
 
+    /// @brief Local number of tiles
+    uint2 ntiles;
+
+    /// @brief Offset of local tiles in global tile grid
+    uint2 tile_off;
+
+    /// @brief Consider local boundaries periodic
+    int2 periodic;
+
+    /// @brief Local grid size
+    uint2 gnx;
+
+    /// @brief Buffers for sending messages
+    pair< Message<T>* > msg_send;
+
+    /// @brief Buffers for receiving messages
+    pair< Message<T>* > msg_recv;
+
+    /**
+     * @brief Set the local node information. This information will (may) be
+     * different for each parallel node
+     * 
+     * @note Global periodic information is taken from the parallel partition
+     * 
+     */
+    void initialize( ) {
+
+        // Get local number of tiles and position
+        part.grid_local( global_ntiles, ntiles, tile_off );
+
+        // Get local grid size
+        gnx = ntiles * nx;
+
+        // Get local periodic flag
+        periodic.x = part.periodic.x && (part.dims.x == 1);
+        periodic.y = part.periodic.y && (part.dims.y == 1);
+
+        // Allocate main data buffer on device memory
+        d_buffer = device::malloc<T>( buffer_size() );
+
+        // Get maximum message size
+        int max_msg_size = max(
+            ( ntiles.y * ext_nx.y ) * max( gc.x.lower, gc.x.upper ),
+            max( gc.y.lower, gc.y.upper ) * ( ntiles.x * ext_nx.x )
+        );
+
+        // Allocate message buffers
+        msg_recv.lower = new Message<T>( max_msg_size, part.get_comm() );
+        msg_recv.upper = new Message<T>( max_msg_size, part.get_comm() );
+        msg_send.lower = new Message<T>( max_msg_size, part.get_comm() );
+        msg_send.upper = new Message<T>( max_msg_size, part.get_comm() );
+
+    }
+
+    private:
+
+    /**
+     * @brief Validate grid / parallel parameters. The execution will stop if
+     * errors are found.
+     * 
+     */
+    void validate_parameters() {
+        // Grid parameters
+        if ( global_ntiles.x == 0 || global_ntiles.y == 0 ) {
+            std::cerr << "Invalid number of tiles " << global_ntiles << '\n';
+            mpi::abort(1);
+        }
+
+        if ( nx.x == 0 || nx.y == 0 ) {
+            std::cerr << "Invalid tiles size" << nx << '\n';
+            mpi::abort(1);
+        }
+
+        // Parallel partition
+        if ( (unsigned) part.dims.x > global_ntiles.x ) {
+            std::cerr << "Number of parallel nodes along x (" ;
+            std::cerr << part.dims.x << ") is larger than number of tiles along x(";
+            std::cerr << global_ntiles.x << '\n';
+            mpi::abort(1);
+        }
+
+        if ( (unsigned) part.dims.y > global_ntiles.y ) {
+            std::cerr << "Number of parallel nodes along y (" ;
+            std::cerr << part.dims.y << ") is larger than number of tiles along y(";
+            std::cerr << global_ntiles.y << '\n';
+            mpi::abort(1);
+        }
+    }
+
     public:
 
+    /// @brief Parallel partition
+    Partition & part;
+
+    /// @brief Data buffer   
     T * d_buffer;
 
-    /// Number of tiles
-    const uint2 ntiles;
+    /// @brief Global number of tiles
+    const uint2 global_ntiles;
 
-    /// Tile grid size
+    /// @brief Tile grid size
     const uint2 nx;
     
     /// Tile guard cells
     const bnd<unsigned int> gc;
 
-    /// Consider boundaries to be periodic
-    int2 periodic;
-
-    /// Global grid size
-    const uint2 gnx;
-    
-    /// Tile grize including guard cells
+    /// @brief Tile grize including guard cells
     const uint2 ext_nx;
 
-    /// Offset in cells between lower tile corner and position (0,0)
+    /// @brief Local offset in cells between lower tile corner and position (0,0)
     const unsigned int offset;
 
-    /// Tile volume (may be larger than product of cells for alingment)
+    /// @brief Tile volume (may be larger than product of cells for alignment)
     const unsigned int tile_vol;
 
-    /// Object name
+    /// @brief Object name
     std::string name;
 
     /**
      * @brief Construct a new grid object
      * 
-     * @param ntiles    Number of tiles
-     * @param nx        Individual tile size
-     * @param gc        Number of guard cells
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individual tile size
+     * @param gc                Number of guard cells
+     * @param part              Parallel partition
      */
-    grid( uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc ):
+    grid( uint2 const global_ntiles, uint2 const nx, bnd<unsigned int> const gc, Partition & part ):
+        part( part ),
         d_buffer( nullptr ), 
-        ntiles( ntiles ),
+        global_ntiles( global_ntiles ),
         nx( nx ),
         gc(gc),
-        periodic( { 1, 1 } ),
-        gnx( { ntiles.x * nx.x, ntiles.y * nx.y } ),
-        ext_nx( { gc.x.lower +  nx.x + gc.x.upper,
-                  gc.y.lower +  nx.y + gc.y.upper } ),
-        offset( { gc.y.lower * ext_nx.x + gc.x.lower } ),
+        ext_nx( make_uint2( gc.x.lower + nx.x + gc.x.upper,
+                            gc.y.lower + nx.y + gc.y.upper )),
+        offset( gc.y.lower * ext_nx.x + gc.x.lower ),
         tile_vol( roundup4( ext_nx.x * ext_nx.y ) ),
         name( "grid" )
     {
-        d_buffer = device::malloc<T>( buffer_size() );
-    };
+        // Validate parameters
+        validate_parameters();
+
+        // Set local information (ntiles, tile_start and local_periodic)
+        initialize();
+
+    };   
+
 
     /**
      * @brief Construct a new grid object
      * 
-     * The number of guard cells is set to 0
+     * @note: The number of guard cells is set to 0
      * 
-     * @param ntiles    Number of tiles
-     * @param nx        Individual tile size
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individual tile size
+     * @param part              Parallel partition
      */
-    grid( uint2 const ntiles, uint2 const nx ):
+    grid( uint2 const global_ntiles, uint2 const nx, Partition & part ):
+        part( part ),
         d_buffer( nullptr ),
-        ntiles( ntiles ),
+        global_ntiles( global_ntiles ),
         nx( nx ),
         gc( 0 ),
-        periodic( { 1, 1 } ),
-        gnx( { ntiles.x * nx.x, ntiles.y * nx.y } ),
-        ext_nx( { nx.x, nx.y } ),
+        ext_nx( make_uint2( nx.x, nx.y )),
         offset( 0 ),
         tile_vol( roundup4( nx.x * nx.y )),
         name( "grid" )
     {
-        d_buffer = device::malloc<T>( buffer_size() );
+        // Validate parameters
+        validate_parameters();
+
+        // Set local information (ntiles, tile_start and periodic)
+        initialize();
     };
+
+    /**
+     * @brief Get the local number of tiles
+     * 
+     * @return int2 
+     */
+    uint2 get_ntiles() { return ntiles; };
+
+    /**
+     * @brief Returns the local tile offset in the global MPI tile grid
+     * 
+     * @return uint2 
+     */
+    uint2 get_tile_off() { return tile_off; };
 
     /**
      * @brief grid destructor
      * 
      */
     ~grid(){
+        delete msg_recv.lower;
+        delete msg_recv.upper;
+        delete msg_send.lower;
+        delete msg_send.upper;
+
         device::free( d_buffer );
     };
 
@@ -563,50 +1123,367 @@ class grid {
         return gnx.x * gnx.y;
     }
 
+
     /**
-     * @brief Copies edge values to neighboring guard cells
+     * @brief Copies edge values to X neighboring guard cells
      * 
      */
-    void copy_to_gc( )  {
-
-        dim3 block( 64 );
+    void local_copy_to_gc_x() {
         dim3 grid( ntiles.x, ntiles.y );
+        dim3 block( 64 );
 
         // Copy along x direction
         copy_to_gc_x_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
             periodic.x, gc.x.lower, gc.x.upper
         );
+    }
+
+    /**
+     * @brief Copies x values to neighboring guard cells, including cells on 
+     *        other parallel nodes
+     * 
+     */
+    void copy_to_gc_x() {
+
+        // Get x neighbors
+        int lnode = part.get_neighbor(-1, 0 );
+        int unode = part.get_neighbor(+1, 0 );
+
+        // Disable messages if local periodic
+        if ( periodic.x ) lnode = unode = -1;
+
+        // Post message receives
+        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+
+        // Pack send messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( 2, ntiles.y );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+
+            kernel_copy_to_gc_x_send <<< grid, block >>> (
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.x.lower, gc.x.upper
+            );
+        }
+
+        // Send messages
+        if ( lnode >= 0 ) {
+            int msg_size = ( ext_nx.y * ntiles.y ) * gc.x.upper;
+            msg_send.lower->isend( msg_size, lnode, dest::lower );
+        }
+        if ( unode >= 0 ) {
+            int msg_size = ( ext_nx.y * ntiles.y ) * gc.x.lower;
+            msg_send.upper->isend( msg_size, unode, dest::upper );
+        }
+
+        // Process local tiles
+        local_copy_to_gc_x();
+
+        // Wait for receive messages
+        if ( lnode >= 0 ) msg_recv.lower-> wait();
+        if ( unode >= 0 ) msg_recv.upper-> wait();
+
+        // Unpack receive messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( 2, ntiles.y );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+
+            kernel_copy_to_gc_x_recv <<< grid, block >>>(
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.x.lower, gc.x.upper
+            );
+        }
+
+        // Wait for send messages to complete
+        if ( lnode >= 0 ) msg_send.lower->wait( );
+        if ( unode >= 0 ) msg_send.upper->wait( );
+    }
+
+
+
+    /**
+     * @brief Copies edge values to Y neighboring guard cells
+     * 
+     */
+    void local_copy_to_gc_y() {
+        dim3 grid( ntiles.x, ntiles.y );
+        dim3 block( 64 );
 
         // Copy along y direction
         copy_to_gc_y_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
-            periodic.y, gc.y.lower, gc.y.upper
+            periodic.x, gc.x.lower, gc.x.upper
         );
+    }
+
+    /**
+     * @brief Copies y values to neighboring guard cells, including cells on 
+     *        other parallel nodes
+     * 
+     */
+    void copy_to_gc_y() {
+
+        // Get y neighbors
+        int lnode = part.get_neighbor(0, -1);
+        int unode = part.get_neighbor(0, +1);
+
+        // Disable messages if local periodic
+        if ( periodic.y ) lnode = unode = -1;
+        
+        // Post message receives
+        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+
+        // Pack send messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( ntiles.x, 2 );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+
+            kernel_copy_to_gc_y_send <<< grid, block >>> (
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.y.lower, gc.y.upper
+            );
+        }
+
+        // Send messages
+        if ( lnode >= 0 ) {
+            int msg_size =  gc.y.upper * ( ntiles.x * ext_nx.x );
+            msg_send.lower->isend( msg_size, lnode, dest::lower );
+        }
+        if ( unode >= 0 ) {
+            int msg_size = gc.y.lower * ( ntiles.x * ext_nx.x );
+            msg_send.upper -> isend( msg_size, unode, dest::upper );
+        }
+
+        // Process local tiles
+        local_copy_to_gc_y();
+
+        // Wait for receive messages
+        if ( lnode >= 0 ) msg_recv.lower-> wait();
+        if ( unode >= 0 ) msg_recv.upper-> wait();
+
+        // Unpack receive messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( ntiles.x, 2 );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+
+            kernel_copy_to_gc_y_recv <<< grid, block >>>(
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.y.lower, gc.y.upper
+            );
+        }
+
+        // Wait for send messages to complete
+        if ( lnode >= 0 ) msg_send.lower->wait( );
+        if ( unode >= 0 ) msg_send.upper->wait( );
+    }
+
+    /**
+     * @brief Copies edge values to neighboring guard cells, including other
+     *        parallel nodes
+     * 
+     */
+    void copy_to_gc()  {
+
+        // Copy along x direction
+        copy_to_gc_x();
+
+        // Copy along y direction
+        copy_to_gc_y();
+
     };
 
     /**
-     * @brief Adds values from neighboring guard cells to local data
+     * @brief Adds values from neighboring x guard cells to local data
      * 
      */
-    void add_from_gc( ){
-
-        dim3 block( 64 );
+    void local_add_from_gc_x() {
         dim3 grid( ntiles.x, ntiles.y );
+        dim3 block( 64 );
 
         // Add along x direction
         add_from_gc_x_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
             periodic.x, gc.x.lower, gc.x.upper
         );
+    }
+
+    /**
+     * @brief Adds values from neighboring y guard cells to local data
+     * 
+     */
+    void local_add_from_gc_y() {
+        dim3 grid( ntiles.x, ntiles.y );
+        dim3 block( 64 );
 
         // Add along y direction
         add_from_gc_y_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
             periodic.y, gc.y.lower, gc.y.upper
         );
+    }
 
-    };
+    /**
+     * @brief Adds values from neighboring y guard cells to local data,
+     *        including cells from other parallel nodes
+     * 
+     */
+    void add_from_gc_x() {
+
+        // Get x neighbors
+        int lnode = part.get_neighbor(-1, 0 );
+        int unode = part.get_neighbor(+1, 0 );
+
+        // Disable messages if local periodic
+        if ( periodic.x ) lnode = unode = -1;
+
+        // Post message receives
+        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+
+        // Pack send messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( 2, ntiles.y );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+
+            kernel_add_from_gc_x_send <<< grid, block >>> (
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.x.lower, gc.x.upper
+            );
+        }
+
+        // Send messages
+        if ( lnode >= 0 ) {
+            int msg_size = ( ext_nx.y * ntiles.y ) * gc.x.lower;
+            msg_send.lower->isend( msg_size, lnode, dest::lower );
+        }
+        if ( unode >= 0 ) {
+            int msg_size = ( ext_nx.y * ntiles.y ) * gc.x.upper;
+            msg_send.upper->isend( msg_size, unode, dest::upper );
+        }
+
+        // Process local tiles
+        local_add_from_gc_x();
+
+        // Wait for receive messages
+        if ( lnode >= 0 ) msg_recv.lower-> wait();
+        if ( unode >= 0 ) msg_recv.upper-> wait();
+
+        // Unpack receive messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( 2, ntiles.y );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+
+            kernel_add_from_gc_x_recv <<< grid, block >>>(
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.x.lower, gc.x.upper
+            );
+        }
+
+        // Wait for send messages to complete
+        if ( lnode >= 0 ) msg_send.lower->wait( );
+        if ( unode >= 0 ) msg_send.upper->wait( );
+    }
+
+    /**
+     * @brief Adds values from neighboring y guard cells to local data,
+     *        including cells from other parallel nodes
+     * 
+     */
+    void add_from_gc_y() {
+        // Get y neighbors
+        int lnode = part.get_neighbor( 0, -1 );
+        int unode = part.get_neighbor( 0, +1 );
+
+        // Disable messages if local periodic
+        if ( periodic.y ) lnode = unode = -1;
+
+        // Post message receives
+        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+
+        // Pack send messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( ntiles.x, 2 );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+
+            kernel_add_from_gc_y_send <<< grid, block >>> (
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.x.lower, gc.x.upper
+            );
+        }
+
+        // Send messages
+        if ( lnode >= 0 ) {
+            int msg_size = gc.y.lower * ( ntiles.x * ext_nx.x );
+            msg_send.lower->isend( msg_size, lnode, dest::lower );
+        }
+        if ( unode >= 0 ) {
+            int msg_size    = gc.y.upper * ( ntiles.x * ext_nx.x );
+            msg_send.upper->isend( msg_size, unode, dest::upper );
+        }
+
+        // Process local tiles
+        local_add_from_gc_y();
+
+        // Wait for receive messages
+        if ( lnode >= 0 ) msg_recv.lower-> wait();
+        if ( unode >= 0 ) msg_recv.upper-> wait();
+
+        // Unpack receive messages
+        if ( lnode >= 0 || unode >= 0 ) {
+            dim3 grid( ntiles.x, 2 );
+            dim3 block( 64 );
+
+            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+
+            kernel_add_from_gc_y_recv <<< grid, block >>>(
+                lower, upper, d_buffer, ntiles,
+                nx, ext_nx, gc.y.lower, gc.y.upper
+            );
+        }
+
+        // Wait for send messages to complete
+        if ( lnode >= 0 ) msg_send.lower->wait( );
+        if ( unode >= 0 ) msg_send.upper->wait( );
+    }
+
+    /**
+     * @brief Adds values from neighboring guard cells to local data, including
+     *        values from other parallel nodes
+     * 
+     */
+    void add_from_gc() {
+        // Add along x direction
+        add_from_gc_x();
+
+        // Add along y direction
+        add_from_gc_y();
+    }
 
     /**
      * @brief Left shifts data for a specified amount
@@ -618,7 +1495,6 @@ class grid {
      *          cells is greater or equal to the requested shift.
      * 
      * @param shift Number of cells to shift
-     * @param q     Sycl queue
      */
     void x_shift_left( unsigned int const shift ) {
 

@@ -74,6 +74,7 @@ class bnd {
      * 
      * @param rhs   Source object
      */
+    __device__ __host__
     bnd( const bnd<T>& rhs ) :
         x( rhs.x ), 
         y( rhs.y )

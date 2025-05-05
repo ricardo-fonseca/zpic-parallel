@@ -46,7 +46,7 @@ static _mpi_cout cout;
 
 template< typename T > 
 MPI_Datatype data_type () { 
-    static_assert(0,"Invalid data type"); 
+    // static_assert(0,"Invalid data type"); 
     return MPI_DATATYPE_NULL;
 };
 

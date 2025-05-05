@@ -9,14 +9,26 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-// #define WARP_SIZE warpSize
+
+/**
+ * @brief CUDA Number of threads per warp
+ * 
+ */
 #define WARP_SIZE 32
 
+/**
+ * @brief CUDA Maximum number of warps per block
+ * 
+ */
 #define MAX_WARPS 32
 
-#define MEM_ALIGN 64
-
-
+/**
+ * @brief Checks if the operation was successuful, otherwise aborts code
+ * @note This will reset the CUDA device
+ * 
+ * @param   err_    Error code
+ * @param   msg_    Error message to print in case of error
+ */
 #define CHECK_ERR( err_, msg_ ) { \
     auto __local_err = (err_); \
     if ( __local_err != cudaSuccess ) { \
@@ -29,6 +41,12 @@
     } \
 }
 
+/**
+ * @brief Aborts code
+ * @note This will reset the CUDA device
+ * 
+ * @param   msg_    Error message to print in case of error
+ */
 #define ABORT( msg_ ) { \
     std::cerr << "(*error*) " << (msg_) << "\n"; \
     std::cerr << "(*error*) abort issued in " << __func__ << "()"; \
@@ -458,7 +476,6 @@ void memcpy2( float3 * __restrict__ dst1, float3 const * __restrict__ src1,
 namespace device {
 /**
  * @brief   Allocate memory on device
- * @note    If MEM_ALIGN macro is defined then memory will be aligned to this value
  * 
  * @tparam T    Data type
  * @param size  Size (number of elements) to allocate
@@ -581,19 +598,42 @@ void memcpy_tohost( T * const __restrict__ h_out, T const * const __restrict__ d
     }
 }
 
-
+/**
+ * @brief Atomic fetch-add operation. Returns the value before the operation.
+ * 
+ * @tparam T        Template type
+ * @param addr      Address of the value to be modified
+ * @param val       Value to be added
+ * @return T        Value before the operation
+ */
 template< typename T >
 __device__ __forceinline__
 auto atomic_fetch_add( T * address, T val ) {
     return atomicAdd( address, val );
 }
 
+/**
+ * @brief Atomic fetch-max operation. Returns the value before the operation.
+ * 
+ * @tparam T        Template type
+ * @param addr      Address of the value to be modified
+ * @param val       Value to be compared with the target value
+ * @return T        Value before the operation
+ */
 template< typename T >
 __device__ __forceinline__
 auto atomic_fetch_max( T * address, T val ) {
     return atomicMax( address, val );
 }
 
+/**
+ * @brief Atomic fetch-min operation. Returns the value before the operation.
+ * 
+ * @tparam T        Template type
+ * @param addr      Address of the value to be modified
+ * @param val       Value to be compared with the target value
+ * @return T        Value before the operation
+ */
 template< typename T >
 __device__ __forceinline__
 auto atomic_fetch_min( T * address, T val ) {
@@ -601,6 +641,16 @@ auto atomic_fetch_min( T * address, T val ) {
 }
 
 namespace {
+
+/**
+ * @brief Kernel for `exscan_add()` function
+ * 
+ * @tparam T 
+ * @param data 
+ * @param size 
+ * @param reduction 
+ * @return __global__ 
+ */
 template < typename T >
 __global__ 
 void exscan_add_kernel(
@@ -802,7 +852,6 @@ namespace host {
 
 /**
  * @brief   Allocate memory on host
- * @note    If MEM_ALIGN macro is defined then memory will be aligned to this value
  * 
  * @tparam T    Data type
  * @param size  Size (number of elements) to allocate

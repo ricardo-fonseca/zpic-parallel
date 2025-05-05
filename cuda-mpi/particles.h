@@ -1,12 +1,13 @@
 #ifndef PARTICLES_H_
 #define PARTICLES_H_
 
-#include "zpic.h"
+#include "parallel.h"
 
+#include "zpic.h"
 #include "vec_types.h"
+#include "bnd.h"
 
 #include "zdf-cpp.h"
-#include "bnd.h"
 
 namespace part {
 
@@ -47,6 +48,7 @@ typedef bnd<bnd_t::type> bnd_type;
  * @param dy    y edge tile shift (-1, 0 or 1)
  * @return int  Direction (0-9)
  */
+__host__ __device__
 inline int edge_dir_shift( const int dx, const int dy ) {
     return (dy + 1)*3 + (dx + 1);
 }
@@ -164,7 +166,8 @@ inline int edge_tile_off( const int dir, const uint2 ntiles ) {
  * @param local_bnd     local boundary type (none, local periodic, comm)
  * @return int          Tile id on success, -1 on out of bounds
  */
-inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd ) {
+__host__ __device__
+inline int tid_coords( int2 coords, int2 const ntiles, part::bnd_type const local_bnd ) {
 
     // Local (non-parallel) x periodic
     if ( local_bnd.x.lower == part::bnd_t::periodic ) {
@@ -181,7 +184,7 @@ inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd 
     // Parallel shift
     int xshift = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
     int yshift = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
-    int dir    = edge_dir_shift( xshift, yshift );
+    int dir    = part::edge_dir_shift( xshift, yshift );
 
     int tid = -1;
     switch (dir)
@@ -270,6 +273,7 @@ inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd 
  * @param ntiles    Local number of tiles (x,y)
  * @return int      Total number of tiles
  */
+__host__ __device__
 inline constexpr int msg_tiles( const uint2 ntiles ) {
     return  2 * ntiles.y +          // x boundary
             2 * ntiles.x +          // y boundary
@@ -282,6 +286,7 @@ inline constexpr int msg_tiles( const uint2 ntiles ) {
  * @param ntiles    Local number of tiles (x,y)
  * @return int      Total number of tiles
  */
+__host__ __device__
 inline constexpr int local_tiles( const uint2 ntiles ) {
     return ntiles.x * ntiles.y;
 }
@@ -292,6 +297,7 @@ inline constexpr int local_tiles( const uint2 ntiles ) {
  * @param ntiles    Local number of tiles (x,y)
  * @return int      Total number of tiles
  */
+__host__ __device__
 inline constexpr int all_tiles( const uint2 ntiles ) {
     return local_tiles( ntiles ) + msg_tiles( ntiles );
 }
@@ -468,7 +474,7 @@ class ParticleSort : public ParticleSortData {
      */
     void exchange_np( );
 
-}
+};
 
 
 /**
@@ -1074,6 +1080,14 @@ struct ParticleData {
     }
 
     /**
+     * @brief Get local node boundary types
+     * 
+     */
+    part::bnd_type get_local_bnd() {
+        return local_bnd;
+    }
+
+    /**
      * @brief Set global periodic boundary settings
      * 
      * @param new_periodic 
@@ -1229,9 +1243,9 @@ struct ParticleData {
      * @brief Gather data from a specific particle quantity
      * 
      * @param quant     Quantity to gather
-     * @param d_data    Output data buffer, assumed to have size >= np
+     * @param d_data    Output device data buffer, assumed to have size >= np
      */
-    void gather( part::quant quant, float * const __restrict__ d_data, int * const d_off  );
+    void gather( part::quant quant, float * const __restrict__ d_data );
 
     /**
      * @brief Gather data from a specific particle quantity, scaling values
@@ -1239,23 +1253,10 @@ struct ParticleData {
      * @note Data (val) will be returned as `scale.x * val + scale.y`
      * 
      * @param quant     Quantity to gather
-     * @param d_data    Output data buffer, assumed to have size >= np
+     * @param d_data    Output device data buffer, assumed to have size >= np
      * @param scale     Scale factor for data
      */
-    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data, int * const __restrict__ d_off );
-
-    /**
-     * @brief Gather particle data on host
-     * 
-     * @note Data (val) will be returned as `scale.x * val + scale.y`
-     * 
-     * @param quant     Quantity to gather
-     * @param d_data    Output data buffer on device
-     * @param h_data    Output data buffer on host
-     * @param np        Number of particles
-     */
-    void gather_host( part::quant quant, float * const __restrict__ d_data, float * const __restrict__ h_data,
-        uint32_t const np );
+    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data );
     
     /**
      * @brief Validates particle data
@@ -1361,13 +1362,19 @@ struct ParticleData {
      */
     void unpack_msg( ParticleSortData &sort, ParticleMessage &recv );
 
-
+    /**
+     * @brief Print information on the number of particles per tile
+     * 
+     * @warning Used for debug purposes only
+     * 
+     * @param msg   (optional) Message to print before printing particle information
+     */
     void info_np( std::string msg = "" ) {
         
         parallel.barrier();
 
-        uint32_t * h_np = host::malloc<uint32_t>( ntiles.x * ntiles.y );
-        memcpy_tohost( h_np, np, ntiles.x * ntiles.y );
+        int * h_np = host::malloc<int>( ntiles.x * ntiles.y );
+        device::memcpy_tohost( h_np, np, ntiles.x * ntiles.y );
 
 
         if ( ! msg.empty() && ( parallel.get_rank() == 0)) {
@@ -1379,9 +1386,9 @@ struct ParticleData {
                 std::cout << '\n';
                 mpi::cout << "#particles per tile:\n";
 
-                for( int j = 0; j < ntiles.y; j++ ) {
+                for( unsigned int j = 0; j < ntiles.y; j++ ) {
                     mpi::cout << j << ':';
-                    for( int i = 0; i < ntiles.x; i++ ) {
+                    for( unsigned int i = 0; i < ntiles.x; i++ ) {
                         int tid = j * ntiles.x + i;
                         mpi::cout << " " << h_np[tid];
                     }

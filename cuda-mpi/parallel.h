@@ -681,7 +681,7 @@ class Message {
             MPI_Request tmp = request;
             MPI_Cancel( &tmp );
         }
-        memory::free( buffer );
+        memory::free<T, memspace::device >( buffer );
     }
 
     /**

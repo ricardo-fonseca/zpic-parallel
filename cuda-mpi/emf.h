@@ -24,8 +24,6 @@ namespace emf {
 
 class EMF {
 
-    private:
-
     /// @brief Boundary condition
     emf::bc_type bc;
 
@@ -73,7 +71,7 @@ class EMF {
      * @param box       Simulation box size (sim. units)
      * @param dt        Time step
      */
-    EMF( uint2 const ntiles, uint2 const nx, float2 const box, double const dt );
+    EMF( uint2 const global_ntiles, uint2 const nx, float2 const box, double const dt, Partition & parallel );
     
     /**
      * @brief Destroy the EMF object
@@ -91,14 +89,24 @@ class EMF {
     }
 
     /**
-     * @brief Get the iter value
+     * @brief Get the iteration number
      * 
      * @return auto 
      */
-    int get_iter() { return iter; }
+    auto get_iter() { return iter; }
 
+    /**
+     * @brief Get the boundary condition values
+     * 
+     * @return emf::bc_type 
+     */
     emf::bc_type get_bc( ) { return bc; }
 
+    /**
+     * @brief Set the boundary conditions
+     * 
+     * @param new_bc    New boundary condition values
+     */
     void set_bc( emf::bc_type new_bc ) {
 
         // Validate parameters
@@ -106,7 +114,7 @@ class EMF {
             if ( new_bc.x.lower != new_bc.x.upper ) {
                 std::cerr << "(*error*) EMF boundary type mismatch along x.\n";
                 std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::abort(1);
             }
         }
 
@@ -114,22 +122,29 @@ class EMF {
             if ( new_bc.y.lower != new_bc.y.upper ) {
                 std::cerr << "(*error*) EMF boundary type mismatch along y.\n";
                 std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::abort(1);
             }
+        }
+
+        if ( E -> part.periodic.x && new_bc.x.lower != emf::bc::periodic ) {
+            std::cerr << "(*error*) Only periodic x boundaries are supported with periodic x parallel partitions.\n";
+            mpi::abort(1);
+        }
+
+        if ( E -> part.periodic.y && new_bc.y.lower != emf::bc::periodic ) {
+            std::cerr << "(*error*) Only periodic y boundaries are supported with periodic y parallel partitions.\n";
+            mpi::abort(1);
         }
 
         // Store new values
         bc = new_bc;
 
-
-        std::string bc_name[] = {"none", "periodic", "pec", "pmc"};
-        std::cout << "(*info*) EMF boundary conditions\n";
-        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
-
-        // Set periodic flags on tile grids
-        E -> periodic.x = B->periodic.x = ( bc.x.lower == emf::bc::periodic );
-        E -> periodic.y = B->periodic.y = ( bc.y.lower == emf::bc::periodic );
+        if ( mpi::world_root() ) {
+            std::string bc_name[] = {"none", "periodic", "pec", "pmc"};
+            std::cout << "(*info*) EMF boundary conditions\n";
+            std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
+            std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+        }
     }
 
     /**
@@ -141,11 +156,13 @@ class EMF {
      */
     int set_moving_window() { 
         if ( iter == 0 ) {
+            if ( E -> part.periodic.x ) {
+                std::cerr << "(*error*) Unable to set_moving_window() with periodic x partition\n";
+                return -1; 
+            }
+
             moving_window.init( dx.x );
-
             bc.x.lower = bc.x.upper = emf::bc::none;
-            E->periodic.x = B->periodic.x = false;
-
             return 0;
         } else {
             std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
@@ -153,20 +170,34 @@ class EMF {
         }
     }
 
-
+    /**
+     * @brief Advance EM field 1 iteration assuming no current
+     * 
+     */
     void advance( );
+    
+    /**
+     * @brief Advance EM field 1 iteration
+     * 
+     * @param current   Current density
+     */    
     void advance( Current & current );
 
+    /**
+     * @brief Save EM field component to file
+     * 
+     * @param field     Which field to save (E or B)
+     * @param fc        Which field component to save (x, y or z)
+     */
     void save( emf::field const field, const fcomp::cart fc );
     
     /**
-     * @brief Get total field energy per field component
+     * @brief Get EM field energy
      * 
-     * @warning This function will always recalculate the energy each time it is
-     *          called.
+     * @note The energy will be recalculated each time this routine is called
      * 
-     * @param ene_E     Total E-field energy (per component)
-     * @param ene_B     Total B-field energy (per component)
+     * @param ene_E     Electric field energy
+     * @param ene_b     Magnetic field energy
      */
     void get_energy( double3 & ene_E, double3 & ene_b );
 };

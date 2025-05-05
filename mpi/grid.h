@@ -168,7 +168,6 @@ class grid {
 
         // Set local information (ntiles, tile_start and local_periodic)
         initialize();
-
     };
 
     /**
@@ -282,11 +281,6 @@ class grid {
         return val;
     }
 
-    grid<T>& operator+=(const grid<T>& rhs) {
-        for( unsigned i = 0; i < buffer_size(); ++i ) d_buffer[i] += rhs.d_buffer[i];
-        return *this;
-    }
-
     /**
      * @brief Adds another grid object on top of local object
      * 
@@ -298,7 +292,18 @@ class grid {
 
         for( size_t i = 0; i < size; i++ ) d_buffer[i] += rhs.d_buffer[i];
     };
-    
+
+    /**
+     * @brief Operator +=
+     * 
+     * @param rhs           Other grid to add
+     * @return grid<T>& 
+     */
+    grid<T>& operator+=(const grid<T>& rhs) {
+        add( rhs );
+        return *this;
+    }
+
     /**
      * @brief Gather local grid into a contiguous grid
      * 

@@ -6,17 +6,17 @@
 #define opt_yee_block 256
 
 /**
- * @brief Construct a new EMF::EMF object
+ * @brief Construct a new EMF object
  * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- * @param box       Simulation box size
- * @param dt        Time step
- * @param q         Sycl queue
+ * @param global_ntiles     Global number of tiles
+ * @param nx                Individual tile size
+ * @param box               Global simulation box size
+ * @param dt                Time step
+ * @param parallel          Parallel partition 
  */
-EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
-    double const dt ) : 
-    dx( float2{ box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
+EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
+    double const dt, Partition & parallel ) : 
+    dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
     dt( dt ), box(box)
 {
     // Verify Courant condition
@@ -25,7 +25,7 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
         std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
         std::cerr << "(*error*) For the current resolution [" << dx.x << "," << dx.y << "]\n";
         std::cerr << " the maximum timestep is dt = " << cour <<'\n';
-        exit(-1);
+        mpi::abort(1);
     }
 
     // Guard cells (1 below, 2 above)
@@ -34,10 +34,10 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     gc.x = {1,2};
     gc.y = {1,2};
 
-    E = new vec3grid<float3> ( ntiles, nx, gc );
+    E = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
     E -> name = "Electric field";
 
-    B = new vec3grid<float3> ( ntiles, nx, gc );
+    B = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
     B -> name = "Magnetic field";
 
     // Check that local memory can hold up to 2 times the tile buffer
@@ -48,19 +48,18 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
         abort();
     }
 
-    // Zero fields
-    E -> zero( );
-    B -> zero( );
-
     // Reserve device memory for energy diagnostic
     d_energy = device::malloc<double>( 6 );
+    
+    // Zero fields
+    E -> zero();
+    B -> zero();
 
-    // Set default boundary conditions to periodic
-    bc = emf::bc_type (emf::bc::periodic);
+    // Set boundary conditions to none
+    bc = emf::bc_type (emf::bc::none);
 
     // Reset iteration number
     iter = 0;
-
 }
 
 /**

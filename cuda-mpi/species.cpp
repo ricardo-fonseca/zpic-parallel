@@ -93,9 +93,13 @@ float rgamma( const float3 u ) {
  */
 void Species::inject( ) {
 
-    float2 ref = make_float2( moving_window.motion(), 0 );
+    /// @brief position of lower corner of local grid in simulation units
+    float2 ref = make_float2( 
+        particles->tile_off.x * particles->nx.x * dx.x + moving_window.motion(),
+        particles->tile_off.y * particles->nx.y * dx.y
+    );
 
-    density -> inject( *particles, ppc, dx, ref, particles -> g_range() );
+    density -> inject( *particles, ppc, dx, ref, particles -> local_range() );
 }
 
 /**
@@ -104,7 +108,14 @@ void Species::inject( ) {
  */
 void Species::inject( bnd<unsigned int> range ) {
 
-    float2 ref = make_float2( moving_window.motion(), 0 );
+    /// @brief local grid position in global grid
+    auto local_off = particles -> tile_off * particles -> nx;
+
+    /// @brief position of lower corner of local grid in simulation units
+    float2 ref = make_float2( 
+        local_off.x * dx.x + moving_window.motion(),
+        local_off.y * dx.y
+    );
 
     density -> inject( *particles, ppc, dx, ref, range );
 }
@@ -363,6 +374,11 @@ void Species::advance( EMF const &emf, Current &current ) {
  */
 void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
+    std::cerr << "Species::advance_mov_window() is not implemented yet, aborting\n";
+    exit(1);
+
+#if 0
+
     // Advance momenta
     push( emf.E, emf.B );
 
@@ -407,6 +423,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
     // Increase internal iteration number
     iter++;
 
+    #endif
 
 }
 
@@ -662,7 +679,7 @@ void __launch_bounds__(opt_move_block) move_deposit(
     ParticleData part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
     float2 const dt_dx, float const q, float2 const qnx, 
-    unsigned long long * const __restrict__ d_nmove
+    uint64_t * const __restrict__ d_nmove
 ) {
     const int ystride = ext_nx.x; 
     const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
@@ -852,8 +869,10 @@ void __launch_bounds__(opt_move_block) move_deposit(
 
     if ( block_thread_rank() == 0 && blockIdx.z == 0 ) {
         // Update total particle pushes counter (for performance metrics)
+        // for whatever reason atomicAdd does not recognize uint64_t
+        // must use unsigned long long instead
         unsigned long long np64 = tile_np;
-        device::atomic_fetch_add( d_nmove, np64 );
+        device::atomic_fetch_add( (unsigned long long *) d_nmove, np64 );
     }
 }
 
@@ -899,7 +918,7 @@ void move_deposit_shift(
     ParticleData part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
     float2 const dt_dx, float const q, float2 const qnx, int2 const shift,
-    unsigned long long * const __restrict__ d_nmove
+    uint64_t * const __restrict__ d_nmove
 ) {
     const int ystride = ext_nx.x; 
     const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
@@ -1076,7 +1095,7 @@ void move_deposit_shift(
     if ( block_thread_rank() == 0 ) {
         // Update total particle pushes counter (for performance metrics)
         unsigned long long np64 = np;
-        device::atomic_fetch_add( d_nmove, np64 );
+        device::atomic_fetch_add( (unsigned long long *) d_nmove, np64 );
     }
 }
 
@@ -1119,7 +1138,7 @@ __global__
 void move(
     ParticleData part,
     float2 const dt_dx,
-    unsigned long long * const __restrict__ d_nmove
+    uint64_t * const __restrict__ d_nmove
 ) {
 
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
@@ -1174,7 +1193,7 @@ void move(
     if ( block_thread_rank() == 0 ) { 
         // Update total particle pushes counter (for performance metrics)
         unsigned long long np64 = np;
-        device::atomic_fetch_add( d_nmove, np64 );
+        device::atomic_fetch_add( (unsigned long long *) d_nmove, np64 );
     }
 }
 
@@ -1193,11 +1212,6 @@ void Species::move( )
     const float2 dt_dx = make_float2(
         dt / dx.x,
         dt / dx.y
-    );
-
-    const float2 qnx = make_float2(
-        q * dx.x / dt,
-        q * dx.y / dt
     );
 
     dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
@@ -1684,7 +1698,7 @@ void deposit_charge(
  */
 void Species::deposit_charge( grid<float> &charge ) const {
 
-    dim3 grid( charge.ntiles.x, charge.ntiles.y );
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
     auto block = 64;
     size_t shm_size = charge.tile_vol * sizeof(float);
 
@@ -1702,7 +1716,14 @@ void Species::deposit_charge( grid<float> &charge ) const {
  */
 void Species::save() const {
 
-    const char * quants[] = {
+    const std::string path = "PARTICLES";
+
+    const part::quant quants[] = {
+        part::quant::x, part::quant::y,
+        part::quant::ux, part::quant::uy, part::quant::uz
+    };
+
+    const char * qnames[] = {
         "x","y",
         "ux","uy","uz"
     };
@@ -1728,68 +1749,114 @@ void Species::save() const {
         .name = (char *) name.c_str(),
         .label = (char *) name.c_str(),
         .nquants = 5,
-        .quants = (char **) quants,
+        .quants = (char **) qnames,
         .qlabels = (char **) qlabels,
         .qunits = (char **) qunits,
     };
 
-    // The particles object does not know the box dimensions
-    // particles -> save( info, iter_info, "PARTICLES" );
+    // Get total number of particles to save
+    uint64_t local = np_local();
+    uint64_t global = 0;
 
-    uint32_t np = particles -> np_total();
-    info.np = np;
+    particles -> parallel.allreduce( &local, &global, 1, mpi::sum );
 
-    // Open file
-    zdf::file part_file;
-    zdf::open_part_file( part_file, info, iter_info, "PARTICLES/" + name );
+    // Update metadata entry
+    info.np = global;
 
-    // Gather and save each quantity
-    float *d_data = nullptr;
-    float *h_data = nullptr;
-    if( np > 0 ) {
-        d_data = device::malloc<float>( np );
-        h_data = host::malloc<float>( np );
-    }
+    if ( global > 0 ) {
+        // Create a communicator including only the nodes with local particles
+        int color = ( local > 0 ) ? 1 : MPI_UNDEFINED;
+        MPI_Comm comm;
+        MPI_Comm_split( particles -> parallel.get_comm(), color, 0, & comm );
 
-    if ( np > 0 ) {
-        float2 scale = make_float2( dx.x, moving_window.motion() );
-        particles -> gather( part::quant::x, d_data, scale );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "x", h_data, np );
+        // Only nodes with particles are involved in this section
+        if ( local > 0 ) {
 
-    if ( np > 0 ) {
-        float2 scale = make_float2( dx.y, 0 );
-        particles -> gather( part::quant::y, d_data, scale );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "y", h_data, np );
+            // Get rank in new communicator
+            int rank;
+            MPI_Comm_rank( comm, & rank );
 
-    if ( np > 0 ) {
-        particles -> gather( part::quant::ux, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "ux", h_data, np );
+            // Open file
+            zdf::par_file part_file;
+            zdf::open_part_file( part_file, info, iter_info, path+"/"+info.name, comm );
 
-    if ( np > 0 ) {
-        particles -> gather( part::quant::uy, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "uy", h_data, np );
+            // create the datasets
+            zdf::dataset dsets[ info.nquants ];
 
-    if ( np > 0 ) {
-        particles -> gather( part::quant::uz, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "uz", h_data, np );
+            for( uint32_t i = 0; i < info.nquants; i++ ) {
+                dsets[i].name      = info.quants[i];
+                dsets[i].data_type = zdf::data_type<float>();
+                dsets[i].ndims     = 1;
+                dsets[i].data      = nullptr;
+                dsets[i].count[0]  = global; 
 
-    // Close the file
-    zdf::close_file( part_file );
+                if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
+                    std::cerr << "Particles::save() - Unable to create chunked dataset " << info.quants[i] << '\n';
+                    exit(1);
+                }
+            }
 
-    // Cleanup
-    if ( np > 0 ) {
-        device::free( d_data );
-        host::free( h_data );
+            // Allocate buffer for gathering particle data
+            float *d_data = device::malloc<float>( local );
+            float *h_data = host::malloc<float>( local );
+
+            // Get offsets - this avoids recalculating offsets for each quantity
+            uint64_t file_off;
+            MPI_Exscan( &local, &file_off, 1, MPI_UINT64_T, MPI_SUM, comm );
+            if ( rank == 0 ) file_off = 0;
+
+            // Local data chunk
+            zdf::chunk chunk;
+            chunk.count[0] = local;
+            chunk.start[0] = file_off;
+            chunk.stride[0] = 1;
+            chunk.data = h_data;
+
+            float2 scale;
+            
+            // x and y quantities are scaled before saving to file
+            scale = make_float2( dx.x, moving_window.motion() );
+            particles -> gather( part::quant::x, scale, d_data );
+            device::memcpy_tohost( h_data, d_data, local );
+            zdf::write_cdset( part_file, dsets[0], chunk, file_off );
+
+            scale = make_float2( dx.y, 0 );
+            particles -> gather( part::quant::y, scale, d_data );
+            device::memcpy_tohost( h_data, d_data, local );
+            zdf::write_cdset( part_file, dsets[1], chunk, file_off );
+
+            // Remaining quantities are saved "as is"
+            for( uint32_t i = 2; i < info.nquants; i++ ) {
+                particles -> gather( quants[i], d_data );
+                device::memcpy_tohost( h_data, d_data, local );
+                zdf::write_cdset( part_file, dsets[i], chunk, file_off );
+            }
+
+            // Free temporary memory
+            device::free( d_data );
+            host::free( h_data );
+
+            // close the datasets
+            for( uint32_t i = 0; i < info.nquants; i++ ) 
+                zdf::end_cdset( part_file, dsets[i] );
+
+            // Close the file
+            zdf::close_file( part_file );
+        }
+
+        MPI_Comm_free(&comm);
+    } else {
+        // No particles - root node creates an empty file
+        if ( particles -> parallel.root() ) {
+            zdf::file part_file;
+            zdf::open_part_file( part_file, info, iter_info, path+"/"+info.name );
+
+            for ( uint32_t i = 0; i < info.nquants; i ++) {
+                zdf::add_quant_part_file( part_file, info.quants[i],  nullptr, 0 );
+            }
+
+            zdf::close_file( part_file );
+        }
     }
 }
 
@@ -1807,7 +1874,7 @@ void Species::save_charge() const {
     gc.y = {0,1};
 
     // Deposit charge on device
-    grid<float> charge( particles -> ntiles, particles -> nx, gc );
+    grid<float> charge( particles -> ntiles, particles -> nx, gc, particles -> parallel );
 
     charge.zero();
 
@@ -2306,16 +2373,17 @@ void Species::save_phasespace(
 }
 
 /**
- * @brief Initialize data structures and inject particles
+ * @brief Initialize data structures and inject initial particle distribution
  * 
- * @param box_      Simulation global box size
- * @param ntiles    Number of tiles
- * @param nx        Grid size per tile
- * @param dt_       Time step
- * @param id_       Species unique id
+ * @param box_              Global simulation box size
+ * @param global_ntiles     Global number of tiles
+ * @param nx                Individutal tile grid size
+ * @param dt_               Time step
+ * @param id_               Species unique identifier
+ * @param parallel          Parallel configuration
  */
-void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
-    float const dt_, int const id_ ) {
+void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 const nx,
+    float const dt_, int const id_, Partition & parallel ) {
 
     // Store simulation box size
     box = box_;
@@ -2328,29 +2396,44 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
 
     // Set charge normalization factor
     q = copysign( density->n0 , m_q ) / (ppc.x * ppc.y);
-    
-    float2 gnx = make_float2( nx.x * ntiles.x, nx.y * ntiles.y );
+
+    // Get global grid size
+    auto  gnx = nx * global_ntiles;
 
     // Set cell size
     dx.x = box.x / (gnx.x);
     dx.y = box.y / (gnx.y);
 
+    /// @brief Number of tiles in local parallel node
+    uint2 ntiles = parallel.grid_size( global_ntiles );
+
+    /// @brief Local parallel node grid size
+    auto  lnx = nx * ntiles;
+
     // Reference number maximum number of particles
-    unsigned int max_part = 1.2 * gnx.x * gnx.y * ppc.x * ppc.y;
+    unsigned int max_part = 1.2 * lnx.x * lnx.y * ppc.x * ppc.y;
 
-    particles = new Particles( ntiles, nx, max_part );
-    particles->periodic.x = ( bc.x.lower == species::bc::periodic );
-    particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+    // Create particle data structure
+    particles = new Particles( global_ntiles, nx, max_part, parallel );
+    
+    // Set periodic boundaries
+    int2 periodic = {
+        ( bc.x.lower == species::bc::periodic ),
+        ( bc.y.lower == species::bc::periodic )
+    };
 
-    tmp = new Particles( ntiles, nx, max_part );
-    sort = new ParticleSort( ntiles, max_part );
+    particles -> set_periodic( periodic );
+
+    tmp = new Particles( global_ntiles, nx, max_part, parallel );
+    sort = new ParticleSort( ntiles, max_part, parallel );
     np_inj = device::malloc<int>( ntiles.x * ntiles.y );
 
     // Initialize energy diagnostic
     d_energy = device::malloc<double>( 1 );
     device::zero( d_energy, 1 );
 
-    d_nmove = device::malloc<unsigned long long>( 1 );
+    // Initialize particle move counter
+    d_nmove = device::malloc<uint64_t>( 1 );
     device::zero( d_nmove, 1 );
 
     // Reset iteration numbers
@@ -2359,16 +2442,15 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     // Inject initial distribution
 
     // Count particles to inject and store in particles -> offset
-    np_inject( particles -> g_range(), particles -> offset );
+    np_inject( particles -> local_range(), particles -> offset );
 
     // Do an exclusive scan to get the required offsets
     device::exscan_add( particles -> offset, ntiles.x * ntiles.y );
 
     // Inject the particles
-    inject( particles -> g_range() );
+    inject( particles -> local_range() );
 
     // Set inital velocity distribution
     udist -> set( *particles, id );
 
-    // particles -> validate( "After initial injection");
 }

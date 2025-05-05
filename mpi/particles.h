@@ -674,9 +674,6 @@ class ParticleMessage {
             memory::free( buffer );
             max_size = roundup<1048576>(total_size);
             buffer = memory::malloc<uint8_t>( max_size );
-
-            // std::cout << "[" << mpi::world_rank() << "] - allocated " << max_size << " bytes";
-            // std::cout << " @ " << static_cast<void*>(buffer) << "\n";
         }
     }
 
@@ -1194,7 +1191,13 @@ class Particles : public ParticleData {
      */
     void unpack_msg( ParticleSortData &sort, ParticleMessage &recv );
 
-
+    /**
+     * @brief Print information on the number of particles per tile
+     * 
+     * @warning Used for debug purposes only
+     * 
+     * @param msg   (optional) Message to print before printing particle information
+     */
     void info_np( std::string msg = "" ) {
         
         parallel.barrier();

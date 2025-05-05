@@ -51,6 +51,14 @@ void swap( T* &a, T* &b ) {
     T * tmp = a; a = b; b = tmp;
 }
 
+/**
+ * @brief Returns maximum of 2 values
+ * 
+ * @tparam T    Value type
+ * @param a     Value a
+ * @param b     Value b
+ * @return T    Maximum of a, b
+ */
 template < typename T >
 T max( T a, T b ) {
     return ( b > a ) ? b : a ;
@@ -75,7 +83,14 @@ inline T atomicAdd( T & a, T b ) {
     T tmp = a; a += b; return tmp;
 }
 
-
+/**
+ * @brief Prints a 2D array
+ * 
+ * @tparam T        Data type
+ * @tparam T2       Array dimensions data type, must have .x and .y fields
+ * @param buffer    Data buffer
+ * @param dims      Array dimensions (.x and .y)
+ */
 template < typename T, typename T2 >
 inline void print_array( T * __restrict__ buffer, T2 dims ) {
     for( auto i1 = 0; i1 < dims.y; i1 ++ ) {
@@ -123,19 +138,6 @@ auto fma( T const x, T const y, T const z ) {
 namespace memory {
 
 /**
- * @brief Sets a memory region to 0
- * 
- * @tparam T        Data type
- * @param data      Pointer to buffer
- * @param size      Data size (# of elements)
- * @return T* 
- */
-template< typename T >
-T * zero( T * const __restrict__ data, unsigned int const size ) {
-    return (T *) std::memset( (void *) data, 0, size * sizeof(T) );
-}
-
-/**
  * @brief Allocates aligned block of memory
  * 
  * @tparam T        Data type
@@ -174,6 +176,20 @@ void free( T * buffer ) {
     }
 }
 
+/**
+ * @brief Sets a memory region to 0
+ * 
+ * @tparam T        Data type
+ * @param data      Pointer to buffer
+ * @param size      Data size (# of elements)
+ * @return T* 
+ */
+template< typename T >
+T * zero( T * const __restrict__ data, unsigned int const size ) {
+    return (T *) std::memset( (void *) data, 0, size * sizeof(T) );
+}
+
+
 }
 
 namespace omp {
@@ -199,6 +215,10 @@ inline T atomic_fetch_add( T * addr, T val ) {
 
 }
 
+/**
+ * @brief ANSI escape codes for console output
+ * 
+ */
 namespace ansi {
     static const std::string bold(  "\033[1m" );
     static const std::string reset( "\033[0m" );

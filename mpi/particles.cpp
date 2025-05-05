@@ -241,6 +241,8 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
             // Close the file
             zdf::close_file( part_file );
         }
+
+        MPI_Comm_free(&comm);
     } else {
         // No particles - root node creates an empty file
         if ( parallel.root() ) {
@@ -379,8 +381,8 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
 /**
  * @brief Recalculates particle tile offset, leaving room for additional particles
  * 
- * @bnote The routine also leaves room for particles coming from other MPI nodes.
- *        The number of particles in each tile is set to 0
+ * @note The routine also leaves room for particles coming from other MPI nodes.
+ *       The number of particles in each tile is set to 0
  * @param tmp           (out) Temp. Particle buffer
  * @param sort          (in) Sort data (includes information from other MPI nodes)
  * @param extra         (in) Additional particles (optional)

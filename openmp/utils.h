@@ -51,26 +51,6 @@ void swap( T* &a, T* &b ) {
     T * tmp = a; a = b; b = tmp;
 }
 
-/**
- * @brief Dummy atomicAdd function
- * 
- * @warning This function does not insure atomicity, it is only used as a placeholder
- * to ensure that when porting to other architectures we use a proper atomic operation.
- * 
- * @note The syntax is similar to that of the CUDA atomicAdd() operation, but we use a reference
- * instead of a memory address.
- * 
- * @tparam T    Data type
- * @param a     Reference to data value
- * @param b     Value to be added (atomically)
- * @return T    Data value before operation
- */
-template < typename T >
-inline T atomicAdd( T & a, T b ) {
-    T tmp = a; a += b; return tmp;
-}
-
-
 template < typename T, typename T2 >
 inline void print_array( T * __restrict__ buffer, T2 dims ) {
     for( auto i1 = 0; i1 < dims.y; i1 ++ ) {

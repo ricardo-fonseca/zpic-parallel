@@ -4,7 +4,6 @@
 
 #include <iostream>
 
-#include "parallel.h"
 
 #include "utils.h"
 #include "vec_types.h"
@@ -475,8 +474,8 @@ int main( int argc, char *argv[] ) {
     // Initialize SIMD support
     simd_init();
 
+    // Process command line arguments
     int opt;
-    int n = 1;
     int silent = 0;
     std::string test = "weibel";
     std::string param = "2,2,16,16";

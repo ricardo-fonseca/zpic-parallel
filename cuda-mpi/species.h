@@ -123,7 +123,7 @@ private:
     double * d_energy;
 
     /// @brief Total number of particles moved
-    unsigned long long * d_nmove;
+    uint64_t * d_nmove;
 
     /**
      * @brief Shift particle positions due to moving window motion
@@ -184,16 +184,17 @@ public:
     Species( std::string const name, float const m_q, uint2 const ppc );
 
     /**
-     * @brief Initialize data structures
+     * @brief Initialize data structures and inject initial particle distribution
      * 
-     * @param box       Simulation global box size
-     * @param ntiles    Number of tiles
-     * @param nx        Title grid dimension
-     * @param dt        
-     * @param id 
+     * @param box               Global simulation box size
+     * @param global_ntiles     Global number of tiles
+     * @param nx                Individutal tile grid size
+     * @param dt                Time step
+     * @param id                Species unique identifier
+     * @param parallel          Parallel configuration
      */
-    virtual void initialize( float2 const box, uint2 const ntiles, uint2 const nx,
-        float const dt, int const id_ );
+    virtual void initialize( float2 const box, uint2 const global_ntiles, uint2 const nx,
+        float const dt, int const id, Partition & parallel );
 
     /**
      * @brief Destroy the Species object
@@ -239,7 +240,7 @@ public:
         return *udist;
     } 
 
-    /**
+     /**
      * @brief Sets the boundary condition type
      * 
      * @param new_bc 
@@ -275,8 +276,10 @@ public:
 
         // Set periodic flags on tile grids
         if ( particles ) {
-            particles->periodic.x = ( bc.x.lower == species::bc::periodic );
-            particles->periodic.y = ( bc.y.lower == species::bc::periodic );
+            particles -> set_periodic( make_int2( 
+                bc.x.lower == species::bc::periodic,
+                bc.y.lower == species::bc::periodic
+            ));
         }
     }
 
@@ -299,8 +302,14 @@ public:
         if ( iter == 0 ) {
             moving_window.init( dx.x );
 
+            // Set global open boundary conditions
             bc.x.lower = bc.x.upper = species::bc::open;
-            particles->periodic.x = false;
+
+            // Disable periodic.x boundaries for particles object
+            auto periodic = particles -> get_periodic();
+            periodic.x = false;
+            particles -> set_periodic( periodic );
+
             return 0;
         } else {
             std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
@@ -419,29 +428,31 @@ public:
      * 
      * @return uint64_t
      */
-    unsigned long long get_nmove() const {
-        unsigned long long nmove;
+    uint64_t get_nmove() const {
+        uint64_t nmove;
         device::memcpy_tohost( &nmove, d_nmove, 1 );
 
         return nmove;
     }
 
     /**
-     * @brief Returns the maximum number of particles per tile
+     * @brief Returns the (node) local number of particles
      * 
-     * @return auto 
+     * @return uint64_t     Local number of particles
      */
-    uint32_t np_max_tile() const {
-        return particles -> np_max_tile();
+    uint64_t np_local() const {
+        return particles -> np_local();
     }
 
     /**
-     * @brief Returns the total number of particles
+     * @brief Gets global number of particles
+     * @note By default, the correct result is only returned on root node
      * 
-     * @return auto 
+     * @param all           Return result on all parallel nodes (defaults to false)
+     * @return uint64_t     Global number of particles
      */
-    uint64_t np_total() const {
-        return particles -> np_total();
+    uint64_t np_global( bool all = false ) {
+        return particles -> np_global( all );
     }
 
     /**
@@ -481,6 +492,9 @@ public:
         phasespace::quant quant0, float2 const range0, int const size0,
         phasespace::quant quant1, float2 const range1, int const size1 ) const;
 
+    void info_np() {
+        particles->info_np();
+    }
 };
 
 

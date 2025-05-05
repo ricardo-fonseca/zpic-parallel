@@ -9,6 +9,7 @@ CXXFLAGS = -O3
 CXXFLAGS += -std=c++17
 
 CXXFLAGS += --gpu-architecture=compute_80
+CFLAGS   += --gpu-architecture=compute_80
 
 #SOURCE = emf.cpp laser.cpp particles.cpp current.cpp \
 #         udist.cpp density.cpp species.cpp cathode.cpp
@@ -43,6 +44,12 @@ LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 all: dirs $(SOURCE) $(TARGET)
 
 dirs: $(OBJDIR) $(DEPDIR)
+
+info:
+	@ tput bold && echo "Compile options" && tput sgr0
+	@ echo "[c]     $(CC) $(CFLAGS)"
+	@ echo "[c++]   $(CXX) $(CXXFLAGS)"
+	@ echo "[ld]    $(CXX) $(CXXFLAGS) $(LDFLAGS)"
 
 $(TARGET) : $(OBJS) | $(OBJDIR)
 	@echo "$(LINKMSG) $(@F)"

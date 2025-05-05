@@ -3,16 +3,18 @@
 #include <iostream>
 
 /**
- * @brief Construct a new Current:: Current object
+ * @brief Construct a new Current object
  * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- * @param box       Box size
- * @param dt        Time step
+ * @param global_ntiles     Global number of tiles
+ * @param nx                Individual tile size
+ * @param box               Global simulation box size
+ * @param dt                Time step
+ * @param parallel          Parallel partition 
  */
-Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
-    float const dt ) : box(box), 
-    dx( { box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
+Current::Current( uint2 const global_ntiles, uint2 const nx, float2 const box,
+    float const dt, Partition & parallel ) :
+    box(box), 
+    dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
     dt(dt)
 {
 
@@ -22,15 +24,18 @@ Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
     gc.x = {1,2};
     gc.y = {1,2};
 
-    J = new vec3grid<float3> ( ntiles, nx, gc );
+    J = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
     J -> name = "Current density";
 
     // Zero initial current
     // This is only relevant for diagnostics, current should always zeroed before deposition
     J -> zero();
 
-    // Set default boundary conditions to periodic
+    // Set default boundary conditions to be none or periodic
+    // according to parallel partition
     bc = current::bc_type (current::bc::periodic);
+    if ( ! parallel.periodic.x ) bc.x.lower = bc.x.upper = current::bc::none;
+    if ( ! parallel.periodic.y ) bc.y.lower = bc.y.upper = current::bc::none;
 
     // Disable filtering by default
     filter = new Filter::None();

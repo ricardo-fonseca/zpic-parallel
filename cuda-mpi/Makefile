@@ -15,7 +15,8 @@ CXXFLAGS = -O3
 
 CFLAGS   += $(shell mpicc  --showme:compile)
 CXXFLAGS += $(shell mpic++ --showme:compile)
-LDFLAGS  += $(shell mpic++ --showme:link)
+
+LDFLAGS  += -forward-unknown-to-host-compiler $(shell mpic++ --showme:link)
 
 # --------------------------------------------------------------------------- #
 
@@ -24,10 +25,10 @@ CXXFLAGS += --gpu-architecture=compute_80
 CFLAGS += --gpu-architecture=compute_80
 
 # c11 compliance and full warnings
-CFLAGS += -Wall -std=c11
+CFLAGS += -Xcompiler -Wall -Xcompiler -std=c11
 
 # c++17 compliance and full warnings (except for VLA extension)
-CXXFLAGS += -std=c++17
+CXXFLAGS += -Xcompiler -Wall -std=c++17
 
 # --------------------------------------------------------------------------- #
 
@@ -40,7 +41,7 @@ SOURCE = parallel.cpp emf.cpp laser.cpp particles.cpp current.cpp \
 SOURCE += main.cpp
 
 # Add ZDF library
-SOURCE += zdf.c
+SOURCE += zdf.c zdf-parallel.c
 
 TARGET = zpic
 
@@ -59,11 +60,18 @@ CPPMSG  := $(shell tput bold && tput setaf 4 && echo "[c++]" && tput sgr0)
 LINKMSG := $(shell tput bold && tput setaf 2 && echo "[link]" && tput sgr0)
 
 .PHONY: dirs
+.PHONE: info
 
 .PHONY: all
 all: dirs $(SOURCE) $(TARGET)
 
 dirs: $(OBJDIR) $(DEPDIR)
+
+info:
+	@ tput bold && echo "Compile options" && tput sgr0
+	@ echo "[c]     $(CC) $(CFLAGS)"
+	@ echo "[c++]   $(CXX) $(CXXFLAGS)"
+	@ echo "[ld]    $(CXX) $(CXXFLAGS) $(LDFLAGS)"
 
 $(TARGET) : $(OBJS) | $(OBJDIR)
 	@echo "$(LINKMSG) $(@F)"
