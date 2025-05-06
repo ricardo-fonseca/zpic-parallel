@@ -97,10 +97,16 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
         print("(*error*) file {} is not a 2D grid file".format(filename))
         return
 
-    range = [
-        [info.grid.axis[0].min, info.grid.axis[0].max],
-        [info.grid.axis[1].min, info.grid.axis[1].max]
-    ]
+    if ( not info.grid.axis ):
+        range = [
+            [ 0, info.grid.nx[0] ],
+            [ 0, info.grid.nx[1] ]
+        ]
+    else:
+        range = [
+            [info.grid.axis[0].min, info.grid.axis[0].max],
+            [info.grid.axis[1].min, info.grid.axis[1].max]
+        ]
 
     # Linearly scale data if requested
     if ( scale ):
@@ -121,20 +127,43 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
             extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
             aspect = 'auto', cmap=cmap )
 
-    zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
+    if ( info.grid.label and info.grid.units ):
+        zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
+        plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+    elif ( info.grid.label ):
+        plt.colorbar().set_label(r'$\sf{' + info.grid.label.replace(" ","\\;") + r'}$')
+    else:
+        plt.colorbar()
 
-    plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+    if ( info.grid.axis ):
+        if ( info.grid.axis[0].units ):
+            xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
+        else:
+            xlabel = info.grid.axis[0].label
 
-    xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
-    ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
+        if ( info.grid.axis[1].units ):
+            ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
+        else:
+            ylabel = info.grid.axis[1].label
 
-    plt.xlabel(r'$\sf{' + xlabel + r'}$')
-    plt.ylabel(r'$\sf{' + ylabel + r'}$')
+        plt.xlabel(r'$\sf{' + xlabel + r'}$')
+        plt.ylabel(r'$\sf{' + ylabel + r'}$')
 
-    plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
-        info.grid.label.replace(" ","\\;"),
-        info.iteration.t,
-        info.iteration.tunits))
+    if ( info.iteration ):
+        if ( info.iteration.tunits ):
+            plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
+                info.grid.label.replace(" ","\\;"),
+                info.iteration.t,
+                info.iteration.tunits))
+        else:
+            plt.title("$\\sf {} $\nt = ${:g}$".format(
+                info.grid.label.replace(" ","\\;"),
+                info.iteration.t ))
+    else:
+        if ( info.grid.label ):
+            plt.title("$\\sf {}".format( info.grid.label))
+        else:
+            plt.title( info.grid.name )
 
     if ( xlim ):
         plt.xlim(xlim)

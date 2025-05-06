@@ -821,7 +821,6 @@ namespace dest {
  */
 template <class T>
 class grid {
-
     protected:
 
     /// @brief Local number of tiles
@@ -927,7 +926,7 @@ class grid {
     /// @brief Tile grid size
     const uint2 nx;
     
-    /// Tile guard cells
+    /// @brief Tile guard cells
     const bnd<unsigned int> gc;
 
     /// @brief Tile grize including guard cells
@@ -967,9 +966,7 @@ class grid {
 
         // Set local information (ntiles, tile_start and local_periodic)
         initialize();
-
     };   
-
 
     /**
      * @brief Construct a new grid object
@@ -1597,64 +1594,67 @@ class grid {
 
         // Fill in grid dimensions
         info.ndims = 2;
-        info.count[0] = gnx.x;
-        info.count[1] = gnx.y;
+        info.count[0] = global_ntiles.x * nx.x;
+        info.count[1] = global_ntiles.y * nx.y;
 
         const std::size_t bsize = gnx.x * gnx.y;
 
+        // Allocate buffers on host and device to gather data
         T * h_data = host::malloc<T>( bsize );
-
         T * d_data = device::malloc<T>( bsize );
 
+        // Gather data on contiguous grid
         gather( d_data );
 
+        // Copy to host and free device memory
         device::memcpy_tohost( h_data, d_data, bsize );
-
         device::free( d_data );
 
-        zdf::save_grid( h_data, info, iter, path );
+        // Information on local chunk of grid data
+        zdf::chunk chunk;
+        chunk.count[0] = gnx.x;
+        chunk.count[1] = gnx.y;
+        chunk.start[0] = tile_off.x * nx.x;
+        chunk.start[1] = tile_off.y * nx.y;
+        chunk.stride[0] = chunk.stride[1] = 1;
+        chunk.data = (void *) h_data;
 
+        // Save data
+        zdf::save_grid<T>( chunk, info, iter, path, part.get_comm() );
+
+        // Free remaining temporary buffer        
         host::free( h_data );
     };
 
-    void save( std::string path ) {
-        
-        // Prepare file info
-        zdf::grid_axis axis[2];
-        axis[0] = (zdf::grid_axis) {
-            .name = (char *) "x",
-            .min = 0.,
-            .max = 1. * gnx.x,
-            .label = (char *) "x",
-            .units = (char *) ""
-        };
+    /**
+     * @brief Save grid values to disk
+     * 
+     * @param filename      Output file name
+     */
+    void save( std::string filename ) {
+   
+        const std::size_t bsize = gnx.x * gnx.y;
 
-        axis[1] = (zdf::grid_axis) {
-            .name = (char *) "y",
-            .min = 0.,
-            .max = 1. * gnx.y,
-            .label = (char *) "y",
-            .units = (char *) ""
-        };
+        // Allocate buffers on host and device to gather data
+        T * h_data = host::malloc<T>( bsize );
+        T * d_data = device::malloc<T>( bsize );
 
-        std::string grid_name = "cuda";
-        std::string grid_label = "cuda test";
+        // Gather data on contiguous grid
+        gather( d_data );
 
-        zdf::grid_info info = {
-            .name = (char *) grid_name.c_str(),
-            .label = (char *) grid_label.c_str(),
-            .units = (char *) "",
-            .axis  = axis
-        };
+        // Copy to host and free device memory
+        device::memcpy_tohost( h_data, d_data, bsize );
+        device::free( d_data );
 
-        zdf::iteration iter = {
-            .name = (char *) "ITERATION",
-            .n = 0,
-            .t = 0,
-            .time_units = (char *) ""
-        };
+        uint64_t global[2] = { global_ntiles.x * nx.x, global_ntiles.y * nx.y };
+        uint64_t start[2]  = { tile_off.x * nx.x, tile_off.y * nx.y };
+        uint64_t local[2]  = { gnx.x, gnx.y };
 
-        save( info, iter, path );
+        // Save data
+        zdf::save_grid( h_data, 2, global, start, local, name, filename, part.get_comm() );
+
+        // Free remaining temporary buffer 
+        host::free( h_data );
     }
 
 };
