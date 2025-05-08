@@ -319,19 +319,18 @@ void gather_quant(
     const auto  offset = part.offset[ tile_id ];
     const auto  np     = part.np[ tile_id ];
 
-    // Spatial offsets of local tile
+    // Global spatial offsets of local tile
     const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
     const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
 
-
-    int2   * const __restrict__ ix       = & part.ix[ offset ];
-    float2 const * __restrict__ const x  = & part.x[ offset ];
-    float3 const * __restrict__ const u  = & part.u[ offset ];
+    int2   const * __restrict__ const ix = & part.ix[ offset ];
+    float2 const * __restrict__ const x  = & part.x [ offset ];
+    float3 const * __restrict__ const u  = & part.u [ offset ];
 
     for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
-        if constexpr( quant == part::x  ) val = ( offx + ix[idx].x) + (0.5f + x[idx].x);
-        if constexpr( quant == part::y  ) val = ( offy + ix[idx].y) + (0.5f + x[idx].y);
+        if constexpr( quant == part::x  ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
+        if constexpr( quant == part::y  ) val = ( offy + ix[idx].y ) + (0.5f + x[idx].y);
         if constexpr( quant == part::ux ) val = u[idx].x;
         if constexpr( quant == part::uy ) val = u[idx].y;
         if constexpr( quant == part::uz ) val = u[idx].z;

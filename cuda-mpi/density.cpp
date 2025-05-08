@@ -335,8 +335,8 @@ void step(
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
 
-        const int shiftx = tile_idx.x * nx.x;
-        const int shifty = tile_idx.y * nx.y;
+        const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
 
         for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
             for( unsigned i0 = 0; i0 < ppc.x; i0++) {
@@ -351,8 +351,8 @@ void step(
                     );
 
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
 
                     int inj = t > step;
                     int off = block::exscan_add( inj );
@@ -425,8 +425,7 @@ void step_np(
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    __shared__ int np_local;
-    np_local = 0;
+    __shared__ int np_local; np_local = 0;
     block_sync();
 
     // Find injection range in tile coordinates
@@ -455,8 +454,8 @@ void step_np(
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
 
-        const int shiftx = tile_idx.x * nx.x;
-        const int shifty = tile_idx.y * nx.y;
+        const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
 
         for( int idx = block_thread_rank(); idx < vol; idx += block_num_threads() ) {
             int2 const cell = make_int2(
@@ -470,8 +469,8 @@ void step_np(
                         dpcy * ( i1 + 0.5 ) - 0.5
                     );
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     
                     int inj = t > step;
                     inj_np += inj;
@@ -563,8 +562,8 @@ void slab(
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
 
-        const int shiftx = tile_idx.x * nx.x;
-        const int shifty = tile_idx.y * nx.y;
+        const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
 
         for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
             for( unsigned i0 = 0; i0 < ppc.x; i0++) {
@@ -579,8 +578,8 @@ void slab(
                     );
 
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     
                     int inj = (t >= start) && (t<finish );
 
@@ -613,6 +612,10 @@ void slab(
 void Density::Slab::inject( Particles & particles,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {
+
+    mpi::cout << "Density::Slab::inject ref      = " << ref << '\n';
+    mpi::cout << "Density::Slab::inject tile_off = " << particles.tile_off << '\n';
+
     dim3 grid( particles.ntiles.x, particles.ntiles.y );
     dim3 block( 1024 );
 
@@ -677,8 +680,8 @@ void slab_np(
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
 
-        const int shiftx = tile_idx.x * nx.x;
-        const int shifty = tile_idx.y * nx.y;
+        const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
 
         for( int idx = block_thread_rank(); idx < vol; idx += block_num_threads() ) {
             int2 const cell = make_int2(
@@ -692,8 +695,8 @@ void slab_np(
                         dpcy * ( i1 + 0.5 ) - 0.5
                     );
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     
                     int inj = (t >= start) && (t<finish );
                     inj_np += inj;
@@ -720,6 +723,8 @@ void Density::Slab::np_inject( Particles & particles,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
 {
+    mpi::cout << "Density::Slab::inject    ref      = " << ref << '\n';
+    mpi::cout << "Density::Slab::np_inject tile_off = " << particles.tile_off << '\n';
 
     dim3 grid( particles.ntiles.x, particles.ntiles.y );
     dim3 block( 1024 );
@@ -792,8 +797,8 @@ void sphere(
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
 
-        const int shiftx = tile_idx.x * nx.x;
-        const int shifty = tile_idx.y * nx.y;
+        const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
         const float r2 = radius*radius;
 
         for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
@@ -895,8 +900,8 @@ void sphere_np(
         double dpcx = 1.0 / ppc.x;
         double dpcy = 1.0 / ppc.y;
 
-        const int shiftx = tile_idx.x * nx.x;
-        const int shifty = tile_idx.y * nx.y;
+        const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
         const float r2 = radius*radius;
 
         for( int idx = block_thread_rank(); idx < vol; idx += block_num_threads() ) {

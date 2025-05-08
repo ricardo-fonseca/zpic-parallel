@@ -268,16 +268,23 @@ void test_laser( ) {
     save_emf();
 }
 
-#if 0
-
 #include "simulation.h"
 
 void test_inj( ) {
 
-    std::cout << "starting " << __func__ << "...\n";
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...\n";
+        std::cout << ansi::reset;
+    }
 
-    uint2 ntiles{ 2, 2 };
-    uint2 nx{ 64, 64 };
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    Partition parallel( partition );
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
 
     float2 box{ 12.8, 12.8 };
 
@@ -286,22 +293,46 @@ void test_inj( ) {
     uint2 ppc{ 8, 8 };
     Species electrons( "electrons", -1.0f, ppc );
 
+    parallel.barrier();
+    if ( mpi::world_root() ) std::cout << "Created species\n";
+
     // electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
     // electrons.set_density(Density::Slab(coord::y, 1.0, 5.0, 7.0));
     electrons.set_density( Density::Sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
-    electrons.set_udist( UDistribution::Thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
 
-    electrons.initialize( box, ntiles, nx, dt, 0 );
+    parallel.barrier();
+    if ( mpi::world_root() ) std::cout << "Density set\n";
+
+//    electrons.set_udist( UDistribution::Thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+
+    electrons.initialize( box, ntiles, nx, dt, 0, parallel );
+
+    mpi::cout << "np = " << electrons.np_local() << '\n';
+
+    parallel.barrier();
+    if ( mpi::world_root() ) std::cout << "Initialization complete\n";
+
 
     electrons.save_charge();
+
+    parallel.barrier();
+    if ( mpi::world_root() ) std::cout << "Charge saved\n";
+
+/*
     electrons.save();
     electrons.save_phasespace(
         phasespace::ux, float2{-1, 3}, 256,
         phasespace::uz, float2{-1, 1}, 128
     );
-
-    std::cout << __func__ << " complete.\n";
+*/
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
 }
+
+#if 0
 
 void test_mov( ) {
 
@@ -789,10 +820,9 @@ int main( int argc, char *argv[] ) {
     
     // test_vec3grid( );
 
-    test_laser( );
+    // test_laser( );
 
-
-    // test_inj( );
+    test_inj( );
 
     // test_mov( );
     // test_current( );

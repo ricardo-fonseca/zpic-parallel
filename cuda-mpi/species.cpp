@@ -108,14 +108,7 @@ void Species::inject( ) {
  */
 void Species::inject( bnd<unsigned int> range ) {
 
-    /// @brief local grid position in global grid
-    auto local_off = particles -> tile_off * particles -> nx;
-
-    /// @brief position of lower corner of local grid in simulation units
-    float2 ref = make_float2( 
-        local_off.x * dx.x + moving_window.motion(),
-        local_off.y * dx.y
-    );
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> inject( *particles, ppc, dx, ref, range );
 }
@@ -1874,7 +1867,7 @@ void Species::save_charge() const {
     gc.y = {0,1};
 
     // Deposit charge on device
-    grid<float> charge( particles -> ntiles, particles -> nx, gc, particles -> parallel );
+    grid<float> charge( particles -> global_ntiles, particles -> nx, gc, particles -> parallel );
 
     charge.zero();
 
@@ -1903,7 +1896,7 @@ void Species::save_charge() const {
     std::string grid_name = name + "-charge";
     std::string grid_label = name + " \\rho";
 
-    zdf::grid_info info = {
+    zdf::grid_info grid_info = {
         .name = (char *) grid_name.c_str(),
         .label = (char *) grid_label.c_str(),
         .units = (char *) "n_e",
@@ -1920,7 +1913,7 @@ void Species::save_charge() const {
     std::string path = "CHARGE/";
     path += name;
     
-    charge.save( info, iter_info, path.c_str() );
+    charge.save( grid_info, iter_info, path );
 }
 
 namespace kernel {
