@@ -303,28 +303,18 @@ void test_inj( ) {
     parallel.barrier();
     if ( mpi::world_root() ) std::cout << "Density set\n";
 
-//    electrons.set_udist( UDistribution::Thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+    electrons.set_udist( UDistribution::Thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
 
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
-    mpi::cout << "np = " << electrons.np_local() << '\n';
-
-    parallel.barrier();
-    if ( mpi::world_root() ) std::cout << "Initialization complete\n";
-
-
     electrons.save_charge();
-
-    parallel.barrier();
-    if ( mpi::world_root() ) std::cout << "Charge saved\n";
-
-/*
     electrons.save();
     electrons.save_phasespace(
         phasespace::ux, float2{-1, 3}, 256,
         phasespace::uz, float2{-1, 1}, 128
     );
-*/
+
+    parallel.barrier();
     if ( mpi::world_root() ) {
         std::cout << ansi::bold;
         std::cout << __func__ << "() complete!\n";

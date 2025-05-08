@@ -612,10 +612,6 @@ void slab(
 void Density::Slab::inject( Particles & particles,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {
-
-    mpi::cout << "Density::Slab::inject ref      = " << ref << '\n';
-    mpi::cout << "Density::Slab::inject tile_off = " << particles.tile_off << '\n';
-
     dim3 grid( particles.ntiles.x, particles.ntiles.y );
     dim3 block( 1024 );
 
@@ -723,9 +719,6 @@ void Density::Slab::np_inject( Particles & particles,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
 {
-    mpi::cout << "Density::Slab::inject    ref      = " << ref << '\n';
-    mpi::cout << "Density::Slab::np_inject tile_off = " << particles.tile_off << '\n';
-
     dim3 grid( particles.ntiles.x, particles.ntiles.y );
     dim3 block( 1024 );
 

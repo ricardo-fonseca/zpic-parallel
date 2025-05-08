@@ -79,9 +79,15 @@ void thermal( ParticleData const part, uint2 rnd_seed, const float3 uth, const f
     float3 * __restrict__ const u  = &part.u[ tile_off ];
 
     // Initialize random state variables
+    uint2 global_tile = make_uint2( 
+        part.tile_off.x + tile_idx.x,
+        part.tile_off.y + tile_idx.y
+    );
+    int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
+
     uint2 state; double norm;
     zrandom::rand_init( 
-        tile_id * block_num_threads() +  block_thread_rank(),
+        global_tid * block_num_threads() +  block_thread_rank(),
         rnd_seed, state, norm
     );
 
@@ -126,9 +132,15 @@ void thermal_corr( ParticleData const part, uint2 rnd_seed, const float3 uth, co
     int2   * __restrict__ const ix = &part.ix[ tile_off ];
 
     // Initialize random state variables
+    uint2 global_tile = make_uint2( 
+        part.tile_off.x + tile_idx.x,
+        part.tile_off.y + tile_idx.y
+    );
+    int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
+
     uint2 state; double norm;
     zrandom::rand_init( 
-        tile_id * block_num_threads() +  block_thread_rank(),
+        global_tid * block_num_threads() +  block_thread_rank(),
         rnd_seed, state, norm
     );
 

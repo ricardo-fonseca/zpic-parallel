@@ -1952,15 +1952,16 @@ void dep_pha1(
 
     float const pha_rdx = size / (range.y - range.x);
 
+    const int shiftx = (part.tile_off.x + tile_idx.x) * tile_nx.x;
+    const int shifty = (part.tile_off.y + tile_idx.y) * tile_nx.y;
+
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
         float d;
-        switch( quant ) {
-        case( phasespace:: x ): d = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ): d = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d = u[i].x; break;
-        case( phasespace:: uy ): d = u[i].y; break;
-        case( phasespace:: uz ): d = u[i].z; break;
-        }
+        if constexpr ( quant == phasespace:: x  ) d = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant == phasespace:: y  ) d = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant == phasespace:: ux ) d = u[i].x;
+        if constexpr ( quant == phasespace:: uy ) d = u[i].y;
+        if constexpr ( quant == phasespace:: uz ) d = u[i].z;
 
         float n =  (d - range.x ) * pha_rdx - 0.5f;
         int   k = int( n + 1 ) - 1;
@@ -2079,8 +2080,13 @@ void Species::save_phasespace( phasespace::quant quant, float2 const range,
     dep_phasespace( d_data, quant, range, size );
     device::memcpy_tohost(  h_data, d_data, size );
 
-    // Save file
-    zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
+    // Add contributions from all parallel nodes to root node
+    particles -> parallel.reduce( h_data, size, mpi::sum );
+
+    // Save file (data is on root node)
+    if ( particles -> parallel.root() ) {
+        zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
+    }
 
     host::free( h_data );
     device::free( d_data );
@@ -2130,28 +2136,27 @@ void dep_pha2(
     float const pha_rdx0 = size0 / (range0.y - range0.x);
     float const pha_rdx1 = size1 / (range1.y - range1.x);
 
+    const int shiftx = (part.tile_off.x + tile_idx.x) * tile_nx.x;
+    const int shifty = (part.tile_off.y + tile_idx.y) * tile_nx.y;
+
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
         float d0;
-        switch( quant0 ) {
-            case( phasespace:: x ):  d0 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-            case( phasespace:: y ):  d0 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-            case( phasespace:: ux ): d0 = u[i].x; break;
-            case( phasespace:: uy ): d0 = u[i].y; break;
-            case( phasespace:: uz ): d0 = u[i].z; break;
-        }
+        if constexpr ( quant0 == phasespace:: x )  d0 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant0 == phasespace:: y )  d0 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant0 == phasespace:: ux ) d0 = u[i].x;
+        if constexpr ( quant0 == phasespace:: uy ) d0 = u[i].y;
+        if constexpr ( quant0 == phasespace:: uz ) d0 = u[i].z;
 
         float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
         int   k0 = int( n0 + 1 ) - 1;
         float w0 = n0 - k0;
 
         float d1;
-        switch( quant1 ) {
-            //case( phasespace:: x ):  d1 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-            case( phasespace:: y ):  d1 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-            case( phasespace:: ux ): d1 = u[i].x; break;
-            case( phasespace:: uy ): d1 = u[i].y; break;
-            case( phasespace:: uz ): d1 = u[i].z; break;
-        }
+        // if constexpr ( quant1 == phasespace:: x )  d1 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant1 == phasespace:: y )  d1 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant1 == phasespace:: ux ) d1 = u[i].x;
+        if constexpr ( quant1 == phasespace:: uy ) d1 = u[i].y;
+        if constexpr ( quant1 == phasespace:: uz ) d1 = u[i].z;
 
         float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
         int   k1 = int( n1 + 1 ) - 1;
@@ -2359,7 +2364,13 @@ void Species::save_phasespace(
     dep_phasespace( d_data, quant0, range0, size0, quant1, range1, size1 );
     device::memcpy_tohost(  h_data, d_data, size0 * size1 );
 
-    zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
+    // Add contributions from all parallel nodes to root node
+    particles -> parallel.reduce( h_data, size0 * size1, mpi::sum );
+
+    // Save file (data is on root node)
+    if ( particles -> parallel.root() ) {
+        zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
+    }
 
     host::free( h_data );
     device::free( d_data );
