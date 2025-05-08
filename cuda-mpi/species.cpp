@@ -1624,7 +1624,7 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
         block::set_shmem_size( kernel::push <species::euler>, shm_size );
         kernel::push <species::euler> <<< grid, block, shm_size >>> ( 
             *particles, E->d_buffer, B->d_buffer,
-            E->ntiles, E->ext_nx, E->offset, 
+            E->get_ntiles(), E->ext_nx, E->offset, 
             alpha, d_energy
         );
         break;
@@ -1632,7 +1632,7 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
         block::set_shmem_size( kernel::push <species::boris>, shm_size );
         kernel::push <species::boris> <<< grid, block, shm_size >>> ( 
             *particles, E->d_buffer, B->d_buffer,
-            E->ntiles, E->ext_nx, E->offset, 
+            E->get_ntiles(), E->ext_nx, E->offset, 
             alpha, d_energy
         );
         break;

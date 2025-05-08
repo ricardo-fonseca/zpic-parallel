@@ -37,12 +37,12 @@ void add_kernel(T * __restrict__ a, T const * __restrict__ b, size_t const size 
 /**
  * @brief CUDA kernel for gather operation
  * 
- * @tparam T 
+ * @tparam T        Data type
  * @param d_out     Output buffer
  * @param d_buffer  Input buffer (includes offset to cell [0,0])
- * @param gnx       Global grid size
- * @param nx        Local grid size
- * @param ext_nx    Local grid size including guard cells
+ * @param ntiles    Number of tiles
+ * @param nx        Tile size
+ * @param ext_nx    Tile size including guard cells
  */
 template< typename T >
 __global__
@@ -55,7 +55,7 @@ void gather_kernel(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    const uint2  gnx = { ntiles.x * nx.x, ntiles.y * nx.y };
+    const uint2  local_nx = { ntiles.x * nx.x, ntiles.y * nx.y };
 
     auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
 
@@ -66,7 +66,7 @@ void gather_kernel(
         auto const gix = tile_idx.x * nx.x + ix;
         auto const giy = tile_idx.y * nx.y + iy;
 
-        auto const out_idx = giy * gnx.x + gix;
+        auto const out_idx = giy * local_nx.x + gix;
 
         d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ];
     }
@@ -393,7 +393,8 @@ void kernel_copy_to_gc_x_send(
     unsigned int ty = blockIdx.y;
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.x is constant inside a block so there is no thread divergence
@@ -447,7 +448,8 @@ void kernel_copy_to_gc_x_recv(
     unsigned int ty = blockIdx.y;
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.x is constant inside a block so there is no thread divergence
@@ -501,7 +503,8 @@ void kernel_copy_to_gc_y_send(
     unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.y is constant inside a block so there is no thread divergence
@@ -555,7 +558,8 @@ void kernel_copy_to_gc_y_recv(
     unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.y is constant inside a block so there is no thread divergence
@@ -609,7 +613,8 @@ void kernel_add_from_gc_x_send(
     unsigned int ty = blockIdx.y;
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.x is constant inside a block so there is no thread divergence
@@ -620,7 +625,7 @@ void kernel_add_from_gc_x_send(
             for( int idx = block_thread_rank(); idx < ext_nx.y * gc_x_lower; idx += block_num_threads() ) {
                 const int i = idx % gc_x_lower;
                 const int j = idx / gc_x_lower;
-                msg[ j * gc_x_lower + i ] = local[ j * ext_nx.x + gc_x_lower + i ];
+                msg[ j * gc_x_lower + i ] = local[ j * ext_nx.x + i ];
             }
         }
     } else {
@@ -664,7 +669,8 @@ void kernel_add_from_gc_x_recv(
     unsigned int ty = blockIdx.y;
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.x is constant inside a block so there is no thread divergence
@@ -718,7 +724,8 @@ void kernel_add_from_gc_y_send(
     unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.y is constant inside a block so there is no thread divergence
@@ -772,7 +779,8 @@ void kernel_add_from_gc_y_recv(
     unsigned int ty = ( blockIdx.y == 0 ) ? 0 : ntiles.y - 1;    
 
     const auto tid = ty * ntiles.x + tx;
-    const auto tile_off = tid * (ext_nx.x * ext_nx.y);
+    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const auto tile_off = tid * tile_vol;
     auto * __restrict__ local = & d_buffer[ tile_off ];
     
     // Note that blockIdx.y is constant inside a block so there is no thread divergence
@@ -790,7 +798,7 @@ void kernel_add_from_gc_y_recv(
         // upper message
         if ( upper != nullptr ) {
             T * __restrict__ msg = & upper[ tx * (gc_y_lower * ext_nx.x) ];
-            for( int idx = block_thread_rank(); idx < gc_y_upper * ext_nx.x; idx += block_num_threads() ) {
+            for( int idx = block_thread_rank(); idx < gc_y_lower * ext_nx.x; idx += block_num_threads() ) {
                 const int i = idx % ext_nx.x;
                 const int j = idx / ext_nx.x;
                 local[ ( nx.y + j ) * ext_nx.x + i ] +=  msg[ j * ext_nx.x + i ];
@@ -833,7 +841,7 @@ class grid {
     int2 periodic;
 
     /// @brief Local grid size
-    uint2 gnx;
+    uint2 local_nx;
 
     /// @brief Buffers for sending messages
     pair< Message<T>* > msg_send;
@@ -854,7 +862,7 @@ class grid {
         part.grid_local( global_ntiles, ntiles, tile_off );
 
         // Get local grid size
-        gnx = ntiles * nx;
+        local_nx = ntiles * nx;
 
         // Get local periodic flag
         periodic.x = part.periodic.x && (part.dims.x == 1);
@@ -1010,6 +1018,13 @@ class grid {
     uint2 get_tile_off() { return tile_off; };
 
     /**
+     * @brief Get the global grid size
+     * 
+     * @return uint2 
+     */
+    uint2 get_global_nx() { return global_ntiles  * nx; }
+
+    /**
      * @brief grid destructor
      * 
      */
@@ -1117,7 +1132,7 @@ class grid {
             d_out, d_buffer + offset,
             ntiles, nx, ext_nx );
 
-        return gnx.x * gnx.y;
+        return local_nx.x * local_nx.y;
     }
 
 
@@ -1507,11 +1522,7 @@ class grid {
                 d_buffer, ntiles, ext_nx, shift
             );
 
-            // Update x guard cells not changing lower and upper global guard cells
-            copy_to_gc_x_kernel <<< grid, 128 >>> (
-                d_buffer, ntiles, nx, ext_nx,
-                0, gc.x.lower, gc.x.upper
-            );
+            copy_to_gc_x();
 
         } else {
             ABORT( "grid::x_shift_left(), shift value too large, must be <= gc.x.upper" );
@@ -1543,10 +1554,7 @@ class grid {
                 d_buffer, ntiles, nx, ext_nx, gc.x.lower, a, b, c
             ); 
 
-            copy_to_gc_x_kernel <<< grid, 128 >>> (
-                d_buffer, ntiles, nx, ext_nx,
-                periodic.x, gc.x.lower, gc.x.upper
-            );
+            copy_to_gc_x();
 
         } else {
             ABORT("grid::kernel3_x() requires at least 1 guard cell at both the lower and upper x boundaries.");
@@ -1574,10 +1582,7 @@ class grid {
                 d_buffer, ntiles, nx, ext_nx, gc.y.lower, a, b, c
             ); 
 
-            copy_to_gc_y_kernel <<< grid, 128 >>> (
-                d_buffer, ntiles, nx, ext_nx,
-                periodic.y, gc.y.lower, gc.y.upper
-            );
+            copy_to_gc_y();
 
         } else {
             ABORT("grid::kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.");
@@ -1590,6 +1595,16 @@ class grid {
      * The field type <T> must be supported by ZDF file format
      * 
      */
+
+    /**
+     * @brief Save field values to disk
+     * 
+     * @note The field type <T> must be supported by ZDF file format
+     * 
+     * @param info      Grid metadata (label, units, axis, etc.). Information is used to set file name
+     * @param iter      Iteration metadata
+     * @param path      Base path for file
+     */
     void save( zdf::grid_info &info, zdf::iteration &iter, std::string path ) {
 
         // Fill in grid dimensions
@@ -1597,7 +1612,7 @@ class grid {
         info.count[0] = global_ntiles.x * nx.x;
         info.count[1] = global_ntiles.y * nx.y;
 
-        const std::size_t bsize = gnx.x * gnx.y;
+        const std::size_t bsize = local_nx.x * local_nx.y;
 
         // Allocate buffers on host and device to gather data
         T * h_data = host::malloc<T>( bsize );
@@ -1612,8 +1627,8 @@ class grid {
 
         // Information on local chunk of grid data
         zdf::chunk chunk;
-        chunk.count[0] = gnx.x;
-        chunk.count[1] = gnx.y;
+        chunk.count[0] = local_nx.x;
+        chunk.count[1] = local_nx.y;
         chunk.start[0] = tile_off.x * nx.x;
         chunk.start[1] = tile_off.y * nx.y;
         chunk.stride[0] = chunk.stride[1] = 1;
@@ -1629,11 +1644,11 @@ class grid {
     /**
      * @brief Save grid values to disk
      * 
-     * @param filename      Output file name
+     * @param filename      Output file name (includes path)
      */
     void save( std::string filename ) {
    
-        const std::size_t bsize = gnx.x * gnx.y;
+        const std::size_t bsize = local_nx.x * local_nx.y;
 
         // Allocate buffers on host and device to gather data
         T * h_data = host::malloc<T>( bsize );
@@ -1648,7 +1663,7 @@ class grid {
 
         uint64_t global[2] = { global_ntiles.x * nx.x, global_ntiles.y * nx.y };
         uint64_t start[2]  = { tile_off.x * nx.x, tile_off.y * nx.y };
-        uint64_t local[2]  = { gnx.x, gnx.y };
+        uint64_t local[2]  = { local_nx.x, local_nx.y };
 
         // Save data
         zdf::save_grid( h_data, 2, global, start, local, name, filename, part.get_comm() );

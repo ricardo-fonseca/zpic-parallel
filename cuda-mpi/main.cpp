@@ -16,19 +16,21 @@
 
 __global__
 void test_grid_kernel( 
-    float * const __restrict__ d_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx )
+    float * const __restrict__ d_buffer,  uint2 const ntiles,
+    uint2 const nx, uint2 const ext_nx, 
+    uint2 const global_ntiles, uint2 const global_off )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
     const int    tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
     const size_t tile_off = tile_id * roundup4( ext_nx.x * ext_nx.y );
-
     auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
 
-    for( auto idx = block_thread_rank(); idx < nx.x * nx.y; idx += block_num_threads() ) {
+    const auto   tile_val = ( global_off.y + tile_idx.y ) * global_ntiles.x + ( global_off.x + tile_idx.x );
+
+    for( auto idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
         const auto iy = idx / nx.x; 
         const auto ix = idx % nx.x;
-        tile_data[iy * ext_nx.x + ix] = tile_id;
+        tile_data[iy * ext_nx.x + ix] = tile_val;
     }
 }
 
@@ -45,8 +47,8 @@ void test_grid( void ) {
     uint2 partition = make_uint2( 2, 2 );
 
     // Global number of tiles
-    const uint2 ntiles = { 8, 8 };
-    const uint2 nx = { 32, 32 };
+    const uint2 global_ntiles = { 4, 4 };
+    const uint2 nx     = { 12, 12 };
 
     bnd<unsigned int> gc;
     gc.x = {1,2};
@@ -54,35 +56,38 @@ void test_grid( void ) {
 
     Partition parallel( partition );
 
-    grid<float> data( ntiles, nx, gc, parallel );
+    grid<float> data( global_ntiles, nx, gc, parallel );
+
+    // Get local number of tiles
+    const auto ntiles   = data.get_ntiles();
+
+    if ( mpi::world_root() ) {
+        std::cout << "Setting values...\n";
+    }
 
     data.zero( );
+    data.set( 32.0 );
 
-    if ( mpi::world_root() )
-        std::cout << "Setting values...\n";
-
-    dim3 block( 64 );
     dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 64 );
 
-    data.set( 32.0 * ( 1 + parallel.get_rank() ) );
-
-    test_grid_kernel <<< block, grid >>> ( data.d_buffer + data.offset, ntiles, nx, data.ext_nx );
+    test_grid_kernel <<< grid, block >>> ( 
+        data.d_buffer + data.offset, ntiles, nx, data.ext_nx, 
+        data.global_ntiles, data.get_tile_off() );
 
     data.add_from_gc();
     data.copy_to_gc();
 
-/*
     for( auto i = 0; i < 5; i++)
        data.x_shift_left( 1 );
 
     data.kernel3_x( 1., 2., 1. );
     data.kernel3_y( 1., 2., 1. );
-*/
 
     if ( mpi::world_root() )
         std::cout << "Saving data...\n";
 
-    data.save( "cuda" );
+    data.save( "cuda/cuda.zdf" );
 
     if ( mpi::world_root() ) {
         std::cout << ansi::bold;
@@ -92,40 +97,54 @@ void test_grid( void ) {
         
 }
 
-#if 0
-
 #include "vec_types.h"
 #include "vec3grid.h"
 
 __global__
 void test_vec3grid_kernel( 
     float3 * const __restrict__ d_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx )
+    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, 
+    uint2 const global_ntiles, uint2 const global_off )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
     const int    tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
     const size_t tile_off = tile_id * roundup4( ext_nx.x * ext_nx.y );
-
     auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
+
+    const auto   tile_val = ( global_off.y + tile_idx.y ) * global_ntiles.x + ( global_off.x + tile_idx.x );
 
     for( auto idx = block_thread_rank(); idx < nx.x * nx.y; idx += block_num_threads() ) {
         const auto iy = idx / nx.x; 
         const auto ix = idx % nx.x;
-        tile_data[iy * ext_nx.x + ix] = make_float3( 1 + tile_id, 2 + tile_id, 3 + tile_id );
+        tile_data[iy * ext_nx.x + ix] = make_float3( 1 + tile_val, 2 + tile_val, 3 + tile_val );
     }
 }
 
 void test_vec3grid( ) {
-    std::cout << "Declaring vec3grid<float3> data...\n";
-    
-    const uint2 ntiles = { 8, 8 };
+
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running test_grid()\n";
+        std::cout << ansi::reset;
+        std::cout << "Declaring test_vec3grid<float> data...\n";
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    const uint2 global_ntiles = { 8, 8 };
     const uint2 nx = { 16,16 };
     
     bnd<unsigned int> gc;
     gc.x = {1,2};
     gc.y = {1,2};
 
-    vec3grid<float3> data( ntiles, nx, gc );
+    Partition parallel( partition );
+
+    vec3grid<float3> data( global_ntiles, nx, gc, parallel );
+
+    // Get local number of tiles
+    const auto ntiles   = data.get_ntiles();
 
     // Set zero
     // data.zero( );
@@ -134,16 +153,16 @@ void test_vec3grid( ) {
     // data.set( float3{1.0, 2.0, 3.0} );
 
     // Set different value per tile
-    dim3 block( 64 );
     dim3 grid( ntiles.x, ntiles.y );
-    test_vec3grid_kernel <<< block, grid >>> ( & data.d_buffer[ data.offset ], ntiles, nx, data.ext_nx );
-
-
+    dim3 block( 64 );
+    test_vec3grid_kernel <<< grid, block >>> ( 
+        & data.d_buffer[ data.offset ], ntiles, nx, data.ext_nx, 
+        data.global_ntiles, data.get_tile_off() );
     data.copy_to_gc( );
 
     data.add_from_gc( );
-
     data.copy_to_gc( );
+
     for( int i = 0; i < 5; i++ ) {
         data.x_shift_left( 1 );
     }
@@ -151,13 +170,18 @@ void test_vec3grid( ) {
     data.kernel3_x( 1., 2., 1. );
     data.kernel3_y( 1., 2., 1. );
 
-    std::cout << "Saving data...\n";
+    if ( mpi::world_root() )
+        std::cout << "Saving data...\n";
 
-    data.save( fcomp::x, "cuda" );
-    data.save( fcomp::y, "cuda" );
-    data.save( fcomp::z, "cuda" );
+    data.save( fcomp::x, "cuda/cuda-vec3-x.zdf" );
+    data.save( fcomp::y, "cuda/cuda-vec3-y.zdf" );
+    data.save( fcomp::z, "cuda/cuda-vec3-z.zdf" );
 
-    std::cout << "Done!\n";
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Done!\n";
+        std::cout << ansi::reset;
+    }
 }
 
 #include "emf.h"
@@ -167,13 +191,24 @@ void test_vec3grid( ) {
 
 void test_laser( ) {
 
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running test_laser()\n";
+        std::cout << ansi::reset;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
     uint2 ntiles = { 64, 16 };
     uint2 nx = { 16, 16 };
 
     float2 box = { 20.48, 25.6 };
     double dt = 0.014;
 
-    EMF emf( ntiles, nx, box, dt );
+    Partition parallel( partition );
+
+    EMF emf( ntiles, nx, box, dt, parallel );
 
     auto save_emf = [ & emf ]( ) {
         emf.save( emf::e, fcomp::x );
@@ -185,14 +220,13 @@ void test_laser( ) {
         emf.save( emf::b, fcomp::z );
     };
 
-/*
     Laser::PlaneWave laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
-*/
 
+/*
     Laser::Gaussian laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
@@ -204,6 +238,7 @@ void test_laser( ) {
 
     laser.sin_pol = 0;
     laser.cos_pol = 1;
+*/
 
     laser.add( emf );
 
@@ -211,7 +246,9 @@ void test_laser( ) {
 
     int niter = 20.48 / dt / 2;
 
-    std::cout << "Starting test - " << niter << " iterations...\n";
+    if ( mpi::world_root() ) {
+        std::cout << "Starting test - " << niter << " iterations...\n";
+    }
 
     auto t0 = Timer("test");
 
@@ -229,8 +266,9 @@ void test_laser( ) {
     t0.report( buffer );
 
     save_emf();
-
 }
+
+#if 0
 
 #include "simulation.h"
 
@@ -703,8 +741,10 @@ void gpu_init( MPI_Comm comm ) {
     int device = local_rank % num_devices;
     cudaSetDevice( device );
 
+    // mpi::cout << "GPU device: " << device << '\n';
+
     // Reset current device
-    deviceReset();
+    // deviceReset();
 }
 
 int main( int argc, char *argv[] ) {
@@ -745,11 +785,13 @@ int main( int argc, char *argv[] ) {
     // Print information about the environment
     if ( ! silent ) info();
 
-    test_grid( );
-    // test_laser( );
-
-
+    // test_grid( );
+    
     // test_vec3grid( );
+
+    test_laser( );
+
+
     // test_inj( );
 
     // test_mov( );

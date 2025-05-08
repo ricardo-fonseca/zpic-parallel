@@ -52,6 +52,7 @@ class vec3grid : public grid< V >
     public:
 
     using grid< V > :: part;
+    using grid< V > :: name;
 
     using grid< V > :: d_buffer;
     using grid< V > :: nx;
@@ -202,6 +203,35 @@ class vec3grid : public grid< V >
         zdf::save_grid<S>( chunk, metadata, iter, path, part.get_comm() );
 
         memory::free( h_data );
+    }
+
+    /**
+     * @brief Save grid values to disk
+     * 
+     * @param fc        Field component to save
+     * @param filename  Output file name (includes path)
+     */
+    void save( const enum fcomp::cart fc, std::string filename ) {
+        
+        const std::size_t bsize = gnx.x * gnx.y;
+
+        // Allocate buffers on host and device to gather data
+        S * h_data = memory::malloc<S>( bsize );
+
+        // Gather data on contiguous grid
+        gather( fc, h_data );
+
+        uint64_t global[2] = { global_ntiles.x * nx.x, global_ntiles.y * nx.y };
+        uint64_t start[2]  = { tile_off.x * nx.x, tile_off.y * nx.y };
+        uint64_t local[2]  = { gnx.x, gnx.y };
+
+        // Save data
+        std::string comp[] = { "x", "y", "z" };
+
+        zdf::save_grid( h_data, 2, global, start, local, name + "-" + comp[fc], filename, part.get_comm() );
+
+        // Free remaining temporary buffer 
+        memory::free( h_data );        
     }
 
 };

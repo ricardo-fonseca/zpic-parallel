@@ -195,7 +195,8 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
     }
 
     // Temporary buffer for divergence calculations
-    size_t bsize = E.ntiles.x * (E.ntiles.y * E.nx.y);
+    const auto ntiles     = E.get_ntiles();
+    size_t bsize = ntiles.x * ( ntiles.y * E.nx.y );
     double2 * tmp = device::malloc<double2>( bsize );
 
     /**
@@ -206,7 +207,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
      * and replacing the divEx and divBx calculations by warp level reductions
      */
 
-    dim3 grid( E.ntiles.x, E.ntiles.y );
+    dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 32 );
     size_t shm_size = 2 * E.tile_vol * sizeof(float3);
 
@@ -214,7 +215,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
 
     kernel::div_corr_x_A <<< grid, block, shm_size >>> ( 
         E.d_buffer, B.d_buffer, 
-        E.ntiles, E.nx, E.ext_nx, E.offset,
+        ntiles, E.nx, E.ext_nx, E.offset,
         dx_dy, tmp
     );
 
@@ -228,12 +229,12 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
      * - Copy the data in reverse order from shared memory and store it in tmp
      */
 
-    dim3 grid_B( E.gnx.y );
-    dim3 block_B( E.ntiles.x > 32 ? 32 : E.ntiles.x );
-    size_t shm_size_B = E.ntiles.x * sizeof(double2);
+    dim3 grid_B( E.local_nx.y );
+    dim3 block_B( ntiles.x > 32 ? 32 : ntiles.x );
+    size_t shm_size_B = ntiles.x * sizeof(double2);
 
     kernel::div_corr_x_B <<< grid_B, block_B, shm_size_B >>> (
-        tmp, E.ntiles
+        tmp, ntiles
     );
 
     /**
@@ -249,7 +250,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
 
     kernel::div_corr_x_C <<< grid, block, shm_size >>> (
         E.d_buffer, B.d_buffer, 
-        E.ntiles, E.nx, E.ext_nx, E.offset,
+        ntiles, E.nx, E.ext_nx, E.offset,
         dx_dy, tmp
     );
 
@@ -310,7 +311,7 @@ __global__
 void plane_wave(
     Laser::PlaneWave laser, 
     float3 * __restrict__ E_buffer, float3 * __restrict__ B_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, unsigned int const offset,
+    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, uint2 const  global_tile_off,
     float2 const dx )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
@@ -318,10 +319,10 @@ void plane_wave(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    float3 * const __restrict__ tile_E = & E_buffer[ tile_off + offset ];
-    float3 * const __restrict__ tile_B = & B_buffer[ tile_off + offset ];
+    float3 * const __restrict__ tile_E = & E_buffer[ tile_off ];
+    float3 * const __restrict__ tile_B = & B_buffer[ tile_off ];
 
-    const int ix0 = tile_idx.x * nx.x;
+    const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
     const float k = laser.omega0;
     const float amp = laser.omega0 * laser.a0;
     const int ystride = ext_nx.x;
@@ -372,20 +373,20 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
         sin_pol = sin( polarization );
     }
 
-    uint2 g_nx = E.gnx;
+    uint2 g_nx = E.get_global_nx();
 
     float2 dx = make_float2(
         box.x / g_nx.x,
         box.y / g_nx.y
     );
 
+    const auto ntiles     = E.get_ntiles();
     dim3 block( 64 );
-    dim3 grid( E.ntiles.x, E.ntiles.y );
+    dim3 grid( ntiles.x, ntiles.y );
 
     kernel::plane_wave<<<grid, block>>> (
-        *this, E.d_buffer, B.d_buffer,
-        E.ntiles, E.nx, E.ext_nx, E.offset,
-        dx
+        *this, & E.d_buffer[ E.offset ], & B.d_buffer[ B.offset ],
+        ntiles, E.nx, E.ext_nx, E.get_tile_off(), dx
     );
 
     E.copy_to_gc( );
@@ -514,19 +515,20 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
         sin_pol = sin( polarization );
     }
 
-    uint2 g_nx = E.gnx;
+    uint2 g_nx = E.get_global_nx();
 
     float2 dx = make_float2(
         box.x / g_nx.x,
         box.y / g_nx.y
     );
 
+    const auto ntiles     = E.get_ntiles();
     dim3 block( 64 );
-    dim3 grid( E.ntiles.x, E.ntiles.y );
+    dim3 grid( ntiles.x, ntiles.y );
 
     kernel::gaussian<<<grid, block>>> (
         *this, E.d_buffer, B.d_buffer,
-        E.ntiles, E.nx, E.ext_nx, E.offset,
+        ntiles, E.nx, E.ext_nx, E.offset,
         dx
     );
 

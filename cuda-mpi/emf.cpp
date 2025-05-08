@@ -1,6 +1,7 @@
 #include "emf.h"
 
 #include <iostream>
+#include "bnd.h"
 #include "zdf-cpp.h"
 
 #define opt_yee_block 256
@@ -20,11 +21,11 @@ EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
     dt( dt ), box(box)
 {
     // Verify Courant condition
-    float cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
-    if ( dt >= cour ){
+    auto cour2d = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    if ( dt >= cour2d ){
         std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
         std::cerr << "(*error*) For the current resolution [" << dx.x << "," << dx.y << "]\n";
-        std::cerr << " the maximum timestep is dt = " << cour <<'\n';
+        std::cerr << " the maximum timestep is dt = " << cour2d <<'\n';
         mpi::abort(1);
     }
 
@@ -60,25 +61,6 @@ EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
 
     // Reset iteration number
     iter = 0;
-}
-
-/**
- * @brief Move simulation window
- * 
- * When using a moving simulation window checks if a window move is due
- * at the current iteration and if so shifts left the data, zeroing the
- * rightmost cells.
- * 
- */
-void EMF::move_window() {
-
-    if ( moving_window.needs_move( iter * dt ) ) {
-
-        E->x_shift_left(1);
-        B->x_shift_left(1);
-
-        moving_window.advance();
-    }
 }
 
 namespace kernel {
@@ -196,21 +178,42 @@ __global__ __launch_bounds__(opt_yee_block) void yee(
 }
 
 /**
+ * @brief Move simulation window
+ * 
+ * When using a moving simulation window checks if a window move is due
+ * at the current iteration and if so shifts left the data, zeroing the
+ * rightmost cells.
+ * 
+ */
+void EMF::move_window() {
+
+    if ( moving_window.needs_move( iter * dt ) ) {
+
+        E->x_shift_left(1);
+        B->x_shift_left(1);
+
+        moving_window.advance();
+    }
+}
+
+/**
  * @brief Advance EM fields 1 time step (no current)
  * 
  */
 void EMF::advance() {
 
+    const auto ntiles   = E -> get_ntiles();
+
     float2 const dt_dx   = make_float2( dt/dx.x, dt/dx.y );
 
-    dim3 grid( E -> ntiles.x, E -> ntiles.y );
+    dim3 grid( ntiles.x, ntiles.y );
     auto block = opt_yee_block;
     size_t shm_size = 2 * E -> tile_vol * sizeof(float3);
 
     block::set_shmem_size( kernel::yee, shm_size );
     kernel::yee <<< grid, block, shm_size >>> (
         E -> d_buffer, B -> d_buffer, 
-        E -> ntiles, E -> nx, E -> ext_nx, E -> offset,
+        ntiles, E -> nx, E -> ext_nx, E -> offset,
         dt_dx
     );
 
@@ -479,22 +482,24 @@ void emf_bcy(
  */
 void EMF::process_bc() {
 
+    const auto ntiles   = E -> get_ntiles();
+
     dim3 block( 64 );
 
     // x boundaries
     if ( bc.x.lower > emf::bc::periodic || bc.x.upper > emf::bc::periodic ) {
-        dim3 grid( 2, E->ntiles.y );
+        dim3 grid( 2, ntiles.y );
         kernel::emf_bcx <<< grid, block >>> (
-            E -> d_buffer, B -> d_buffer, E -> ntiles, E -> nx, E -> ext_nx, E -> gc, 
+            E -> d_buffer, B -> d_buffer, ntiles, E -> nx, E -> ext_nx, E -> gc, 
             bc
         );
     }
 
     // y boundaries
     if ( bc.y.lower > emf::bc::periodic || bc.y.upper > emf::bc::periodic ) {
-        dim3 grid( E->ntiles.x, 2 );
+        dim3 grid( ntiles.x, 2 );
         kernel::emf_bcx <<< grid, block >>> (
-            E -> d_buffer, B -> d_buffer, E -> ntiles, E -> nx, E -> ext_nx, E -> gc, 
+            E -> d_buffer, B -> d_buffer, ntiles, E -> nx, E -> ext_nx, E -> gc, 
             bc
         );
     }
@@ -605,16 +610,17 @@ __global__ __launch_bounds__(opt_yee_block) void yeeJ(
  */
 void EMF::advance( Current & current ) {
 
+    const auto ntiles   = E -> get_ntiles();
     float2 const dt_dx   = make_float2( dt/dx.x, dt/dx.y );
 
-    dim3 grid( E -> ntiles.x, E -> ntiles.y );
+    dim3 grid( ntiles.x, ntiles.y );
     auto block = opt_yee_block;
     size_t shm_size = 2 * E -> tile_vol * sizeof(float3);
 
     block::set_shmem_size( kernel::yeeJ, shm_size );
     kernel::yeeJ <<< grid, block, shm_size >>> (
         E -> d_buffer, B -> d_buffer, 
-        E -> ntiles, E -> nx, E -> ext_nx, E -> offset,
+        ntiles, E -> nx, E -> ext_nx, E -> offset,
         current.J->d_buffer, current.J -> ext_nx, current.J -> offset,
         dt_dx, dt
     );
@@ -697,14 +703,10 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
 
     zdf::grid_info info = {
         .name = (char *) vfname.c_str(),
-        .ndims = 2,
         .label = (char *) vflabel.c_str(),
         .units = (char *) "m_e c \\omega_n e^{-1}",
         .axis = axis
     };
-
-    info.count[0] = E -> gnx.x;
-    info.count[1] = E -> gnx.y;
 
     zdf::iteration iteration = {
         .n = iter,
@@ -791,11 +793,12 @@ void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
     device::zero( d_energy, 6 );
 
     // Add up energy from all cells
-    dim3 grid( E->ntiles.x, E->ntiles.y );
+    const auto ntiles   = E -> get_ntiles();
+    dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
     kernel::get_energy <<< grid, block >>> ( 
         E->d_buffer, B->d_buffer,
-        E->ntiles, E->nx, E->ext_nx, E->offset,
+        ntiles, E->nx, E->ext_nx, E->offset,
         d_energy
     );
 

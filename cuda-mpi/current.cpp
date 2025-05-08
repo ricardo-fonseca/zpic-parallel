@@ -175,15 +175,16 @@ void current_bcy(
  */
 void Current::process_bc() {
 
+    const auto ntiles     = J -> get_ntiles();
     dim3 block( 64 );
 
     // x boundaries
     if ( bc.x.lower > current::bc::periodic || bc.x.upper > current::bc::periodic ) {
-         dim3 grid( 2, J->ntiles.y );
+         dim3 grid( 2, ntiles.y );
 
         kernel::current_bcx <<< grid, block >>> ( 
             J -> d_buffer, 
-            J -> ntiles, J -> nx, J -> ext_nx, J -> gc, 
+            ntiles, J -> nx, J -> ext_nx, J -> gc, 
             bc
         );
     }
@@ -191,11 +192,11 @@ void Current::process_bc() {
     // y boundaries
     if ( bc.y.lower > current::bc::periodic || bc.y.upper > current::bc::periodic ) {
 
-        dim3 grid( J->ntiles.x, 2 );
+        dim3 grid( ntiles.x, 2 );
 
         kernel::current_bcy <<< grid, block >>> ( 
             J -> d_buffer, 
-            J -> ntiles, J -> nx, J -> ext_nx, J -> gc,
+            ntiles, J -> nx, J -> ext_nx, J -> gc,
             bc
         );
     }
@@ -275,14 +276,10 @@ void Current::save( fcomp::cart const jc ) {
 
     zdf::grid_info info = {
         .name = (char *) vfname.c_str(),
-    	.ndims = 2,
     	.label = (char *) vflabel.c_str(),
     	.units = (char *) "e \\omega_n^2 / c",
     	.axis = axis
     };
-
-    info.count[0] = J -> gnx.x;
-    info.count[1] = J -> gnx.y;
 
     zdf::iteration iteration = {
     	.n = iter,
