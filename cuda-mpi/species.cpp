@@ -93,11 +93,7 @@ float rgamma( const float3 u ) {
  */
 void Species::inject( ) {
 
-    /// @brief position of lower corner of local grid in simulation units
-    float2 ref = make_float2( 
-        particles->tile_off.x * particles->nx.x * dx.x + moving_window.motion(),
-        particles->tile_off.y * particles->nx.y * dx.y
-    );
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> inject( *particles, ppc, dx, ref, particles -> local_range() );
 }
@@ -1835,9 +1831,10 @@ void Species::save() const {
 
             // Close the file
             zdf::close_file( part_file );
+
+            MPI_Comm_free(&comm);
         }
 
-        MPI_Comm_free(&comm);
     } else {
         // No particles - root node creates an empty file
         if ( particles -> parallel.root() ) {

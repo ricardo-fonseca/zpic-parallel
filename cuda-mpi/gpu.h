@@ -841,6 +841,53 @@ namespace device {
     
 } // end namespace device
 
+
+/**
+ * @brief Device routines
+ * 
+ */
+namespace managed {
+
+    /**
+     * @brief   Allocate managed memory
+     * 
+     * @tparam T    Data type
+     * @param size  Size (number of elements) to allocate
+     */
+    template< typename T >
+    T * malloc( std::size_t const size ) {
+        T * buffer;
+        auto err = cudaMallocManaged( &buffer, size * sizeof(T) );
+        if ( err != cudaSuccess ) {
+            std::cerr << "(*error*) Unable to allocate " << size << " elements of type " << typeid(T).name() << " on managed memory.\n";
+            std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+            cudaDeviceReset();
+            exit(1);
+        }
+        return buffer;
+    }
+
+    /**
+     * @brief   Free allocated managed memory
+     * 
+     * @tparam T    Data type
+     * @param ptr   Pointer to allocated memory
+     */
+    template< typename T >
+    void free( T * ptr ) {
+        if ( ptr != nullptr ) {
+            auto err = cudaFree( ptr );
+            if ( err != cudaSuccess ) {
+                std::cerr << "(*error*) Unable to deallocate " << typeid(T).name() << " buffer at " << ptr << " from managed memory.\n";
+                std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+                cudaDeviceReset();
+                exit(1);
+            }
+        }
+    }
+
+} // end namespace managed
+
 /**
  * @brief Host memory routines
  * 

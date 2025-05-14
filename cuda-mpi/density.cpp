@@ -911,7 +911,7 @@ void sphere_np(
                     float gx = ((shiftx + cell.x) + (pos.x+0.5)) * dx.x;
                     float gy = ((shifty + cell.y) + (pos.y+0.5)) * dx.y;
                     
-                    int inj = (gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y) < r2;
+                    int inj = ((gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y)) < r2;
                     inj_np += inj;
                 }
             }

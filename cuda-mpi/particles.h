@@ -136,6 +136,7 @@ inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
  * @param ntiles    Number of local tiles (x,y)
  * @return int      Offset of edge tiles in the specified direction
  */
+__host__ __device__
 inline int edge_tile_off( const int dir, const uint2 ntiles ) {
     int a, b, c;
     a = b = c = 0;
@@ -325,43 +326,10 @@ struct ParticleSortData {
      * @note  Includes incoming/outgoing particles per edge tile
      */
     int * new_np;
-    /// @brief Total number of tiles
+    /// @brief Number of tiles
     const uint2 ntiles;
 
-    struct Message {
-        /// @brief Buffer for all 8 messages (in device memory)
-        int * buffer;
-        /// @brief Number of incoming particles per message
-        int msg_np[9];
-
-        int * d_msg_np;
-
-        /// @brief Total number of particles to be exchanged
-        int total_np;
-        /// @brief Message requests
-        MPI_Request requests[9];
-    };
-
-    /// @brief Incoming messages
-    ParticleSortData::Message recv;
-    /// @brief Outgoing messages
-    ParticleSortData::Message send;
-
-    /// @brief MPI communicator
-    MPI_Comm comm;
-    /// @brief Neighbor ranks
-    int neighbor[9];
-
-    ParticleSortData( const uint2 ntiles, Partition & par ) : 
-        ntiles(ntiles) {
-            recv.d_msg_np = device::malloc<int>(9);
-            send.d_msg_np = device::malloc<int>(9);
-        };
-    
-    ~ParticleSortData() {
-        device::free( send.d_msg_np );
-        device::free( recv.d_msg_np );
-    }
+    ParticleSortData( const uint2 ntiles ) : ntiles(ntiles) {}; 
 };
 
 /**
@@ -372,7 +340,23 @@ struct ParticleSortData {
  * 
  */
 class ParticleSort : public ParticleSortData {
-    
+
+    struct Message {
+        /// @brief Buffer for all 8 messages (in device memory)
+        int * buffer;
+        /// @brief Number of incoming particles per message (in managed memory)
+        int * msg_np;
+        /// @brief Total number of particles to be exchanged
+        int total_np;
+        /// @brief Message requests
+        MPI_Request requests[9];
+    };
+
+    /// @brief MPI communicator
+    MPI_Comm comm;
+    /// @brief Neighbor ranks
+    int neighbor[9];
+
     private:
 
     /**
@@ -398,6 +382,11 @@ class ParticleSort : public ParticleSortData {
     
     public:
 
+    /// @brief Incoming messages
+    ParticleSort::Message recv;
+    /// @brief Outgoing messages
+    ParticleSort::Message send;
+
     /**
      * @brief Construct a new Particle Sort object
      * 
@@ -406,7 +395,7 @@ class ParticleSort : public ParticleSortData {
      * @param par           Parallel partition
      */
     ParticleSort( uint2 const ntiles, uint32_t const max_part, Partition & par ) :
-        ParticleSortData( ntiles, par )
+        ParticleSortData( ntiles )
     {
         idx = device::malloc<int>( max_part );
 
@@ -427,9 +416,11 @@ class ParticleSort : public ParticleSortData {
 
         // Send buffer
         send.buffer = &new_np[ local_tiles ];
+        send.msg_np = managed::malloc<int>(9);
 
         // Receive buffer
         recv.buffer = &new_np[ local_tiles + edge_tiles ];
+        recv.msg_np = managed::malloc<int>(9);
 
         // Communicator
         comm = par.get_comm();
@@ -447,6 +438,9 @@ class ParticleSort : public ParticleSortData {
      * 
      */
     ~ParticleSort() {
+        managed::free( send.msg_np );
+        managed::free( recv.msg_np );
+
         device::free( npt );
         device::free( nidx );
         device::free( new_np );
@@ -638,286 +632,6 @@ class ParticleMessage {
         return ierr;
     }
 };
-
-#if 0
-/**
- * @brief   Data structure to hold particle data
- * 
- * @warning This is meant to be used only as a superclass for Particles. The
- *          struct does not include methods for allocating / deallocating
- *          memory
- * 
- * @note    Declaring a function parameter as `func(ParticleData p)` and calling
- *          the function with a `Particles` object parameter will automatically
- *          cast the value to `ParticleData`. This means that we will not be
- *          creating a full copy of the `Particles` object and therefore data
- *          will not be destroyed when the function reaches the end.
- * 
- *          
- */
-struct ParticleData {
-
-    /// @brief Number of tiles (x,y)
-    const uint2 ntiles;  
-    /// @brief Tile grid size
-    const uint2 nx;
-    /// @brief Number of particles in tile
-    int * np;
-    /// @brief Tile particle position on global array
-    int * offset;
-
-    /// @brief Particle position (cell index)
-    int2 *ix;
-    /// @brief Particle position (position inside cell) normalized to cell size [-0.5,0.5)
-    float2 *x;
-    /// @brief Particle velocity
-    float3 *u;
-
-    /// @brief Maximum number of particles in the buffer
-    uint32_t max_part;
-
-    ParticleData( const uint2 ntiles, const uint2 nx, const uint32_t max_part ) :
-        ntiles( ntiles ), nx( nx ), max_part( max_part ) {};
-};
-
-
-/**
- * @brief Class for particle data
- * 
- */
- class Particles : public ParticleData {
-
-    private:
-
-    /// @brief Device variable for returning uint32 values
-    device::Var<uint32_t> dev_tmp_uint32;
-
-    void bnd_check( ParticleSort & sort );
-    void copy_out( ParticleData & tmp, const ParticleSortData & sort );
-    void copy_in( ParticleData & tmp );
-    void copy_sorted( ParticleData & tmp, const ParticleSortData & sort );
-
-    public:
-
-    /// @brief Sets periodic boundaries (x,y)
-    int2 periodic;
-
-    /// Global grid size
-    const uint2 gnx;
-
-    /**
-     * @brief Construct a new Particles object
-     * 
-     * @param ntiles    Number of tiles
-     * @param nx        Tile grid size
-     * @param max_part  Maximum number of particles
-     */
-    Particles( const uint2 ntiles, const uint2 nx, const uint32_t max_part ) :
-        ParticleData( ntiles, nx, max_part ), dev_tmp_uint32(), 
-        periodic( int2{1,1} ), gnx ( uint2{ntiles.x * nx.x, ntiles.y * nx.y} )
-    {
-        const size_t bsize = ntiles.x * ntiles.y;
-        
-        // Tile information
-        np     = device::malloc<int>( bsize );
-        offset = device::malloc<int>( bsize );
-
-        // Initially empty
-        device::zero( np, bsize );
-        device::zero( offset, bsize );
-
-        // Particle data
-        ix = device::malloc<int2>  ( max_part );
-        x  = device::malloc<float2>( max_part );
-        u  = device::malloc<float3>( max_part );
-    }
-
-    ~Particles() {
-        device::free( u );
-        device::free( x );
-        device::free( ix );
-
-        device::free( offset );
-        device::free( np );
-    }
-
-    /**
-     * @brief Sets the number of particles per tile to 0
-     * 
-     */
-    void zero_np( ) {
-        device::zero( np, ntiles.x * ntiles.y );
-    }
-
-    /**
-     * @brief Grows particle data buffers
-     * 
-     * @warning Particle data is not copied, previous values, if any,
-     *          are destroyed
-     * 
-     * @param new_max   New buffer size. Will be rounded up to multiple
-     *                  of 64k.
-     */
-    void grow_buffer( uint32_t new_max ) {
-        if ( new_max > max_part ) {
-            device::free( u );
-            device::free( x );
-            device::free( ix );
-
-            // Grow in multiples 64k blocks
-            max_part = roundup<65536>(new_max);
-
-            ix = device::malloc<int2>( max_part );
-            x  = device::malloc<float2>( max_part );
-            u  = device::malloc<float3>( max_part );
-        }
-    }
-
-    /**
-     * @brief Swaps buffers between 2 particle objects
-     * 
-     * @param a     Object a
-     * @param b     Object b
-     */
-    friend void swap_buffers( Particles & a, Particles & b ) {
-        swap( a.ix, b.ix );
-        swap( a.x,  b.x );
-        swap( a.u,  b.u );
-
-        auto tmp_max_part = b.max_part;
-        b.max_part = a.max_part;
-        a.max_part = tmp_max_part;
-
-        swap( a.np,     b.np );
-        swap( a.offset, b.offset );
-    }
-
-    /**
-     * @brief Gets total number of particles
-     * 
-     * @return uint32_t 
-     */
-    uint32_t np_total();
-
-    /**
-     * @brief Gets maximum number of particles in a single tile
-     * 
-     * @return uint32_t 
-     */
-    uint32_t np_max_tile();
-
-    /**
-     * @brief Gets minimum number of particles in a single tile
-     * 
-     * @return uint32_t 
-     */
-    uint32_t np_min_tile();
-
-    /**
-     * @brief Returns global grid range
-     * 
-     * @return bnd<uint32_t> 
-     */
-    bnd<uint32_t> g_range() { 
-        bnd<uint32_t> range;
-        range.x = { .lower = 0, .upper = gnx.x - 1 };
-        range.y = { .lower = 0, .upper = gnx.y - 1 };
-
-        return range;
-    };
-
-    /**
-     * @brief Gather data from a specific particle quantity
-     * 
-     * @param quant     Quantity to gather
-     * @param d_data    Output data buffer, assumed to have size >= np
-     */
-    void gather( part::quant quant, float * const __restrict__ d_data );
-
-    void gather_host( part::quant quant, float * const __restrict__ d_data, float * const __restrict__ h_data,
-    uint32_t const np );
-
-    /**
-     * @brief Gather data from a specific particle quantity, scaling values
-     * 
-     * @note Data (val) will be returned as `scale.x * val + scale.y`
-     * 
-     * @param quant     Quantity to gather
-     * @param d_data    Output data buffer, assumed to have size >= np
-     * @param scale     Scale factor for data
-     */
-    void gather( part::quant quant, float * const __restrict__ d_data, const float2 scale );
-
-    /**
-     * @brief Validates particle data
-     * 
-     * @details In case of invalid particle data prints out an error message and aborts
-     *          the program
-     * 
-     * @param msg   Message to print in case of error
-     * @param over  Amount of extra cells indices beyond limit allowed. Used
-     *              when checking the buffer before tile_sort(). Defaults to 0
-     */
-    void validate( std::string msg, int const over = 0 );
-
-    /**
-     * @brief Shifts particle cells by the required amount
-     * 
-     * @details Cells are shited by adding the parameter `shift` to the particle cell
-     *          indexes
-     * 
-     * @note Does not check if the particles are still inside the tile after
-     *       the shift
-     * 
-     * @param shift     Cell shift in both directions
-     */
-    void cell_shift( int2 const shift );
-    
-    /**
-     * @brief Moves particles to the correct tiles
-     * 
-     * @warning This version of `tile_sort()` is provided for debug only;
-     *          temporary buffers are created and removed each time the
-     *          function is called.
-     * 
-     * @param extra     (optional) Additional space to add to each tile. Leaves
-     *                  room for particles to be injected later.
-     */
-    void tile_sort( const int * __restrict__ extra = nullptr ){
-        // Create temporary buffers
-        Particles tmp( ntiles, nx, max_part );
-        ParticleSort sort( ntiles, max_part );
-        
-        // Call sort routine
-        tile_sort( tmp, sort, extra );
-    };
-
-    /**
-     * @brief Moves particles to the correct tiles
-     * 
-     * @note Particles are only expected to have moved no more than 1 tile
-     *       in each direction
-     * 
-     * @param tmp       Temporary particle buffer
-     * @param sort      Temporary sort index 
-     * @param extra     (optional) Additional space to add to each tile. Leaves
-     *                  room for particles to be injected later.
-     */
-    void tile_sort( Particles &tmp, ParticleSort &sort,
-                    const int * __restrict__ extra = nullptr ); 
-
-    /**
-     * @brief Save particle data to disk
-     * 
-     * @param info  Particle metadata (name, labels, units, etc.). Information is used to set file name
-     * @param iter  Iteration metadata
-     * @param path  Path where to save the file
-     */
-    void save( zdf::part_info &metadata, zdf::iteration &iter, std::string path );
-
-};
-
-#endif
 
 /**
  * @brief   Data structure to hold particle data
@@ -1253,8 +967,8 @@ struct ParticleData {
      * @note Data (val) will be returned as `scale.x * val + scale.y`
      * 
      * @param quant     Quantity to gather
-     * @param d_data    Output device data buffer, assumed to have size >= np
      * @param scale     Scale factor for data
+     * @param d_data    Output device data buffer, assumed to have size >= np
      */
     void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data );
     
@@ -1294,6 +1008,9 @@ struct ParticleData {
      *                  room for particles to be injected later.
      */
     void tile_sort( Partition & parallel, const int * __restrict__ extra = nullptr ){
+       
+        std::cout << "in Particles::tile_sort( parallel, extra )\n";
+
         // Create temporary buffers
         Particles    tmp( global_ntiles, nx, max_part, parallel );
         ParticleSort sort( ntiles, max_part, parallel );
@@ -1343,7 +1060,7 @@ struct ParticleData {
      * @param sort      Temporary sort index
      * @param recv      Receive message object
      */
-    void irecv_msg( ParticleSortData &sort, ParticleMessage &recv );
+    void irecv_msg( ParticleSort &sort, ParticleMessage &recv );
 
     /**
      * @brief Pack particles moving out of the node into a message buffer and start send
@@ -1352,15 +1069,19 @@ struct ParticleData {
      * @param sort      Temporary sort index
      * @param send      Send message object
      */
-    void isend_msg( Particles &tmp, ParticleSortData &sort, ParticleMessage &send );
+    void isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &send );
 
     /**
      * @brief Unpack received particle data into main particle data buffer
      * 
-     * @param sort      Temporary sort index
-     * @param recv      Receive message object
+     * @param sort                  Temporary sort index
+     * @param recv_msg_np           Number of particles per message
+     * @param recv_msg_tile_np      Number of particles per tile
+     * @param recv                  Receive particle data message object
      */
-    void unpack_msg( ParticleSortData &sort, ParticleMessage &recv );
+    void unpack_msg( ParticleSortData &sort, 
+        int * __restrict__ recv_msg_np, int * recv_msg_tile_np,
+        ParticleMessage &recv );
 
     /**
      * @brief Print information on the number of particles per tile

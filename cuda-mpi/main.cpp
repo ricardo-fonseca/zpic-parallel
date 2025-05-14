@@ -38,9 +38,8 @@ void test_grid( void ) {
     
     if ( mpi::world_root() ) {
         std::cout << ansi::bold;
-        std::cout << "Running test_grid()\n";
-        std::cout << ansi::reset;
-        std::cout << "Declaring grid<float> data...\n";
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
     }
 
     // Parallel partition
@@ -193,8 +192,8 @@ void test_laser( ) {
 
     if ( mpi::world_root() ) {
         std::cout << ansi::bold;
-        std::cout << "Running test_laser()\n";
-        std::cout << ansi::reset;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
     }
 
     // Parallel partition
@@ -274,8 +273,8 @@ void test_inj( ) {
 
     if ( mpi::world_root() ) {
         std::cout << ansi::bold;
-        std::cout << "Running " << __func__ << "()...\n";
-        std::cout << ansi::reset;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
     }
 
     // Parallel partition
@@ -322,11 +321,18 @@ void test_inj( ) {
     }
 }
 
-#if 0
-
 void test_mov( ) {
 
-    std::cout << "Starting " << __func__ << "...\n";
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    Partition parallel( partition );
 
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };
@@ -340,25 +346,41 @@ void test_mov( ) {
 
     electrons.set_density( Density::Sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
     electrons.set_udist( UDistribution::Cold( float3{ -1, -2, -3 } ) );
-
-    electrons.initialize( box, ntiles, nx, dt, 0 );
+    electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
     electrons.save_charge();
+    electrons.save();
 
-    int niter = 200;
+    int niter = 200; //200
     for( auto i = 0; i < niter; i ++ ) {
+        auto np_global = electrons.np_global();
+        if ( parallel.root() ) std::cout << "i = " << i << ", total particles: " << np_global << '\n';
         electrons.advance();
     }
 
     electrons.save_charge();
     electrons.save();
 
-    std::cout << __func__ << " complete.\n";
+    parallel.barrier();
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
 }
 
 void test_current( ) {
 
-    std::cout << "Starting " << __func__ << "...\n";
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    Partition parallel( partition );
 
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };
@@ -370,12 +392,12 @@ void test_current( ) {
     uint2 ppc{ 8, 8 };
     Species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( Density::Sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
+    electrons.set_density( Density::Sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
     electrons.set_udist( UDistribution::Cold( float3{ 1, 2, 3 } ) );
 
-    electrons.initialize( box, ntiles, nx, dt, 0 );
+    electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
-    Current current( ntiles, nx, box, dt );
+    Current current( ntiles, nx, box, dt, parallel );
 
     electrons.save_charge();
 
@@ -386,9 +408,15 @@ void test_current( ) {
     current.save( fcomp::y );
     current.save( fcomp::z );
 
-    std::cout << __func__ << " complete.\n";
+    parallel.barrier();
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
 }
 
+#if 0
 
 void test_mov_sim( ) {
 
@@ -806,16 +834,12 @@ int main( int argc, char *argv[] ) {
     // Print information about the environment
     if ( ! silent ) info();
 
-    // test_grid( );
-    
+    // test_grid( );  
     // test_vec3grid( );
-
     // test_laser( );
-
-    test_inj( );
-
+    // test_inj( );
     // test_mov( );
-    // test_current( );
+    test_current( );
 
     // test_mov_sim( );
 
