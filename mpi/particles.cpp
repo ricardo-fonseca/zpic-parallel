@@ -16,11 +16,8 @@
 template < part::quant quant >
 void gather_quant( 
     ParticleData part,
-    float * const __restrict__ d_data,
-    int * const __restrict__ d_off )
+    float * const __restrict__ d_data )
 {
-    const uint2 tile_nx = part.nx;
-    const uint2 tile_off = part.tile_off;
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
@@ -29,9 +26,12 @@ void gather_quant(
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
 
+        // Global spatial offsets of local tile
+        const int offx = (part.tile_off.x + tx) * part.nx.x;
+        const int offy = (part.tile_off.y + ty) * part.nx.y;
+
         const auto offset = part.offset[tid];
         const auto np     = part.np[tid];
-        const auto data_offset = d_off[tid];
 
         int2   const * __restrict__ const ix = &part.ix[ offset ];
         float2 const * __restrict__ const x  = &part.x[ offset ];
@@ -39,12 +39,12 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if constexpr( quant == part::x  ) val = ((tile_off.x + tx) * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if constexpr( quant == part::y  ) val = ((tile_off.y + ty) * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr( quant == part::x  ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
+            if constexpr( quant == part::y  ) val = ( offy + ix[idx].y ) + (0.5f + x[idx].y);
             if constexpr( quant == part::ux ) val = u[idx].x;
             if constexpr( quant == part::uy ) val = u[idx].y;
             if constexpr( quant == part::uz ) val = u[idx].z;
-            d_data[ data_offset + idx ] = val;
+            d_data[ offset + idx ] = val;
         }
     }
 };
@@ -55,27 +55,25 @@ void gather_quant(
  * @param quant         Quantity to gather
  * @param d_data        Output data buffer, assumed to have size >= np
  */
-void Particles::gather( part::quant quant, float * const d_data, int * d_off )
+void Particles::gather( part::quant quant, float * const d_data )
 {
-    // If d_off was not supplied use the same offset as particle data
-    if ( d_off == nullptr ) d_off = offset;
     
     // Gather data on device
     switch (quant) {
     case part::x : 
-        gather_quant<part::x>( *this, d_data, d_off );
+        gather_quant<part::x>( *this, d_data );
         break;
     case part::y:
-        gather_quant<part::y>( *this, d_data, d_off );
+        gather_quant<part::y>( *this, d_data );
         break;
     case part::ux:
-        gather_quant<part::ux>( *this, d_data, d_off );
+        gather_quant<part::ux>( *this, d_data );
         break;
     case part::uy:
-        gather_quant<part::uy>( *this, d_data, d_off );
+        gather_quant<part::uy>( *this, d_data );
         break;
     case part::uz:
-        gather_quant<part::uz>( *this, d_data, d_off );
+        gather_quant<part::uz>( *this, d_data );
         break;
     }
 }
@@ -87,18 +85,15 @@ void Particles::gather( part::quant quant, float * const d_data, int * d_off )
  * 
  * @tparam quant    Quantiy to gather
  * @param part      Particle data
- * @param d_data    Scaled output data
  * @param scale     Scale factor for data
+ * @param d_data    Scaled output data
  */
 template < part::quant quant >
 void gather_quant( 
     ParticleData part,
     const float2 scale, 
-    float * const __restrict__ d_data,
-    int * const __restrict__ d_off )
+    float * const __restrict__ d_data )
 {
-    const uint2 tile_nx = part.nx;
-    const uint2 tile_off = part.tile_off;
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
@@ -106,6 +101,10 @@ void gather_quant(
 
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
+
+        // Global spatial offsets of local tile
+        const int offx = (part.tile_off.x + tx) * part.nx.x;
+        const int offy = (part.tile_off.y + ty) * part.nx.y;
 
         const auto offset = part.offset[tid];
         const auto np     = part.np[tid];
@@ -116,8 +115,8 @@ void gather_quant(
         
         for( int idx = 0; idx < np; idx ++ ) {
             float val;
-            if constexpr ( quant == part::x )  val = ((tile_off.x + tx) * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
-            if constexpr ( quant == part::y )  val = ((tile_off.y + ty) * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::x )  val = ( offx + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::y )  val = ( offy + ix[idx].y) + (0.5f + x[idx].y);
             if constexpr ( quant == part::ux ) val = u[idx].x;
             if constexpr ( quant == part::uy ) val = u[idx].y;
             if constexpr ( quant == part::uz ) val = u[idx].z;
@@ -133,25 +132,25 @@ void gather_quant(
  * @param d_data    Output data buffer, assumed to have size >= np
  * @param scale     Scale factor for data
  */
-void Particles::gather( part::quant quant, const float2 scale, float * const __restrict__ d_data, int * const __restrict__ d_off )
+void Particles::gather( part::quant quant, const float2 scale, float * const __restrict__ d_data )
 {
     
     // Gather data on device
     switch (quant) {
     case part::x : 
-        gather_quant<part::x> ( *this, scale, d_data, d_off );
+        gather_quant<part::x> ( *this, scale, d_data );
         break; 
     case part::y: 
-        gather_quant<part::y> ( *this, scale, d_data, d_off );
+        gather_quant<part::y> ( *this, scale, d_data );
         break; 
     case part::ux: 
-        gather_quant<part::ux>( *this, scale, d_data, d_off );
+        gather_quant<part::ux>( *this, scale, d_data );
         break; 
     case part::uy: 
-        gather_quant<part::uy>( *this, scale, d_data, d_off );
+        gather_quant<part::uy>( *this, scale, d_data );
         break; 
     case part::uz: 
-        gather_quant<part::uz>( *this, scale, d_data, d_off );
+        gather_quant<part::uz>( *this, scale, d_data );
         break;
     }
 }
@@ -227,7 +226,7 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
 
             // Write the data
             for ( uint32_t i = 0; i < metadata.nquants; i ++) {
-                gather( quants[i], data, offset );
+                gather( quants[i], data );
                 zdf::write_cdset( part_file, dsets[i], chunk, file_off );
             }
 
@@ -240,9 +239,10 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
 
             // Close the file
             zdf::close_file( part_file );
+    
+            MPI_Comm_free(&comm);
         }
 
-        MPI_Comm_free(&comm);
     } else {
         // No particles - root node creates an empty file
         if ( parallel.root() ) {
@@ -444,7 +444,7 @@ uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort,
     uint32_t idx = 0;
     for( auto dir = 0; dir < 9; dir++ ) {
         if ( dir != 4 ) {
-            for( int k = 0; k < tile_size(dir); k++ ) {
+            for( unsigned k = 0; k < tile_size(dir); k++ ) {
                 offset[ k * tile_stride(dir) + tile_offset(dir) ] += sort.recv.buffer[ idx ];
                 idx++;
             }
@@ -599,7 +599,6 @@ void copy_out(
 
                 do {
                     c = _c; _c += 1;
-
                     invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x ) || 
                               ( ix[c].y < 0 ) || ( ix[c].y >= lim.y );
                 } while (invalid);
@@ -675,7 +674,7 @@ void copy_in( ParticleData part, ParticleData tmp )
         if ( new_offset >= old_offset ) {
 
             // Add particles to the end of the buffer
-            for( int i = 0; i < tmp_np; i ++ ) {
+            for( int i = 0; i < tmp_np; i++ ) {
                 ix[ old_np + i ] = tmp_ix[ i ];
                 x[ old_np + i ]  = tmp_x[ i ];
                 u[ old_np + i ]  = tmp_u[ i ];
@@ -1317,7 +1316,7 @@ void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
             ///@brief number of particles unpacked from this message
             int np_unpack = 0;
 
-            for( int k = 0; k < msg_ntiles(dir); k++ ) {
+            for( unsigned k = 0; k < msg_ntiles(dir); k++ ) {
                 
                 ///@brief number of particles received on this tile 
                 int recv_np  =  msg_tile_np[idx];
@@ -1325,11 +1324,11 @@ void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
                 // If any particles received in that tile
                 if ( recv_np > 0 ) {
                     // Get target tile for msg data
-                    int target = k * tile_stride(dir) + tile_offset(dir);
+                    int target_tid = k * tile_stride(dir) + tile_offset(dir);
 
                     // destination buffers (in main particle buffer)
-                    int tgt_offset  = offset[ target ] + 
-                        omp::atomic_fetch_add( &np[ target ], recv_np );
+                    int tgt_offset  = offset[ target_tid ] + 
+                        omp::atomic_fetch_add( &np[ target_tid ], recv_np );
 
                     int2   * __restrict__ const dst_ix = &ix[ tgt_offset ];
                     float2 * __restrict__ const dst_x  = &x [ tgt_offset ];

@@ -233,14 +233,6 @@ class Simulation {
     /**
      * @brief Returns total number of particles moved
      * 
-     * @note Only root MPI node gets the proper result
-     * 
-     * @return unsigned long long 
-     */
-
-    /**
-     * @brief Returns total number of particles moved
-     * 
      * @note The default behavior is to only return the global result on the
      *       root MPI node.
      * 

@@ -1323,35 +1323,36 @@ class grid {
 
             const int ystride = ext_nx.x;
 
-            // On a GPU these would be on block shared memory
-            T A[ tile_vol ];
-            T B[ tile_vol ];
-
             // Loop over tiles
-            for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+            #pragma omp for
+            for( int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
+                auto tx = idx % ntiles.x;
+                auto ty = idx / ntiles.x;
 
-                    const auto tile_idx = make_uint2( tx, ty );
-                    const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                    const auto tile_off = tid * tile_vol ;
+                // On a GPU these would be on block shared memory
+                T A[ tile_vol ];
+                T B[ tile_vol ];
 
-                    auto * __restrict__ buffer = d_buffer + tile_off;
+                const auto tile_idx = make_uint2( tx, ty );
+                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+                const auto tile_off = tid * tile_vol ;
 
-                    // Copy data from tile buffer
-                    for( unsigned i = 0; i < tile_vol; i++ ) A[i] = buffer[i];
+                auto * __restrict__ buffer = & d_buffer[ tile_off ];
 
-                    // Apply kernel locally
-                    for( unsigned iy = 0; iy < ext_nx.y; iy++ ) {
-                        for( unsigned ix = gc.x.lower; ix < nx.x + gc.x.lower; ix ++) {
-                            B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
-                                                      A[ iy * ystride +  ix    ] * b +
-                                                      A[ iy * ystride + (ix+1) ] * c;
-                        }
+                // Copy data from tile buffer
+                for( unsigned i = 0; i < tile_vol; i++ ) A[i] = buffer[i];
+
+                // Apply kernel locally
+                for( unsigned iy = 0; iy < ext_nx.y; iy++ ) {
+                    for( unsigned ix = gc.x.lower; ix < nx.x + gc.x.lower; ix ++) {
+                        B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
+                                                    A[ iy * ystride +  ix    ] * b +
+                                                    A[ iy * ystride + (ix+1) ] * c;
                     }
-
-                    // Copy data back to tile buffer
-                    for( unsigned i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
                 }
+
+                // Copy data back to tile buffer
+                for( unsigned i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
             }
 
             // Update guard cells
@@ -1378,35 +1379,36 @@ class grid {
 
             const int ystride = ext_nx.x;
 
-            // On a GPU these would be on block shared memory
-            T A[ tile_vol ];
-            T B[ tile_vol ];
-
             // Loop over tiles
-            for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+            #pragma omp for
+            for( int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
+                auto tx = idx % ntiles.x;
+                auto ty = idx / ntiles.x;
 
-                    const auto tile_idx = make_uint2( tx, ty );
-                    const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                    const auto tile_off = tid * tile_vol;
+                // On a GPU these would be on block shared memory
+                T A[ tile_vol ];
+                T B[ tile_vol ];
 
-                    auto * __restrict__ buffer = d_buffer + tile_off;
+                const auto tile_idx = make_uint2( tx, ty );
+                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+                const auto tile_off = tid * tile_vol;
 
-                    // Copy data from tile buffer
-                    for( unsigned i = 0; i < tile_vol; i++ ) A[i] = buffer[i];
+                auto * __restrict__ buffer = & d_buffer[ tile_off ];
 
-                    // Apply kernel locally
-                    for( unsigned iy = 0; iy < ext_nx.y; iy++ ) {
-                        for( unsigned ix = gc.x.lower; ix < nx.x + gc.x.lower; ix ++) {
-                            B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
-                                                      A[    iy  * ystride + ix ] * b +
-                                                      A[ (iy+1) * ystride + ix ] * c;
-                        }
+                // Copy data from tile buffer
+                for( unsigned i = 0; i < tile_vol; i++ ) A[i] = buffer[i];
+
+                // Apply kernel locally
+                for( unsigned iy = gc.y.lower; iy < nx.y + gc.y.lower; iy++ ) {
+                    for( unsigned ix = 0; ix < ext_nx.x; ix ++) {
+                        B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
+                                                  A[    iy  * ystride + ix ] * b +
+                                                  A[ (iy+1) * ystride + ix ] * c;
                     }
-
-                    // Copy data back to tile buffer
-                    for( unsigned i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
                 }
+
+                // Copy data back to tile buffer
+                for( unsigned i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
             }
 
             // Update guard cells

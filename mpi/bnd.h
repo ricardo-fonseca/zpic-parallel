@@ -70,16 +70,6 @@ class bnd {
     bnd( T val ) : x(val), y(val) {};
 
     /**
-     * @brief Copy constructor
-     * 
-     * @param rhs   Source object
-     */
-    bnd( const bnd<T>& rhs ) :
-        x( rhs.x ), 
-        y( rhs.y )
-    { }
-
-    /**
      * @brief Assignment (=) operator
      * 
      * @param rhs           Source value

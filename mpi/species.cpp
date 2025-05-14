@@ -1782,6 +1782,7 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
 
     // Inject initial distribution
 
+/*
     // Count particles to inject and store in np_inj
     np_inject( particles -> local_range(), np_inj );
 
@@ -1790,6 +1791,18 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     for( unsigned i = 0; i < ntiles.x * ntiles.y; i ++ ) {
         particles -> offset[i] = off;
         off += np_inj[i];
+    }
+*/
+
+    // Count particles to inject and store in particles -> offset
+    np_inject( particles -> local_range(), particles -> offset );
+
+    // Do an exclusive scan to get the required offsets
+    uint32_t off = 0;
+    for( unsigned int i = 0; i < ntiles.x * ntiles.y; i++ ) {
+        auto tmp = particles -> offset[i];
+        particles -> offset[i] = off;
+        off += tmp;
     }
 
     // Inject the particles
@@ -1819,11 +1832,7 @@ Species::~Species() {
  */
 void Species::inject( ) {
 
-    /// @brief position of lower corner of local grid in simulation units
-    float2 ref = make_float2( 
-        particles->tile_off.x * particles->nx.x * dx.x + moving_window.motion(),
-        particles->tile_off.y * particles->nx.y * dx.y
-    );
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> inject( *particles, ppc, dx, ref, particles -> local_range() );
 }
@@ -1834,14 +1843,7 @@ void Species::inject( ) {
  */
 void Species::inject( bnd<unsigned int> range ) {
 
-    /// @brief local grid position in global grid
-    auto local_off = particles -> tile_off * particles -> nx;
-
-    /// @brief position of lower corner of local grid in simulation units
-    float2 ref = make_float2( 
-        local_off.x * dx.x + moving_window.motion(),
-        local_off.y * dx.y
-    );
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> inject( *particles, ppc, dx, ref, range );
 }
@@ -1858,14 +1860,8 @@ void Species::inject( bnd<unsigned int> range ) {
  */
 void Species::np_inject( bnd<unsigned int> range, int * np ) {
 
-    /// @brief local grid position in global grid
-    auto local_off = particles -> tile_off * particles -> nx;
-
     /// @brief position of lower corner of local grid in simulation units
-    float2 ref = make_float2( 
-        local_off.x * dx.x + moving_window.motion(),
-        local_off.y * dx.y
-    );
+    float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> np_inject( *particles, ppc, dx, ref, range, np );
 }
@@ -2020,7 +2016,7 @@ void Species::process_bc() {
 /**
  * @brief Free stream particles 1 iteration
  * 
- * No acceleration or current deposition is performed. Used for debug purposes.
+ * @note No acceleration or current deposition is performed. Used for debug purposes.
  * 
  */
 void Species::advance( ) {
@@ -2030,13 +2026,12 @@ void Species::advance( ) {
 
     // Process physical boundary conditions
     process_bc();
-
-    // Increase internal iteration number
-    iter++;
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
 
+    // Increase internal iteration number
+    iter++;
 }
 
 /**
@@ -2453,20 +2448,26 @@ void Species::deposit_charge( grid<float> &charge ) const {
  */
 void Species::save() const {
 
+    const std::string path = "PARTICLES";
+
     const part::quant quants[] = {
-        part::x, part::y, part::ux, part::uy, part::uz
+        part::quant::x, part::quant::y,
+        part::quant::ux, part::quant::uy, part::quant::uz
     };
 
-    const char * names[] = {
-        "x","y","ux","uy","uz"
+    const char * qnames[] = {
+        "x","y",
+        "ux","uy","uz"
     };
 
-    const char * labels[] = {
-        "x","y","u_x","u_y","u_z"
+    const char * qlabels[] = {
+        "x","y",
+        "u_x","u_y","u_z"
     };
 
-    const char * units[] = {
-        "c/\\omega_n", "c/\\omega_n","c","c","c"
+    const char * qunits[] = {
+        "c/\\omega_n", "c/\\omega_n",
+        "c","c","c"
     };
 
     zdf::iteration iter_info = {
@@ -2480,12 +2481,111 @@ void Species::save() const {
         .name = (char *) name.c_str(),
         .label = (char *) name.c_str(),
         .nquants = 5,
-        .quants = (char **) names,
-        .qlabels = (char **) labels,
-        .qunits = (char **) units,
+        .quants = (char **) qnames,
+        .qlabels = (char **) qlabels,
+        .qunits = (char **) qunits,
     };
 
-    particles -> save( quants, info, iter_info, "PARTICLES" );
+    // Get total number of particles to save
+    uint64_t local = np_local();
+    uint64_t global = 0;
+
+    particles -> parallel.allreduce( &local, &global, 1, mpi::sum );
+
+    // Update metadata entry
+    info.np = global;
+
+    if ( global > 0 ) {
+        // Create a communicator including only the nodes with local particles
+        int color = ( local > 0 ) ? 1 : MPI_UNDEFINED;
+        MPI_Comm comm;
+        MPI_Comm_split( particles -> parallel.get_comm(), color, 0, & comm );
+
+        // Only nodes with particles are involved in this section
+        if ( local > 0 ) {
+
+            // Get rank in new communicator
+            int rank;
+            MPI_Comm_rank( comm, & rank );
+
+            // Open file
+            zdf::par_file part_file;
+            zdf::open_part_file( part_file, info, iter_info, path+"/"+info.name, comm );
+
+            // create the datasets
+            zdf::dataset dsets[ info.nquants ];
+
+            for( uint32_t i = 0; i < info.nquants; i++ ) {
+                dsets[i].name      = info.quants[i];
+                dsets[i].data_type = zdf::data_type<float>();
+                dsets[i].ndims     = 1;
+                dsets[i].data      = nullptr;
+                dsets[i].count[0]  = global; 
+
+                if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
+                    std::cerr << "Particles::save() - Unable to create chunked dataset " << info.quants[i] << '\n';
+                    exit(1);
+                }
+            }
+
+            // Allocate buffer for gathering particle data
+            float *data = memory::malloc<float>( local );
+
+            // Get offsets - this avoids recalculating offsets for each quantity
+            uint64_t file_off;
+            MPI_Exscan( &local, &file_off, 1, MPI_UINT64_T, MPI_SUM, comm );
+            if ( rank == 0 ) file_off = 0;
+
+            // Local data chunk
+            zdf::chunk chunk;
+            chunk.count[0] = local;
+            chunk.start[0] = file_off;
+            chunk.stride[0] = 1;
+            chunk.data = data;
+
+            float2 scale;
+            
+            // x and y quantities are scaled before saving to file
+            scale = make_float2( dx.x, moving_window.motion() );
+            particles -> gather( part::quant::x, scale, data );
+            zdf::write_cdset( part_file, dsets[0], chunk, file_off );
+
+            scale = make_float2( dx.y, 0 );
+            particles -> gather( part::quant::y, scale, data );
+            zdf::write_cdset( part_file, dsets[1], chunk, file_off );
+
+            // Remaining quantities are saved "as is"
+            for( uint32_t i = 2; i < info.nquants; i++ ) {
+                particles -> gather( quants[i], data );
+                zdf::write_cdset( part_file, dsets[i], chunk, file_off );
+            }
+
+            // Free temporary memory
+            memory::free( data );
+
+            // close the datasets
+            for( uint32_t i = 0; i < info.nquants; i++ ) 
+                zdf::end_cdset( part_file, dsets[i] );
+
+            // Close the file
+            zdf::close_file( part_file );
+
+            MPI_Comm_free(&comm);
+        }
+
+    } else {
+        // No particles - root node creates an empty file
+        if ( particles -> parallel.root() ) {
+            zdf::file part_file;
+            zdf::open_part_file( part_file, info, iter_info, path+"/"+info.name );
+
+            for ( uint32_t i = 0; i < info.nquants; i ++) {
+                zdf::add_quant_part_file( part_file, info.quants[i],  nullptr, 0 );
+            }
+
+            zdf::close_file( part_file );
+        }
+    }
 }
 
 /**
@@ -2554,7 +2654,7 @@ void Species::save_charge() const {
 /**
  * @brief kernel for depositing 1d phasespace
  * 
- * @tparam q        Phasespace quantity
+ * @tparam quant    Phasespace quantity
  * @param d_data    Output data
  * @param range     Phasespace value range
  * @param size      Phasespace grid size
@@ -2565,7 +2665,7 @@ void Species::save_charge() const {
  * @param d_x       Particle data (pos)
  * @param d_u       Particle data (generalized momenta)
  */
-template < phasespace::quant q >
+template < phasespace::quant quant >
 void dep_pha1_kernel(
     uint2 const tile_idx,
     float * const __restrict__ d_data, float2 const range, int const size,
@@ -2574,7 +2674,6 @@ void dep_pha1_kernel(
 {
     const uint2 ntiles  = part.ntiles;
     const uint2 tile_nx = part.nx;
-    const uint2 tile_off = tile_idx + part.tile_off;
 
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
@@ -2586,21 +2685,22 @@ void dep_pha1_kernel(
 
     float const pha_rdx = size / (range.y - range.x);
 
+    const int shiftx = (part.tile_off.x + tile_idx.x) * tile_nx.x;
+    const int shifty = (part.tile_off.y + tile_idx.y) * tile_nx.y;
+
     for( int i = 0; i < np; i++ ) {
         float d;
-        switch( q ) {
-        case( phasespace:: x ): d = ( tile_off.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ): d = ( tile_off.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d = u[i].x; break;
-        case( phasespace:: uy ): d = u[i].y; break;
-        case( phasespace:: uz ): d = u[i].z; break;
-        }
+        if constexpr ( quant == phasespace:: x  ) d = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant == phasespace:: y  ) d = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant == phasespace:: ux ) d = u[i].x;
+        if constexpr ( quant == phasespace:: uy ) d = u[i].y;
+        if constexpr ( quant == phasespace:: uz ) d = u[i].z;
 
         float n =  (d - range.x ) * pha_rdx - 0.5f;
         int   k = int( n + 1 ) - 1;
         float w = n - k;
 
-        // When using multi-threading these need to atomic accross tiles
+        // When using multi-threading these need to be atomic accross tiles
         if ((k   >= 0) && (k   < size-1)) d_data[k  ] += (1-w) * norm;
         if ((k+1 >= 0) && (k+1 < size-1)) d_data[k+1] +=    w  * norm;
     }
@@ -2753,8 +2853,9 @@ void Species::save_phasespace( phasespace::quant quant, float2 const range,
     particles -> parallel.reduce( d_data, size, mpi::sum );
 
     // Save file (data is on root node)
-    if ( particles -> parallel.root() == 0 )
+    if ( particles -> parallel.root() ) {
         zdf::save_grid( d_data, info, iter_info, "PHASESPACE/" + name );
+    }
 
     memory::free( d_data );
 }
@@ -2789,7 +2890,6 @@ void dep_pha2_kernel(
     
     const uint2 ntiles  = part.ntiles;
     const auto tile_nx  = part.nx;
-    const uint2 tile_off = tile_idx + part.tile_off;
 
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
@@ -2802,38 +2902,41 @@ void dep_pha2_kernel(
     float const pha_rdx0 = size0 / (range0.y - range0.x);
     float const pha_rdx1 = size1 / (range1.y - range1.x);
 
+    const int shiftx = (part.tile_off.x + tile_idx.x) * tile_nx.x;
+    const int shifty = (part.tile_off.y + tile_idx.y) * tile_nx.y;
+
     for( int i = 0; i < np; i++ ) {
         float d0;
-        switch( quant0 ) {
-        case( phasespace:: x ):  d0 = ( tile_off.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ):  d0 = ( tile_off.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d0 = u[i].x; break;
-        case( phasespace:: uy ): d0 = u[i].y; break;
-        case( phasespace:: uz ): d0 = u[i].z; break;
-        }
+        if constexpr ( quant0 == phasespace:: x )  d0 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant0 == phasespace:: y )  d0 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant0 == phasespace:: ux ) d0 = u[i].x;
+        if constexpr ( quant0 == phasespace:: uy ) d0 = u[i].y;
+        if constexpr ( quant0 == phasespace:: uz ) d0 = u[i].z;
 
         float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
         int   k0 = int( n0 + 1 ) - 1;
         float w0 = n0 - k0;
 
         float d1;
-        switch( quant1 ) {
-        //case( phasespace:: x ):  d1 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ):  d1 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d1 = u[i].x; break;
-        case( phasespace:: uy ): d1 = u[i].y; break;
-        case( phasespace:: uz ): d1 = u[i].z; break;
-        }
+        // if constexpr ( quant1 == phasespace:: x )  d1 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant1 == phasespace:: y )  d1 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant1 == phasespace:: ux ) d1 = u[i].x;
+        if constexpr ( quant1 == phasespace:: uy ) d1 = u[i].y;
+        if constexpr ( quant1 == phasespace:: uz ) d1 = u[i].z;
 
         float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
         int   k1 = int( n1 + 1 ) - 1;
         float w1 = n1 - k1;
 
         // When using multi-threading these need to atomic accross tiles
-        if ((k0   >= 0) && (k0   < size0-1) && (k1   >= 0) && (k1   < size1-1)) d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
-        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1   >= 0) && (k1   < size1-1)) d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
-        if ((k0   >= 0) && (k0   < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1)) d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
-        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1)) d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
+        if ((k0   >= 0) && (k0   < size0-1) && (k1   >= 0) && (k1   < size1-1))
+            d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
+        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1   >= 0) && (k1   < size1-1))
+            d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
+        if ((k0   >= 0) && (k0   < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
+            d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
+        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
+            d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
     }
 }
 
@@ -3093,8 +3196,9 @@ void Species::save_phasespace(
     particles -> parallel.reduce( d_data, size0 * size1, mpi::sum );
 
     // Save file (data is on root node)
-    if ( particles -> parallel.root() == 0 )
+    if ( particles -> parallel.root() ) {
         zdf::save_grid( d_data, info, iter_info, "PHASESPACE/" + name );
+    }
 
     memory::free( d_data );
 }

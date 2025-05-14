@@ -364,7 +364,7 @@ public:
      * @brief Move particles (advance positions) without depositing current
      * 
      */
-    void move( );
+    void move();
 
     /**
      * @brief Free stream particles 1 timestep
@@ -470,8 +470,7 @@ public:
     /**
      * @brief Save particle data to file
      * 
-     * Saves positions and velocities for all particles. Positions are currently
-     * normalized to cell size
+     * @note Saves positions and velocities for all particles in simulation units
      */
     void save() const;
 
@@ -505,7 +504,13 @@ public:
         phasespace::quant quant0, float2 const range0, int const size0,
         phasespace::quant quant1, float2 const range1, int const size1 ) const;
 
-
+    /**
+     * @brief Print information on the number of particles per tile
+     * 
+     * @warning Used for debug purposes only
+     * 
+     * @param msg   (optional) Message to print before printing particle information
+     */
     void info_np() {
         particles->info_np();
     }

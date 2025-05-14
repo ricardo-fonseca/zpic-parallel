@@ -537,7 +537,7 @@ class ParticleSort : public ParticleSortData {
                     dest_tag(dir), comm, &send.requests[dir]);
 
                 uint32_t send_np = 0;
-                for( int k = 0; k < size(dir); k++ ) send_np += send.buffer[idx + k];
+                for( unsigned k = 0; k < size(dir); k++ ) send_np += send.buffer[idx + k];
                 send.msg_np[dir] = send_np;
 
                 idx += size(dir);
@@ -556,7 +556,7 @@ class ParticleSort : public ParticleSortData {
             if ( dir != 4 ) {
 
                 uint32_t recv_np = 0;
-                for( int k = 0; k < size(dir); k++ ) {
+                for( unsigned k = 0; k < size(dir); k++ ) {
                     recv_np += recv.buffer[ idx ];
                     idx++;
                 }
@@ -1074,7 +1074,7 @@ class Particles : public ParticleData {
      * @param quant     Quantity to gather
      * @param d_data    Output data buffer, assumed to have size >= np
      */
-    void gather( part::quant quant, float * const __restrict__ d_data, int * const d_off  );
+    void gather( part::quant quant, float * const __restrict__ d_data  );
 
     /**
      * @brief Gather data from a specific particle quantity, scaling values
@@ -1082,10 +1082,10 @@ class Particles : public ParticleData {
      * @note Data (val) will be returned as `scale.x * val + scale.y`
      * 
      * @param quant     Quantity to gather
-     * @param d_data    Output data buffer, assumed to have size >= np
      * @param scale     Scale factor for data
+     * @param d_data    Output data buffer, assumed to have size >= np
      */
-    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data, int * const __restrict__ d_off );
+    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data );
 
     /**
      * @brief Validates particle data
@@ -1211,9 +1211,9 @@ class Particles : public ParticleData {
                 std::cout << '\n';
                 mpi::cout << "#particles per tile:\n";
 
-                for( int j = 0; j < ntiles.y; j++ ) {
+                for( unsigned j = 0; j < ntiles.y; j++ ) {
                     mpi::cout << j << ':';
-                    for( int i = 0; i < ntiles.x; i++ ) {
+                    for( unsigned i = 0; i < ntiles.x; i++ ) {
                         int tid = j * ntiles.x + i;
                         mpi::cout << " " << np[tid];
                     }
