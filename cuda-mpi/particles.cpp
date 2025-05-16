@@ -107,7 +107,7 @@ void ParticleSort::exchange_np() {
         unsigned int s = 1;                   // corners
         if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
         if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
-        if ( dir == 4 ) s = 0;
+        if ( dir == 4 ) s = 0;                // local
         return s;
     };
 
@@ -677,15 +677,15 @@ __global__
  * 
  * @param tmp_part      (out) Particle buffer
  * @param new_np        (in/out) New number of particles per tile. Set to 0 after calculation.
- * @param dev_np        (out) Total number of particles (including additional ones)
  * @param extra         (in) Additional incoming particles
+ * @param dev_np        (out) Total number of particles (including additional ones)
  */
 void __launch_bounds__(opt_update_tile_info_block) update_tile_info( 
     ParticleData tmp_part,
     ParticleSortData sort,
     const int * __restrict__ recv_buffer,
-    uint32_t * __restrict__ dev_np,
-    const int * __restrict__ extra = nullptr ) {
+    const int * __restrict__ extra,
+    uint32_t * __restrict__ dev_np ) {
 
     // New number of particles per tile
     const int * __restrict__ new_np = sort.new_np;
@@ -814,19 +814,21 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
  * 
  * @param tmp           (out) Temp. Particle buffer
  * @param sort          (in) Sort data (includes information from other MPI nodes)
+ * @param extra         (in) Additional particles (may be nullptr)
  * @param dev_np        (out) Temporary variable to get total number of particles
- * @param extra         (in) Additional particles (optional)
  * @return uint32_t     (out) Total number of particles (including additional ones)
  */
-uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort, 
-    const int * __restrict__ recv_buffer,
-    device::Var<uint32_t> & dev_np,  
-    const int * __restrict__ extra = nullptr ) {
+uint32_t update_tile_info( 
+    ParticleData & tmp, 
+    ParticleSort & sort, 
+    const int * __restrict__ extra,
+    device::Var<uint32_t> & dev_np ) {
 
+    // Get optimal block size
     const auto ntiles_all   = part::all_tiles( tmp.ntiles );
     auto block = ( ntiles_all < opt_update_tile_info_block ) ? ntiles_all : opt_update_tile_info_block;
 
-    kernel::update_tile_info <<<1,block>>> ( tmp, sort, recv_buffer, dev_np.ptr(), extra );
+    kernel::update_tile_info <<<1,block>>> ( tmp, sort, sort.recv.buffer, extra, dev_np.ptr() );
 
     return dev_np.get();
 }
@@ -1391,7 +1393,7 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // Get new offsets, including:
     // - Incoming particles from other MPI nodes
     // - New particles that will be injected (if any)
-    auto total_np = update_tile_info ( tmp, sort, sort.recv.buffer, dev_tmp_uint32, extra );
+    auto total_np = update_tile_info ( tmp, sort, extra, dev_tmp_uint32 );
 
     if ( total_np > max_part ) { 
         std::cerr << "Particles::tile_sort() - particle buffer requires growing,";
@@ -1412,12 +1414,13 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     recv.wait();
 
     // Unpack received message data
-    unpack_msg( sort, sort.recv.msg_np, sort.recv.buffer, recv );
+    unpack_msg( sort, recv );
 
     // Wait for sends to complete
     send.wait();
 
     // For debug only, remove from production code
+    // parallel.barrier();
     // validate( "after tile_sort" );
 }
 
@@ -1941,12 +1944,9 @@ namespace kernel {
  * @brief Unpack received particle data into main particle data buffer
  * 
  * @param sort                  Temporary sort index
- * @param recv_msg_np           Number of particles per message
- * @param recv_msg_tile_np      Number of particles per tile
  * @param recv                  Receive particle data message object
  */
-void Particles::unpack_msg( ParticleSortData &sort, 
-    int * __restrict__ recv_msg_np, int * __restrict__ recv_msg_tile_np,
+void Particles::unpack_msg( ParticleSort &sort, 
     ParticleMessage &recv ) {
 
     if ( recv.buffer != nullptr ) {
@@ -1957,8 +1957,8 @@ void Particles::unpack_msg( ParticleSortData &sort,
         kernel::unpack_msg <<< grid, block >>> ( 
             *this,                      // Particle data
             recv.buffer,                // Message receive buffer (all messages)
-            recv_msg_np,                // Number of particles per message
-            recv_msg_tile_np            // Number of particles per tile
+            sort.recv.msg_np,           // Number of particles per message
+            sort.recv.buffer            // Number of particles per tile
         );
     }
 }

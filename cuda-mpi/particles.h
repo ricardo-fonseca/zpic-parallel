@@ -328,7 +328,7 @@ struct ParticleSortData {
      * @note  Includes incoming/outgoing particles per edge tile
      */
     int * new_np;
-    /// @brief Number of tiles
+    /// @brief Local number of tiles
     const uint2 ntiles;
 
     ParticleSortData( const uint2 ntiles ) : ntiles(ntiles) {}; 
@@ -430,7 +430,8 @@ class ParticleSort : public ParticleSortData {
         // MPI Communicator
         comm = par.get_comm();
 
-        auto local_rank = par.get_rank(); 
+        // Local MPI rank
+        auto local = par.get_rank(); 
 
         // Neighbor MPI ranks
         for( int dir = 0; dir < 9; dir++ ) {
@@ -440,7 +441,7 @@ class ParticleSort : public ParticleSortData {
 
             // Disable all messages to self
             // Single node periodic boundaries are handled without messages
-            if ( neighbor[dir] == local_rank ) neighbor[dir] = -1;
+            if ( neighbor[dir] == local ) neighbor[dir] = -1;
         }
     }
 
@@ -464,14 +465,8 @@ class ParticleSort : public ParticleSortData {
      * 
      */
     void reset() {
-        auto local_tiles = ntiles.x * ntiles.y;
-
-        auto edge_tiles = 2 * ntiles.y + // x boundary
-                          2 * ntiles.x + // y boundary
-                          4;             // corners
-
         // Reset local data and outgoing data buffer
-        device::zero( new_np, local_tiles + edge_tiles );
+        device::zero( new_np, part::all_tiles( ntiles ) );
     }
 
     /**
@@ -1094,14 +1089,10 @@ class ParticleMessage {
     /**
      * @brief Unpack received particle data into main particle data buffer
      * 
-     * @param sort                  Temporary sort index
-     * @param recv_msg_np           Number of particles per message
-     * @param recv_msg_tile_np      Number of particles per tile
-     * @param recv                  Receive particle data message object
+     * @param sort      Temporary sort index
+     * @param recv      Receive message object
      */
-    void unpack_msg( ParticleSortData &sort, 
-        int * __restrict__ recv_msg_np, int * recv_msg_tile_np,
-        ParticleMessage &recv );
+    void unpack_msg( ParticleSort &sort, ParticleMessage &recv );
 
     /**
      * @brief Print information on the number of particles per tile
