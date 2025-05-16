@@ -16,8 +16,6 @@
 #define opt_copy_out_block 32
 #define opt_copy_in_block 1024
 
-
-
 namespace kernel {
 
     __global__
@@ -109,38 +107,39 @@ void ParticleSort::exchange_np() {
         unsigned int s = 1;                   // corners
         if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
         if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
+        if ( dir == 4 ) s = 0;
         return s;
     };
 
     // Post receives
     unsigned int idx = 0;
     for( auto dir = 0; dir < 9; dir++ ) {            
-        if ( dir != 4 ) {
+        if ( neighbor[dir] >= 0 ) {
             MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
-                    source_tag(dir), comm, &recv.requests[dir]);
-            idx += size(dir);
+                    source_tag(dir), comm, &recv.requests[dir]);      
         } else {
             recv.requests[dir] = MPI_REQUEST_NULL;
         }
+        idx += size(dir);
     }
 
     // Post sends
     idx = 0;
     for( auto dir = 0; dir < 9; dir++ ) {
-        if ( dir != 4 ) {
+        if ( neighbor[dir] >= 0 ) {
             MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
                 dest_tag(dir), comm, &send.requests[dir]);
-            idx += size(dir);
         } else {
             send.requests[dir] = MPI_REQUEST_NULL;
         }
+        idx += size(dir);
     }
 
     // Wait for receives to complete
     MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );
 
     // update send.msg_np[] and recv.msg_np[]
-    // This is only to avoid copying send.buffer and recv.buffer to host
+    // This is avoids copying send.buffer and recv.buffer to host
     dim3 grid( 3, 3 );
     auto block = 32;
     kernel::update_msg_np <<< grid, block >>> ( 
@@ -1394,11 +1393,6 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
  */
 void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
 
-    /*
-    auto local_np = np_local();
-    mpi::cout << "(*info*) local_np = " << local_np << std::endl;
-    */
-
     // Reset sort data
     sort.reset();
 
@@ -1441,9 +1435,7 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     send.wait();
 
     // For debug only, remove from production code
-    parallel.barrier();
-    deviceCheck();
-    validate( "after tile_sort" );
+    // validate( "after tile_sort" );
 }
 
 namespace kernel {
@@ -1799,7 +1791,7 @@ void Particles::isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &
             send.size[i] = sort.send.msg_np[i] * particle_size();
             send_np += sort.send.msg_np[i];
         } else {
-            sort.send.msg_np[i] = 0;    // this should not be necessary
+            // sort.send.msg_np[i] = 0;    // this should not be necessary
             send.size[i] = 0;
         }
     }
@@ -1807,94 +1799,10 @@ void Particles::isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &
     // Check if msg buffer is large enough
     send.check_buffer( send_np * particle_size() );
 
-/*
-    // debug
-    auto all_np = send_np;
-    parallel.reduce( &all_np, 1, mpi::sum );
-    if ( parallel.root() ) {
-        std::cout << "total #particles in send message: " << all_np << '\n';
-    }
-*/
     // Pack data
     dim3 grid( part::msg_tiles( tmp.ntiles ) );
     dim3 block( 256 );
     kernel::pack_msg <<< grid, block >>> ( tmp, send.buffer, sort.send.msg_np );
-
-    // Remove from production code
-    deviceCheck();
-
-    // Check send buffers
-    uint32_t offset = 0;
-    for( int i = 0; i < 9; i++ ) {
-        if ( i != 4 && send.size[i] > 0 ) {
-            int ierr_ix = 0;
-            constexpr int maxerr = 3;
-
-            int2   * ix = host::malloc<int2> ( sort.send.msg_np[i] );
-            device::memcpy_tohost( ix, (int2 *) & send.buffer[ offset ], sort.send.msg_np[i] );
-
-            /*
-            mpi::cout << "send ix[] = ";
-            for( int j = 0; j < sort.send.msg_np[i]; j++ ) {
-                mpi::cout << ix[j] << " ";
-            }
-            mpi::cout << std::endl;
-            */
-            for( int j = 0; j < sort.send.msg_np[i]; j++ ) {
-                if (ix[j].x < 0 || ix[j].x >= nx.x  ||
-                    ix[j].y < 0 || ix[j].y >= nx.y){
-                    if ( ierr_ix >= maxerr ) {
-                        mpi::cout << "over " << maxerr << " send ix errors, skipping...\n";
-                        break;
-                    }
-                    mpi::cout << "bad send message ix[" << j << "] = " << ix[j] << '\n';
-                    ierr_ix++;
-                }
-            }
-            host::free( ix );
-
-            int ierr_x = 0;
-            float2 * x  = host::malloc<float2> ( sort.send.msg_np[i] );
-            device::memcpy_tohost( x, (float2 *) & send.buffer[ offset + sort.send.msg_np[i] * sizeof(int2)], sort.send.msg_np[i] );
-            /*
-            mpi::cout << "send x [] = ";
-            for( int j = 0; j < sort.send.msg_np[i]; j++ ) {
-                mpi::cout << x[j] << " ";
-            }
-            mpi::cout << std::endl;
-            */
-            for( int j = 0; j < sort.send.msg_np[i]; j++ ) {
-                if (x[j].x < -0.5f || x[j].x >= +0.5f ||
-                    x[j].y < -0.5f || x[j].y >= +0.5f ){
-                    if ( ierr_x >= maxerr ) {
-                        mpi::cout << "over " << maxerr << " send x errors, skipping...\n";
-                        break;
-                    }
-                    mpi::cout << "bad send message x[" << j << "] = " << x[j] << '\n';
-                    ierr_x++;
-                }
-            }
-            host::free( x );
-
-            if ( ierr_ix > 0 || ierr_x > 0 ) {
-                mpi::cout << "bad particle data inside send message, aborting\n";
-                exit(1);
-            }
-
-            /*
-            float3 * u  = host::malloc<float3> ( sort.send.msg_np[i] );
-            device::memcpy_tohost( u, (float3 *) & send.buffer[ offset + sort.send.msg_np[i] * (sizeof(int2) + sizeof(float2)) ], sort.send.msg_np[i] );
-
-            mpi::cout << "send u [] = ";
-            for( int j = 0; j < sort.send.msg_np[i]; j++ ) {
-                mpi::cout << u[j] << " ";
-            }
-            mpi::cout << std::endl;
-            */
-
-            offset += send.size[i];
-        }
-    }
 
     // Start sending messages
     send.isend();
@@ -2058,79 +1966,16 @@ void Particles::unpack_msg( ParticleSortData &sort,
     int * __restrict__ recv_msg_np, int * __restrict__ recv_msg_tile_np,
     ParticleMessage &recv ) {
 
-/*
-    // debug
-    int incoming = 0;
-    for( int i = 0; i < 9; i++ ) {
-        if ( i != 4 ) incoming += recv_msg_np[i];
+    if ( recv.buffer != nullptr ) {
+        // Unpack all data - multiple message tiles may write to the same local tile
+        dim3 grid( part::msg_tiles( ntiles ) );
+        dim3 block( 32 );
+
+        kernel::unpack_msg <<< grid, block >>> ( 
+            *this,                      // Particle data
+            recv.buffer,                // Message receive buffer (all messages)
+            recv_msg_np,                // Number of particles per message
+            recv_msg_tile_np            // Number of particles per tile
+        );
     }
-    mpi::cout << "Incoming particles: " << incoming << std::endl;
-*/
-
-    // Check receive buffers (remove from production code)
-    uint32_t offset = 0;
-    for( int i = 0; i < 9; i++ ) {
-        if ( i != 4 && recv.size[i] > 0 ) {
-
-            int ierr = 0;
-
-            int2   * ix = host::malloc<int2> ( recv_msg_np[i] );
-            device::memcpy_tohost( ix, (int2 *) & recv.buffer[ offset ], recv_msg_np[i] );
-            /*
-            mpi::cout << "recv ix[] = ";
-            for( int j = 0; j < recv_msg_np[i]; j++ ) {
-                mpi::cout << ix[j] << " ";
-            }
-            mpi::cout << std::endl;
-            */
-            for( int j = 0; j < recv_msg_np[i]; j++ ) {
-                if (ix[j].x < 0 || ix[j].x >= nx.x  ||
-                    ix[j].y < 0 || ix[j].y >= nx.y){
-                    mpi::cout << "bad recv message ix[" << j << "] = " << ix[j] << '\n';
-                    ierr++;
-                }
-            }
-            host::free( ix );
-
-            float2 * x  = host::malloc<float2> ( recv_msg_np[i] );
-            device::memcpy_tohost( x, (float2 *) & recv.buffer[ offset + recv_msg_np[i] * sizeof(int2)], recv_msg_np[i] );
-            
-            /*
-            mpi::cout << "recv x[] = ";
-            for( int j = 0; j < recv_msg_np[i]; j++ ) {
-                mpi::cout << x[j] << " ";
-            }
-            mpi::cout << std::endl;
-            */
-            for( int j = 0; j < recv_msg_np[i]; j++ ) {
-                if (x[j].x < -0.5f || x[j].x >= +0.5f ||
-                    x[j].y < -0.5f || x[j].y >= +0.5f ){
-                    mpi::cout << "bad recv message x[" << j << "] = " << x[j] << '\n';
-                    ierr++;
-                }
-            }
-            host::free( x );
-
-            if ( ierr > 0 ) {
-                mpi::cout << "bad particle data inside recv message, aborting\n";
-                exit(1);
-            }
-
-            offset += recv.size[i];
-        }
-    }
-
-    // Unpack all data - multiple message tiles may write to the same local tile
-    dim3 grid( part::msg_tiles( ntiles ) );
-    dim3 block( 32 );
-
-    kernel::unpack_msg <<< grid, block >>> ( 
-        *this,                      // Particle data
-        recv.buffer,                // Message receive buffer (all messages)
-        recv_msg_np,                // Number of particles per message
-        recv_msg_tile_np            // Number of particles per tile
-    );
-
-    // Remove from production code
-    deviceCheck();
 }
