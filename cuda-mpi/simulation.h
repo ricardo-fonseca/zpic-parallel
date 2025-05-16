@@ -234,7 +234,8 @@ class Simulation {
      */
     uint64_t get_nmove( bool all = false ) {
         uint64_t nmove = 0;
-        for (unsigned i = 0; i < species.size(); i++) nmove += species[i] -> get_nmove();
+        for ( auto & sp : species ) 
+            nmove += sp -> get_nmove();
         
         if ( all ) {
             parallel.allreduce( &nmove, 1, mpi::sum );

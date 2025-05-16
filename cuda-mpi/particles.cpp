@@ -828,23 +828,6 @@ uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort,
 
     kernel::update_tile_info <<<1,block>>> ( tmp, sort, recv_buffer, dev_np.ptr(), extra );
 
-/*
-    {
-        int * np = host::malloc<int>( tmp.ntiles.x * tmp.ntiles.y );
-        int * offset = host::malloc<int>( tmp.ntiles.x * tmp.ntiles.y );
-        device::memcpy_tohost( np, tmp.np, tmp.ntiles.x * tmp.ntiles.y );
-        device::memcpy_tohost( offset, tmp.offset, tmp.ntiles.x * tmp.ntiles.y );
-    
-        for( int j = 0; j < tmp.ntiles.y; j++ ) {
-            mpi::cout << '[' << std::setw(2) << j << ']';
-            for( int i = 0; i < tmp.ntiles.x; i++ ) {
-                mpi::cout << ' ' <<  std::setw(3) << offset[ j * tmp.ntiles.x + i ];
-            }
-            mpi::cout << std::endl;
-        }
-
-    }
-*/
     return dev_np.get();
 }
 

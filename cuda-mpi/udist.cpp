@@ -147,6 +147,7 @@ void thermal_corr( ParticleData const part, uint2 rnd_seed, const float3 uth, co
     // Get shared memory addresses
     extern __shared__ char block_shm[];
 
+    ///@brief Buffer size (number of cells)
     auto const bsize = part.nx.x * part.nx.y;
     int * const __restrict__ npcell   = reinterpret_cast<int*>    ( & block_shm[0] );
     float3 * const __restrict__ fluid = reinterpret_cast<float3*> ( & npcell[ bsize ] );

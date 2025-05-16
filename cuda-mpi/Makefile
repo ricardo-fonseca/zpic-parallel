@@ -1,21 +1,32 @@
 # Makefile for GPU MPI version
 #
-# We assume a CUDA-aware OpenMPI installation and use the compiler wrappers
+# We assume a CUDA-aware MPICH or OpenMPI installation and use the compiler wrappers
 # to get MPI compilation options
 
-#--------------------- NVIDIA Compilers --------------------
+#--------------------- MPICH + NVIDIA Compilers --------------------
+
+# CUDA-aware MPICH base installation
+
+# CC = mpicc -cc=nvcc
+# CFLAGS = -O3
+
+# CXX = mpic++ -CC=nvcc
+# CXXFLAGS = -O3
+
+# LDFLAGS  = -forward-unknown-to-host-compiler
+
+#--------------------- OpenMPI + NVIDIA Compilers --------------------
+
+# CUDA-aware OpenMPI base installation
+# Also works for NVIDIA HPC-X
+
 CC = nvcc
 CFLAGS = -O3
-
 CXX = nvcc
 CXXFLAGS = -O3
 
-#--------------------- MPI Configuration -------------------
-# Assumes a CUDA-aware OpenMPI base installation
-
 CFLAGS   += $(shell mpicc  --showme:compile)
 CXXFLAGS += $(shell mpic++ --showme:compile)
-
 LDFLAGS  += -forward-unknown-to-host-compiler $(shell mpic++ --showme:link)
 
 # --------------------------------------------------------------------------- #

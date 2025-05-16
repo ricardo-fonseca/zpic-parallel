@@ -9,6 +9,8 @@
 
 #include "zdf-cpp.h"
 
+#include <iomanip>
+
 namespace part {
 
 /**
@@ -405,8 +407,8 @@ class ParticleSort : public ParticleSortData {
                           2 * ntiles.x + // y boundary
                           4;             // corners
 
-        // Include send / receive buffers for number of particles leaving/entering node
-        new_np = device::malloc<int>( local_tiles + 2 * edge_tiles );
+        // Include send buffer for number of particles leaving node
+        new_np = device::malloc<int>( local_tiles + edge_tiles );
         
         // Number of particles leaving each local tile
         nidx   = device::malloc<int>( local_tiles );
@@ -418,18 +420,27 @@ class ParticleSort : public ParticleSortData {
         send.buffer = &new_np[ local_tiles ];
         send.msg_np = managed::malloc<int>(9);
 
-        // Receive buffer
-        recv.buffer = &new_np[ local_tiles + edge_tiles ];
+        // Use a separate buffer for receiving messages
+        recv.buffer = device::malloc<int>( edge_tiles );
         recv.msg_np = managed::malloc<int>(9);
 
-        // Communicator
+        // Only required when not receiving messages from all neighbors
+        device::zero( recv.buffer, edge_tiles );
+
+        // MPI Communicator
         comm = par.get_comm();
 
-        // Neighbor ranks
+        auto local_rank = par.get_rank(); 
+
+        // Neighbor MPI ranks
         for( int dir = 0; dir < 9; dir++ ) {
             int shiftx, shifty;
             part::edge_shift_dir( dir, shiftx, shifty );
             neighbor[ dir ] = par.get_neighbor( shiftx, shifty );
+
+            // Disable all messages to self
+            // Single node periodic boundaries are handled without messages
+            if ( neighbor[dir] == local_rank ) neighbor[dir] = -1;
         }
     }
 
@@ -440,6 +451,7 @@ class ParticleSort : public ParticleSortData {
     ~ParticleSort() {
         managed::free( send.msg_np );
         managed::free( recv.msg_np );
+        device::free( recv.buffer );
 
         device::free( npt );
         device::free( nidx );
@@ -458,7 +470,7 @@ class ParticleSort : public ParticleSortData {
                           2 * ntiles.x + // y boundary
                           4;             // corners
 
-        // No need to reset incoming message buffers
+        // Reset local data and outgoing data buffer
         device::zero( new_np, local_tiles + edge_tiles );
     }
 
@@ -534,11 +546,19 @@ class ParticleMessage {
         // Communicator
         comm = par.get_comm();
 
-        // Initialize neighbor ranks and essage requests
+        auto rank = par.get_rank();
+
+        // Initialize neighbor ranks and message requests
         for( int dir = 0; dir < 9; dir++ ) {
             int shiftx, shifty;
             part::edge_shift_dir( dir, shiftx, shifty );
             neighbor[ dir ] = par.get_neighbor( shiftx, shifty );            
+            
+            // Disable messages to self
+            // This is for debug purposes only, there should never be any particles
+            // being sent to self
+            if ( neighbor[ dir ] == rank ) neighbor[ dir ] = -1;
+            
             requests[ dir ] = MPI_REQUEST_NULL;
         }
 
