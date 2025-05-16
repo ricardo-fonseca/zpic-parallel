@@ -1232,7 +1232,7 @@ class grid {
         // Copy along y direction
         copy_to_gc_y_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
-            periodic.x, gc.x.lower, gc.x.upper
+            periodic.y, gc.y.lower, gc.y.upper
         );
     }
 
