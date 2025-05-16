@@ -14,24 +14,24 @@
 # CXXFLAGS += -fopenmp
 
 #--------------------- Clang Compilers --------------------
-#CC = mpicc
-#CFLAGS = -O3 -march=native
+CC = mpicc
+CFLAGS = -O3 -march=native
 
-#CXX = mpic++
-#CXXFLAGS = -O3 -march=native
+CXX = mpic++
+CXXFLAGS = -O3 -march=native
 
 # OpenMP support
-#CXXFLAGS += -fopenmp
+CXXFLAGS += -fopenmp
 
 #------------------ Intel oneApi Compilers -----------------
-CC = mpiicx
-CFLAGS = -O3
+# CC = mpiicx
+# CFLAGS = -O3
 
-CXX = mpiicpx
-CXXFLAGS = -O3
+# CXX = mpiicpx
+# CXXFLAGS = -O3
 
 # OpenMP support
-CXXFLAGS += -qopenmp
+# CXXFLAGS += -qopenmp
 
 # --------------------------------------------------------------------------- #
 
@@ -54,7 +54,8 @@ CFLAGS += -Wall -std=c11
 CXXFLAGS += -Wall -std=c++17 -Wno-unknown-pragmas 
 
 # Disable VLA extension warnings (clang compilers)
-CXXFLAGS += -Wno-vla-cxx-extension
+# CXXFLAGS += -Wno-vla-cxx-extension
+CXXFLAGS += -Wno-vla-extension
 
 # --------------------------------------------------------------------------- #
 

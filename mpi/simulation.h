@@ -130,10 +130,6 @@ class Simulation {
         current.zero();
 
         // Advance all species
-        // for (int i = 0; i < species.size(); i++) {
-        //     species[i] -> advance( *emf, *current );
-        // }
-
         for ( auto & sp : species ) {
             sp -> advance( emf, current );
         }
@@ -157,10 +153,6 @@ class Simulation {
         current.zero();
 
         // Advance all species
-        // for (int i = 0; i < species.size(); i++) {
-        //     species[i] -> advance_mov_window( emf, current );
-        // }
-
         for ( auto & sp : species ) {
             sp -> advance_mov_window( emf, current );
         }

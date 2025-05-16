@@ -131,7 +131,7 @@ inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
  *       in a contiguous buffer, following the same order as set by
  *      `edge_shift_dir()` and sizes according to `edge_ntiles()`
  * 
- * @param dir       Direction (0-9)
+ * @param dir       Direction (0-8)
  * @param ntiles    Number of local tiles (x,y)
  * @return int      Offset of edge tiles in the specified direction
  */
@@ -182,7 +182,7 @@ inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd 
     // Parallel shift
     int xshift = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
     int yshift = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
-    int dir    = edge_dir_shift( xshift, yshift );
+    int dir    = part::edge_dir_shift( xshift, yshift );
 
     int tid = -1;
     switch (dir)
@@ -297,54 +297,6 @@ inline constexpr int all_tiles( const uint2 ntiles ) {
     return local_tiles( ntiles ) + msg_tiles( ntiles );
 }
 
-#if 0
-
-/**
- * @brief Gets local target tile id from receive message buffer tile
- * 
- * @note Receive message buffer must be organized as set by `edge_tile_off()`
- * 
- * @param recv_tid      Receive buffer tile id
- * @param ntiles        Number of local tiles (x,y)
- * @return int          Target local tile id
- */
-inline int tid_recv_target( const int recv_tid, const uint2 ntiles ) {
-
-    const int ntx = ntiles.x;
-    const int nty = ntiles.y;
-
-    // Stride for storing received data according to direction
-    auto stride = [ ntx ]( int dir ) -> int { 
-        int s = 1;
-        if ( dir == 3 || dir == 5 ) s = ntx;
-        return s;
-    };
-
-    // Offset for storing received data according to direction
-    auto offset = [ ntx, nty ]( int dir ) -> int {
-        int y = dir / 3; int x = dir % 3;
-        int xoff = 0; int yoff = 0;
-        if ( x == 2 ) xoff = ntx-1;
-        if ( y == 2 ) yoff = (nty-1) * ntx;
-        return yoff + xoff;
-    };
-
-
-    int sum = 0;
-    int shift = 0;
-
-    for( int dir = 0; dir < 9; dir++ ) {
-        sum += edge_ntiles( dir, ntiles );
-        if ( recv_tid < sum )
-            return stride(dir) * ( recv_tid - shift ) + offset(dir); 
-        shift = sum;
-    }
-
-    return -1;
-}
-
-#endif
-
 }
 
 /**
@@ -368,29 +320,8 @@ struct ParticleSortData {
      * @note  Includes incoming/outgoing particles per edge tile
      */
     int * new_np;
-    /// @brief Total number of tiles
+    /// @brief Local number of tiles
     const uint2 ntiles;
-
-    struct Message {
-        /// @brief Buffer for all 8 messages
-        int * buffer;
-        /// @brief Number of incoming particles per message
-        int msg_np[9];
-        /// @brief Total number of particles to be exchanged
-        int total_np;
-        /// @brief Message requests
-        MPI_Request requests[9];
-    };
-
-    /// @brief Incoming messages
-    ParticleSortData::Message recv;
-    /// @brief Outgoing messages
-    ParticleSortData::Message send;
-
-    /// @brief MPI communicator
-    MPI_Comm comm;
-    /// @brief Neighbor ranks
-    int neighbor[9];
 
     ParticleSortData( const uint2 ntiles, Partition & par ) : 
         ntiles(ntiles) {};
@@ -404,7 +335,23 @@ struct ParticleSortData {
  * 
  */
 class ParticleSort : public ParticleSortData {
-    
+
+    struct Message {
+        /// @brief Buffer for all 8 messages
+        int * buffer;
+        /// @brief Number of incoming particles per message
+        int msg_np[9];
+        /// @brief Total number of particles to be exchanged
+        int total_np;
+        /// @brief Message requests
+        MPI_Request requests[9];
+    };
+
+    /// @brief MPI communicator
+    MPI_Comm comm;
+    /// @brief Neighbor ranks
+    int neighbor[9];
+
     private:
 
     /**
@@ -430,6 +377,12 @@ class ParticleSort : public ParticleSortData {
     
     public:
 
+    /// @brief Incoming messages
+    ParticleSort::Message recv;
+    /// @brief Outgoing messages
+    ParticleSort::Message send;
+
+
     /**
      * @brief Construct a new Particle Sort object
      * 
@@ -448,8 +401,8 @@ class ParticleSort : public ParticleSortData {
                           2 * ntiles.x + // y boundary
                           4;             // corners
 
-        // Include send / receive buffers for number of particles leaving/entering node
-        new_np = memory::malloc<int>( local_tiles + 2 * edge_tiles );
+         // Include send buffer for number of particles leaving node
+        new_np = memory::malloc<int>( local_tiles + edge_tiles );
         
         // Number of particles leaving each local tile
         nidx   = memory::malloc<int>( local_tiles );
@@ -461,16 +414,24 @@ class ParticleSort : public ParticleSortData {
         send.buffer = &new_np[ local_tiles ];
 
         // Receive buffer
-        recv.buffer = &new_np[ local_tiles + edge_tiles ];
+        // recv.buffer = &new_np[ local_tiles + edge_tiles ];
+        recv.buffer = memory::malloc<int>( edge_tiles );
 
-        // Communicator
+        // MPI Communicator
         comm = par.get_comm();
 
-        // Neighbor ranks
+        // Local MPI rank
+        auto local = par.get_rank(); 
+
+        // Neighbor MPI ranks
         for( int dir = 0; dir < 9; dir++ ) {
             int shiftx, shifty;
             part::edge_shift_dir( dir, shiftx, shifty );
             neighbor[ dir ] = par.get_neighbor( shiftx, shifty );
+
+            // Disable all messages to self
+            // Single node periodic boundaries are handled without messages
+            if ( neighbor[dir] == local ) neighbor[dir] = -1;
         }
     }
 
@@ -479,6 +440,8 @@ class ParticleSort : public ParticleSortData {
      * 
      */
     ~ParticleSort() {
+        memory::free( recv.buffer );
+        
         memory::free( npt );
         memory::free( nidx );
         memory::free( new_np );
@@ -490,86 +453,15 @@ class ParticleSort : public ParticleSortData {
      * 
      */
     void reset() {
-        auto local_tiles = ntiles.x * ntiles.y;
-
-        auto edge_tiles = 2 * ntiles.y + // x boundary
-                          2 * ntiles.x + // y boundary
-                          4;             // corners
-
-        // No need to reset incoming message buffers
-        memory::zero( new_np, local_tiles + edge_tiles );
+        // Reset local data and outgoing data buffer
+        memory::zero( new_np, part::all_tiles( ntiles ) );
     }
 
     /**
      * @brief Exchange number of particles in edge cells
      *
      */
-    void exchange_np( ) {
-
-        const int ntx = ntiles.x;
-        const int nty = ntiles.y;
-
-        // Size of message according to direction
-        auto size = [ ntx, nty ]( int dir ) -> unsigned int {
-            unsigned int s = 1;                   // corners
-            if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
-            if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
-            return s;
-        };
-
-        // Post receives
-        unsigned int idx = 0;
-        for( auto dir = 0; dir < 9; dir++ ) {            
-            if ( dir != 4 ) {
-                MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
-                        source_tag(dir), comm, &recv.requests[dir]);
-                idx += size(dir);
-            } else {
-                recv.requests[dir] = MPI_REQUEST_NULL;
-            }
-        }
-
-        // Post sends and update send.msg_np[]
-        idx = 0;
-        for( auto dir = 0; dir < 9; dir++ ) {
-            if ( dir != 4 ) {
-                MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
-                    dest_tag(dir), comm, &send.requests[dir]);
-
-                uint32_t send_np = 0;
-                for( unsigned k = 0; k < size(dir); k++ ) send_np += send.buffer[idx + k];
-                send.msg_np[dir] = send_np;
-
-                idx += size(dir);
-            } else {
-                send.msg_np[dir] = 0; // not needed
-                send.requests[dir] = MPI_REQUEST_NULL;
-            }
-        }
-
-        // Wait for receives to complete
-        MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );
-
-        // update recv.msg_np[]
-        idx = 0;
-        for( auto dir = 0; dir < 9; dir++ ) {
-            if ( dir != 4 ) {
-
-                uint32_t recv_np = 0;
-                for( unsigned k = 0; k < size(dir); k++ ) {
-                    recv_np += recv.buffer[ idx ];
-                    idx++;
-                }
-                recv.msg_np[dir] = recv_np;
-
-            } else {
-                recv.msg_np[dir] =  0;
-            }
-        }
-
-        // Wait for sends to complete
-        MPI_Waitall( 9, send.requests, MPI_STATUSES_IGNORE );
-    }
+    void exchange_np( );
 
 };
 
@@ -1172,7 +1064,7 @@ class Particles : public ParticleData {
      * @param sort      Temporary sort index
      * @param recv      Receive message object
      */
-    void irecv_msg( ParticleSortData &sort, ParticleMessage &recv );
+    void irecv_msg( ParticleSort &sort, ParticleMessage &recv );
 
     /**
      * @brief Pack particles moving out of the node into a message buffer and start send
@@ -1181,7 +1073,7 @@ class Particles : public ParticleData {
      * @param sort      Temporary sort index
      * @param send      Send message object
      */
-    void isend_msg( Particles &tmp, ParticleSortData &sort, ParticleMessage &send );
+    void isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &send );
 
     /**
      * @brief Unpack received particle data into main particle data buffer
@@ -1189,7 +1081,7 @@ class Particles : public ParticleData {
      * @param sort      Temporary sort index
      * @param recv      Receive message object
      */
-    void unpack_msg( ParticleSortData &sort, ParticleMessage &recv );
+    void unpack_msg( ParticleSort &sort, ParticleMessage &recv );
 
     /**
      * @brief Print information on the number of particles per tile

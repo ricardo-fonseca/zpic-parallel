@@ -578,6 +578,95 @@ void test_weibel( std::string param ) {
 }
 
 
+void test_weibel_debug( )
+{
+   
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    // Create simulation box
+    uint2 ntiles{8, 8};
+    uint2 nx{32, 32};                                                                                                                                                                     
+    float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+    float dt = 0.07;
+                                        
+    Simulation sim( ntiles, nx, box, dt, partition );
+                            
+    uint2 ppc{4, 4};
+
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, 0.6 }
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, -0.6 }
+        )
+    );
+
+    sim.add_species( positrons );
+
+    // Lambda function for diagnostic output
+    auto diag = [ & ]( ) {
+        sim.emf.save(emf::b, fcomp::x);
+        sim.emf.save(emf::b, fcomp::y);
+        sim.emf.save(emf::b, fcomp::z);
+
+        electrons.save_charge();
+        positrons.save_charge();
+
+        sim.energy_info();
+    };
+
+    // Run simulation    
+    int const imax = 500;
+        
+    if ( sim.parallel.root() )
+        std::cout << "Running large Weibel test up to n = " << imax << "...\n";
+                
+    Timer timer;
+                  
+    timer.start();
+
+    while (sim.get_iter() < imax)
+    {     
+        if ( sim.get_iter() % 50 == 0 ) {
+            diag();
+            if ( sim.parallel.root() ) 
+                std::cout << "i = " << sim.get_iter() << '\n';    
+        }       
+        sim.advance();
+    }
+
+    timer.stop();
+
+    diag();
+
+    auto nmove = sim.get_nmove();
+    if ( sim.parallel.root() ) {
+        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+        auto time = timer.elapsed(timer::s);
+        std::cout << "Elapsed time: " << time << " s\n";
+        auto perf = nmove / time / 1.e9;
+        std::cout << "Performance : " << perf << " GPart/s\n";
+    }                  
+}
+
+
 /**
  * @brief Print information about the environment
  * 
@@ -669,7 +758,11 @@ int main( int argc, char *argv[] ) {
     // test_inj( );
     // test_mov( );
     // test_current( );
+    // test_weibel_debug();
 
+    test_weibel_96();
+
+    /*
     if ( test == "weibel" ) {
         test_weibel( param );
     } else {
@@ -677,6 +770,8 @@ int main( int argc, char *argv[] ) {
             std::cerr << "Unknonw test '" << test << "', aborting...\n";
         mpi::abort(1);
     }
+    */
+
 
     // Finalize the MPI environment
     mpi::finalize();

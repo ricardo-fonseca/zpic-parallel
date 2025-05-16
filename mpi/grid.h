@@ -1325,7 +1325,7 @@ class grid {
 
             // Loop over tiles
             #pragma omp for
-            for( int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
+            for( unsigned int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
                 auto tx = idx % ntiles.x;
                 auto ty = idx / ntiles.x;
 
@@ -1381,7 +1381,7 @@ class grid {
 
             // Loop over tiles
             #pragma omp for
-            for( int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
+            for( unsigned int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
                 auto tx = idx % ntiles.x;
                 auto ty = idx / ntiles.x;
 

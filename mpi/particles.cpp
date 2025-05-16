@@ -7,6 +7,74 @@
 #include "timer.h"
 
 /**
+ * @brief Exchange number of particles in edge cells
+ *
+ */
+void ParticleSort::exchange_np( ) {
+
+    const int ntx = ntiles.x;
+    const int nty = ntiles.y;
+
+    // Size of message according to direction
+    auto size = [ ntx, nty ]( int dir ) -> unsigned int {
+        unsigned int s = 1;                   // corners
+        if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
+        if ( dir == 3 || dir == 5 ) s = nty;  // x boundary
+        if ( dir == 4 ) s = 0;                // local
+        return s;
+    };
+
+    // Post receives
+    unsigned int idx = 0;
+    for( auto dir = 0; dir < 9; dir++ ) {            
+        if ( neighbor[dir] >= 0 ) {
+            MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+                    source_tag(dir), comm, &recv.requests[dir]);
+        } else {
+            recv.requests[dir] = MPI_REQUEST_NULL;
+        }
+        idx += size(dir);
+    }
+
+    // Post sends and update send.msg_np[]
+    idx = 0;
+    for( auto dir = 0; dir < 9; dir++ ) {
+        if ( neighbor[dir] >= 0 ) {
+            MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+                dest_tag(dir), comm, &send.requests[dir]);
+        } else {
+            send.requests[dir] = MPI_REQUEST_NULL;
+        }
+        idx += size(dir);
+    }
+
+    // Wait for receives to complete
+    MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );
+
+    // update send.msg_np[] and recv.msg_np[]
+    idx = 0;
+    for( auto dir = 0; dir < 9; dir++ ) {
+        if ( dir != 4 ) {
+            uint32_t send_np = 0;
+            uint32_t recv_np = 0;
+            for( unsigned k = 0; k < size(dir); k++ ) {
+                send_np += send.buffer[ idx ];
+                recv_np += recv.buffer[ idx ];
+                idx++;
+            }
+            send.msg_np[dir] = send_np;
+            recv.msg_np[dir] = recv_np;
+        } else {
+            recv.msg_np[dir] = 0;
+            send.msg_np[dir] = 0;
+        }
+    }
+
+    // Wait for sends to complete
+    MPI_Waitall( 9, send.requests, MPI_STATUSES_IGNORE );
+}
+
+/**
  * @brief Gather particle data
  * 
  * @tparam quant    Quantiy to gather
@@ -347,37 +415,6 @@ void bnd_check(
     }
 }
 
-#if 0
-
-/**
- * @brief Recalculates particle tile offset
- * 
- * @note The number of particles in each tile is set to 0
- * 
- * @param tmp           (out) Particle buffer
- * @param new_np        (in)  New number of particles per tile.
- * @return uint32_t     (out) Total number of particles
- */
-uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
-
-    // Include ghost tiles in calculations
-    const auto ntiles = part::all_tiles( tmp.ntiles );
-
-    int * __restrict__ offset = tmp.offset;
-    int * __restrict__ np     = tmp.np;
-
-    uint32_t total = 0;
-    for( auto i = 0; i < ntiles; i++ ) {
-        offset[i] = total;
-        np[i] = 0;
-        total += new_np[i];
-    }
-
-    return total;
-}
-
-#endif
-
 /**
  * @brief Recalculates particle tile offset, leaving room for additional particles
  * 
@@ -388,9 +425,12 @@ uint32_t update_tile_info( ParticleData tmp, const int * __restrict__ new_np ) {
  * @param extra         (in) Additional particles (optional)
  * @return uint32_t     (out) Total number of particles (including additional ones)
  */
-uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort,  
+uint32_t update_tile_info( 
+    ParticleData & tmp, 
+    ParticleSort & sort,
     const int * __restrict__ extra = nullptr ) {
 
+    const int * __restrict__ recv_buffer = sort.recv.buffer;
     const int * __restrict__ new_np = sort.new_np;
 
     // Include ghost tiles in calculations
@@ -445,7 +485,7 @@ uint32_t update_tile_info( ParticleData tmp, ParticleSortData sort,
     for( auto dir = 0; dir < 9; dir++ ) {
         if ( dir != 4 ) {
             for( unsigned k = 0; k < tile_size(dir); k++ ) {
-                offset[ k * tile_stride(dir) + tile_offset(dir) ] += sort.recv.buffer[ idx ];
+                offset[ k * tile_stride(dir) + tile_offset(dir) ] += recv_buffer[ idx ];
                 idx++;
             }
         }
@@ -948,6 +988,9 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // Copy local particles from staging area into final positions in partile buffer
     copy_in ( *this, tmp );
 
+    // Wait for receive messages to complete
+    recv.wait();
+
     // Wait for messages to be received and unpack data
     unpack_msg( sort, recv );
 
@@ -1163,7 +1206,7 @@ void Particles::validate( std::string msg, int const over ) {
  * @param sort      Temporary sort index 
  * @param recv      Receive message object 
  */
-void Particles::irecv_msg( ParticleSortData &sort, ParticleMessage &recv ) {
+void Particles::irecv_msg( ParticleSort &sort, ParticleMessage &recv ) {
 
     /// @brief Total size (bytes) of data to be received
     uint32_t total_size = 0;
@@ -1193,7 +1236,7 @@ void Particles::irecv_msg( ParticleSortData &sort, ParticleMessage &recv ) {
  * @param sort      Temporary sort index
  * @param send      Send message object
  */
-void Particles::isend_msg( Particles &tmp, ParticleSortData &sort, ParticleMessage &send ) {
+void Particles::isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &send ) {
 
     /// @brief Total number of particles being sent
     uint32_t send_np = 0;
@@ -1257,7 +1300,7 @@ void Particles::isend_msg( Particles &tmp, ParticleSortData &sort, ParticleMessa
  * @param sort      Temporary sort index
  * @param recv      Receive message object
  */
-void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
+void Particles::unpack_msg( ParticleSort &sort, ParticleMessage &recv ) {
 
     /// @brief number of particles per received tile
     int * __restrict__ msg_tile_np = sort.recv.buffer;
@@ -1289,9 +1332,6 @@ void Particles::unpack_msg( ParticleSortData &sort, ParticleMessage &recv ) {
         if ( y == 2 ) yoff = (nty-1) * ntx;
         return yoff + xoff;
     };
-
-    // Wait for messages to complete
-    recv.wait();
 
     // Unpack all data - multiple message tiles may write to the same local tile
     // This version does not work in OpenMP parallel
