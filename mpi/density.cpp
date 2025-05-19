@@ -385,7 +385,7 @@ void inject_step_kernel(
         double dpcy = 1.0 / ppc.y;
 
         const int shiftx = (part.tile_off.x + tile_idx.x) * nx.x;
-        const int shifty = (part.tile_off.x + tile_idx.y) * nx.y;
+        const int shifty = (part.tile_off.y + tile_idx.y) * nx.y;
 
         for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
             for( unsigned i0 = 0; i0 < ppc.x; i0++) {

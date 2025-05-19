@@ -5,13 +5,12 @@
 
 #include "filter.h"
 
+#include "timer.h"
 
 /**
  * @brief Sets the longitudinal field components of E and B to ensure 0 divergence
  * 
  * The algorithm assumes 0 field at the right boundary of the box
- * 
- * This version only allows parallelism on the outermost (ty) loop
  * 
  * @param E     E field
  * @param B     B field
@@ -23,19 +22,22 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
     const auto tile_vol = E.tile_vol;
     const auto nx       = E.nx;
     const auto offset   = E.offset;
-    const int ystride   = E.ext_nx.x; // Make sure ystride is signed because iy may be < 0
+    const int ystride   = E.ext_nx.x; // Make sure ystride is signed because (iy-1) may be < 0
 
     const double dx_dy = ((double) dx.x) / ((double) dx.y);
 
-    for( int ty = 0; ty < ntiles.y; ty ++ ) {
+    const auto local_nx = E.local_nx;
 
-        // If paralelizing over y tiles these should be defined by Y tile group (tiles with same tile.y) 
-        double divEx[ nx.y ];
-        double divBx[ nx.y ];
+    double  * __restrict__ sendbuf = memory::malloc<double>( 2 * local_nx.y );
 
-        for( unsigned iy = 0; iy < nx.y; iy++ ) {
-            divEx[ iy ] = divBx[ iy ] = 0;
-        }
+    #pragma omp parallel for
+    for( int local_iy = 0; local_iy < local_nx.y; local_iy ++ ) {
+
+        double divEx = 0;
+        double divBx = 0;
+
+        int ty = local_iy / nx.y;
+        int iy = local_iy - ty * nx.y;
         
         // Process tiles right to left
         for( int tx = ntiles.x-1; tx >=0; tx -- ) {
@@ -44,132 +46,74 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
             const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
             const auto tile_off = tid * tile_vol;
 
-            // Copy data to shared memory and block
             float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
             float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-            for( unsigned iy = 0; iy < nx.y; iy++ ) {
-                double tmpDivEx = divEx[ iy ];
-                double tmpDivBx = divBx[ iy ];
+            for( int ix = nx.x - 1; ix >= 0; ix-- ) {
 
-                for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-
-                    tmpDivEx += dx_dy * (tile_E[ix+1 + iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    tile_E[ ix + iy * ystride].x = tmpDivEx;
-                    
-                    tmpDivBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix + iy*ystride].y);
-                    tile_B[ ix + iy * ystride ].x = tmpDivBx;
-                }
-
-                divEx[iy] = tmpDivEx;
-                divBx[iy] = tmpDivBx;
+                divEx += dx_dy * (tile_E[ix+1 + iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
+                tile_E[ ix + iy * ystride].x = divEx;
+                
+                divBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix + iy*ystride].y);
+                tile_B[ ix + iy * ystride ].x = divBx;
             }
         }
+
+        // Copy final divergence values to send buffer
+        sendbuf[              local_iy ] = divEx;
+        sendbuf[ local_nx.y + local_iy ] = divBx;
     }
 
-}
+    // If there is a parallel partition along x, add in contribution from nodes to the right
+    if ( E.part.dims.x > 1 ) {
+        double * __restrict__ recvbuf = memory::malloc<double>( 2 * local_nx.y );
+        
+        // Receive buffer must be set to 0 (at least on rank 0)
+        // Otherwise Exscan operation may be undefined
+        memory::zero( recvbuf, 2 * local_nx.y );
 
-/**
- * @brief Sets the longitudinal field components of E and B to ensure 0 divergence
- * 
- * The algorithm assumes 0 field at the right boundary of the box
- * 
- * This version allows for more parallelism, similar to GPU versions
- * 
- * @param E     E field
- * @param B     B field
- * @param dx    cell size
- */
-void div_corr_x_mk1( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
+        // Create a communicator with nodes having the same y coordinate
+        int color = E.part.get_coords().y;
+        // Reorder ranks right to left
+        int key   = E.part.dims.x - E.part.get_coords().x;
+        MPI_Comm newcomm;
+        MPI_Comm_split( E.part.get_comm(), color, key, &newcomm );
+        
+        // Add contribution from all nodes to the right
+        MPI_Exscan( sendbuf, recvbuf, 2 * local_nx.y, MPI_DOUBLE, MPI_SUM, newcomm );
 
-    const auto ntiles   = E.get_ntiles();
-    const auto tile_vol = E.tile_vol;
-    const int2 nx       = make_int2(E.nx.x, E.nx.y);
-    const auto offset   = E.offset;
-    const int ystride   = E.ext_nx.x;
+        // Add result to local grid
+        #pragma omp parallel for
+        for( int local_iy = 0; local_iy < local_nx.y; local_iy ++ ) {
 
-    const double dx_dy = ((double) dx.x) / ((double) dx.y);
+            double divEx = recvbuf[              local_iy ];
+            double divBx = recvbuf[ local_nx.y + local_iy ];
 
-    size_t bsize = ntiles.x * (ntiles.y * nx.y);
-    double tmpE[ bsize ];
-    double tmpB[ bsize ];
+            int ty = local_iy / nx.y;
+            int iy = local_iy - ty * nx.y;
+            
+            for( int tx = 0; tx < ntiles.x; tx++ ) {
 
-    // Get divergence inside each tile
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+                const auto tile_idx = make_uint2( tx, ty );
+                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+                const auto tile_off = tid * tile_vol;
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
+                float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
+                float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
+                for( int ix = 0; ix < nx.x; ix++ ) {
 
-            for( int iy = 0; iy < nx.y; iy++ ) {
-                // Find divergence at left edge
-                double divEx = 0;
-                double divBx = 0;
-                for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-                    divEx += dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    divBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
-                }
-
-                const int idx = (tile_idx.y * nx.y + iy) * ntiles.x + tile_idx.x;
-                tmpE[ idx ] = divEx;
-                tmpB[ idx ] = divBx;
-            }
-        }
-    }
-
-    // Do a left scan to find accumulated divergence
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( int iy = 0; iy < nx.y; iy++ ) {
-            double divEx = 0;
-            double divBx = 0;
-            for( int tx = ntiles.x-1; tx >= 0; tx -- ) {
-                auto tile_idx = make_uint2( tx, ty );
-                const int idx = (tile_idx.y * nx.y + iy) * ntiles.x + tile_idx.x;
-
-                auto tE = tmpE[ idx ] + divEx;
-                auto tB = tmpB[ idx ] + divBx;
-
-                tmpE[ idx ] = divEx;
-                tmpB[ idx ] = divBx;
-
-                divEx = tE;
-                divBx = tB;
-            }
-        }
-    }
-
-    // Correct divergence
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
-
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-            for( int iy = 0; iy < nx.y; iy++ ) {
-                auto idx = (tile_idx.y * nx.y + iy) * ntiles.x + tile_idx.x;
-                auto divEx = tmpE[ idx ];
-                auto divBx = tmpB[ idx ];
-
-                for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-                    divEx += dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    tile_E[ ix + iy * ystride].x = divEx;
-                    
-                    divBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
-                    tile_B[ ix + iy * ystride ].x = divBx;
+                    tile_E[ ix + iy * ystride].x += divEx;
+                    tile_B[ ix + iy * ystride].x += divBx;
                 }
             }
         }
+
+        MPI_Comm_free( &newcomm );
+        memory::free( recvbuf );
     }
+
+    memory::free( sendbuf );
 }
 
 
@@ -237,11 +181,11 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
         sin_pol = std::sin( polarization );
     }
 
-    uint2 g_nx = E.gnx;
+    uint2 global_nx = E.get_global_nx();
 
     float2 dx = make_float2(
-        box.x / g_nx.x,
-        box.y / g_nx.y
+        box.x / global_nx.x,
+        box.y / global_nx.y
     );
 
     // Grid tile parameters
@@ -256,39 +200,40 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
     const float amp = omega0 * a0;
 
     // Loop over tiles
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+    #pragma omp parallel for
+    for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
+        const auto ty = tid / ntiles.x;
+        const auto tx = tid % ntiles.x;
 
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
+        const auto tile_idx = make_uint2( tx, ty );
+        const auto tile_off = tid * tile_vol;
 
-            const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
+        // Copy data to shared memory and block
+        float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
+        float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-            for( unsigned iy = 0; iy < nx.y; iy++ ) {
-                for( unsigned ix = 0; ix < nx.x; ix++ ) {
-                    const float z   = ( ix0 + ix ) * dx.x;
-                    const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
+        const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
 
-                    float lenv   = amp * lon_env( z   );
-                    float lenv_2 = amp * lon_env( z_2 );
+        for( unsigned iy = 0; iy < nx.y; iy++ ) {
+            for( unsigned ix = 0; ix < nx.x; ix++ ) {
+                const float z   = ( ix0 + ix ) * dx.x;
+                const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
 
-                    tile_E[ ix + iy * ystride ] = make_float3(
-                        0,
-                        +lenv * std::cos( k * z ) * cos_pol,
-                        +lenv * std::cos( k * z ) * sin_pol
-                    );
+                float lenv   = amp * lon_env( z   );
+                float lenv_2 = amp * lon_env( z_2 );
 
-                    tile_B[ ix + iy * ystride ] = make_float3(
-                        0,
-                        -lenv_2 * std::cos( k * z_2 ) * sin_pol,
-                        +lenv_2 * std::cos( k * z_2 ) * cos_pol
-                    );
-                }
+                tile_E[ ix + iy * ystride ] = make_float3(
+                    0,
+                    +lenv * std::cos( k * z ) * cos_pol,
+                    +lenv * std::cos( k * z ) * sin_pol
+                );
+
+                tile_B[ ix + iy * ystride ] = make_float3(
+                    0,
+                    -lenv_2 * std::cos( k * z_2 ) * sin_pol,
+                    +lenv_2 * std::cos( k * z_2 ) * cos_pol
+                );
             }
         }
     }
@@ -370,11 +315,11 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
         sin_pol = std::sin( polarization );
     }
 
-    uint2 g_nx = E.gnx;
+    uint2 global_nx = E.get_global_nx();;
 
     float2 dx = make_float2(
-        box.x / g_nx.x,
-        box.y / g_nx.y
+        box.x / global_nx.x,
+        box.y / global_nx.y
     );
 
     // Grid tile parameters
@@ -383,47 +328,47 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     const auto nx       = E.nx;
     const auto offset   = E.offset;
     const int  ystride  = E.ext_nx.x;   // ystride must be signed
+    const uint2 global_tile_off  = E.get_tile_off();
 
     const float amp = omega0 * a0;
 
     // Loop over tiles
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+    #pragma omp parallel for
+    for( int tid = 0; tid < ntiles.y * ntiles.x ; tid++ ) {
+        const auto ty = tid / ntiles.x;
+        const auto tx = tid % ntiles.x;
+        const auto tile_idx = make_uint2( tx, ty );
+        const auto tile_off = tid * tile_vol;
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
+        // Copy data to shared memory and block
+        float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
+        float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
- 
-            const int ix0 = tile_idx.x * nx.x;
-            const int iy0 = tile_idx.y * nx.y;
+        const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
+        const int iy0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
 
-            for( unsigned iy = 0; iy < nx.y; iy++ ) {
-                for( unsigned ix = 0; ix < nx.x; ix++ ) {
-                    const float z   = ( ix0 + ix ) * dx.x;
-                    const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
+        for( unsigned iy = 0; iy < nx.y; iy++ ) {
+            for( unsigned ix = 0; ix < nx.x; ix++ ) {
+                const float z   = ( ix0 + ix ) * dx.x;
+                const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
 
-                    const float r   = (iy0 + iy ) * dx.y - axis;
-                    const float r_2 = (iy0 + iy + 0.5 ) * dx.y - axis;
+                const float r   = (iy0 + iy ) * dx.y - axis;
+                const float r_2 = (iy0 + iy + 0.5 ) * dx.y - axis;
 
-                    const float lenv   = amp * lon_env( z   );
-                    const float lenv_2 = amp * lon_env( z_2 );
+                const float lenv   = amp * lon_env( z   );
+                const float lenv_2 = amp * lon_env( z_2 );
 
-                    tile_E[ ix + iy * ystride ] = make_float3(
-                        0,
-                        +lenv * gauss_phase( omega0, W0, z - focus, r_2 ) * cos_pol,
-                        +lenv * gauss_phase( omega0, W0, z - focus, r   ) * sin_pol
-                    );
-                    tile_B[ ix + iy * ystride ] = make_float3(
-                        0,
-                        -lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r   ) * sin_pol,
-                        +lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r_2 ) * cos_pol
-                    );
+                tile_E[ ix + iy * ystride ] = make_float3(
+                    0,
+                    +lenv * gauss_phase( omega0, W0, z - focus, r_2 ) * cos_pol,
+                    +lenv * gauss_phase( omega0, W0, z - focus, r   ) * sin_pol
+                );
+                tile_B[ ix + iy * ystride ] = make_float3(
+                    0,
+                    -lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r   ) * sin_pol,
+                    +lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r_2 ) * cos_pol
+                );
 
-                }
             }
         }
     }
@@ -431,16 +376,17 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     E.copy_to_gc();
     B.copy_to_gc();
 
-    if ( filter > 0 ) {
+    // Set longitudinal field components
+    div_corr_x( E, B, dx );
+    E.copy_to_gc();
+    B.copy_to_gc();
 
+    // Apply filtering if required
+    if ( filter > 0 ) {
         Filter::Compensated fcomp( coord::x, filter);
         fcomp.apply(E);
         fcomp.apply(B);
     }
-
-    div_corr_x( E, B, dx );
-
-    // std::cout << "Gaussian pulse launched\n";
 
     return 0;
 }

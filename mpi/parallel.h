@@ -160,6 +160,16 @@ static inline int world_root( void ) {
 }
 
 /**
+ * @brief Performs an MPI_Barrier on the global MPI communicator
+ * 
+ * @return int 
+ */
+static inline int world_barrier( void ) {
+    return MPI_Barrier( MPI_COMM_WORLD );
+}
+
+
+/**
  * @brief Abort the parallel code using an MPI_Abort()
  * 
  * @param errorcode     Error code to return to invoking environment
@@ -245,8 +255,11 @@ class Partition {
         }
 
         if ( dims.x * dims.y != (unsigned) size ) {
-            std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of parallel nodes (" << size << ") don't match\n";
-            std::cerr << "(*error*) aborting...\n";
+            if ( mpi::world_root() ) {
+                std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of MPI parallel nodes (" << size << ") don't match\n";
+                std::cerr << "(*error*) aborting...\n";
+            }
+            mpi::world_barrier();
             exit(1);
         }
 

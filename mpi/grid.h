@@ -35,7 +35,7 @@ class grid {
     int2 periodic;
 
     /// @brief Local grid size
-    uint2 gnx;
+    uint2 local_nx;
 
     /// @brief Buffers for sending messages
     pair< Message<T>* > msg_send;
@@ -56,7 +56,7 @@ class grid {
         part.grid_local( global_ntiles, ntiles, tile_off );
 
         // Get local grid size
-        gnx = ntiles * nx;
+        local_nx = ntiles * nx;
 
         // Get local periodic flag
         periodic.x = part.periodic.x && (part.dims.x == 1);
@@ -212,6 +212,13 @@ class grid {
     uint2 get_tile_off() { return tile_off; };
 
     /**
+     * @brief Get the global grid size
+     * 
+     * @return uint2 
+     */
+    uint2 get_global_nx() { return global_ntiles  * nx; }
+
+    /**
      * @brief grid destructor
      * 
      */
@@ -330,7 +337,7 @@ class grid {
                         auto const gix = tile_idx.x * nx.x + ix;
                         auto const giy = tile_idx.y * nx.y + iy;
 
-                        auto const out_idx = giy * gnx.x + gix;
+                        auto const out_idx = giy * local_nx.x + gix;
 
                         out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ];
                     }
@@ -338,7 +345,7 @@ class grid {
             }
         }
 
-        return gnx.x * gnx.y;
+        return local_nx.x * local_nx.y;
     }
 
 #ifdef _OPENMP
@@ -1435,15 +1442,15 @@ class grid {
         info.count[1] = global_ntiles.y * nx.y;
 
         // Allocate buffer on host to gather data
-        T * h_data = memory::malloc<T>( gnx.x * gnx.y );
+        T * h_data = memory::malloc<T>( local_nx.x * local_nx.y );
 
         // Gather data on contiguous grid
         gather( h_data );
 
         // Information on local chunk of grid data
         zdf::chunk chunk;
-        chunk.count[0] = gnx.x;
-        chunk.count[1] = gnx.y;
+        chunk.count[0] = local_nx.x;
+        chunk.count[1] = local_nx.y;
         chunk.start[0] = tile_off.x * nx.x;
         chunk.start[1] = tile_off.y * nx.y;
         chunk.stride[0] = chunk.stride[1] = 1;
@@ -1463,14 +1470,14 @@ class grid {
      */
     void save( std::string filename ) {
         // Allocate buffer on host to gather data
-        T * h_data = memory::malloc<T>( gnx.x * gnx.y );
+        T * h_data = memory::malloc<T>( local_nx.x * local_nx.y );
 
         // Gather data on contiguous grid
         gather( h_data );
 
         uint64_t global[2] = { global_ntiles.x * nx.x, global_ntiles.y * nx.y };
         uint64_t start[2] = { tile_off.x * nx.x, tile_off.y * nx.y };
-        uint64_t local[2] = { gnx.x, gnx.y };
+        uint64_t local[2]  = { local_nx.x, local_nx.y };
 
         zdf::save_grid( h_data, 2, global, start, local, name, filename, part.get_comm() );
 

@@ -60,7 +60,7 @@ class vec3grid : public grid< V >
     using grid< V > :: gc;
 
     using grid< V > :: global_ntiles;
-    using grid< V > :: gnx;
+    using grid< V > :: local_nx;
     using grid< V > :: ext_nx;
 
     using grid< V > :: offset;
@@ -104,7 +104,7 @@ class vec3grid : public grid< V >
                                 auto const gix = tile_idx.x * nx.x + ix;
                                 auto const giy = tile_idx.y * nx.y + iy;
 
-                                auto const out_idx = giy * gnx.x + gix;
+                                auto const out_idx = giy * local_nx.x + gix;
 
                                 out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].x;
                             }
@@ -129,7 +129,7 @@ class vec3grid : public grid< V >
                                 auto const gix = tile_idx.x * nx.x + ix;
                                 auto const giy = tile_idx.y * nx.y + iy;
 
-                                auto const out_idx = giy * gnx.x + gix;
+                                auto const out_idx = giy * local_nx.x + gix;
 
                                 out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].y;
                             }
@@ -155,7 +155,7 @@ class vec3grid : public grid< V >
                                 auto const gix = tile_idx.x * nx.x + ix;
                                 auto const giy = tile_idx.y * nx.y + iy;
 
-                                auto const out_idx = giy * gnx.x + gix;
+                                auto const out_idx = giy * local_nx.x + gix;
 
                                 out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].z;
                             }
@@ -165,7 +165,7 @@ class vec3grid : public grid< V >
                 break;
         }
 
-        return gnx.x * gnx.y;
+        return local_nx.x * local_nx.y;
     }
 
     /**
@@ -192,8 +192,8 @@ class vec3grid : public grid< V >
 
         // Information on local chunk of grid data
         zdf::chunk chunk;
-        chunk.count[0] = gnx.x;
-        chunk.count[1] = gnx.y;
+        chunk.count[0] = local_nx.x;
+        chunk.count[1] = local_nx.y;
         chunk.start[0] = tile_off.x * nx.x;
         chunk.start[1] = tile_off.y * nx.y;
         chunk.stride[0] = chunk.stride[1] = 1;
@@ -213,7 +213,7 @@ class vec3grid : public grid< V >
      */
     void save( const enum fcomp::cart fc, std::string filename ) {
         
-        const std::size_t bsize = gnx.x * gnx.y;
+        const std::size_t bsize = local_nx.x * local_nx.y;
 
         // Allocate buffers on host and device to gather data
         S * h_data = memory::malloc<S>( bsize );
@@ -223,7 +223,7 @@ class vec3grid : public grid< V >
 
         uint64_t global[2] = { global_ntiles.x * nx.x, global_ntiles.y * nx.y };
         uint64_t start[2]  = { tile_off.x * nx.x, tile_off.y * nx.y };
-        uint64_t local[2]  = { gnx.x, gnx.y };
+        uint64_t local[2]  = { local_nx.x, local_nx.y };
 
         // Save data
         std::string comp[] = { "x", "y", "z" };
