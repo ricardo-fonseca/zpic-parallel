@@ -269,7 +269,7 @@ namespace warp {
      * @return __device__ 
      */
     template<class T>
-    __device__ T inscan_add( T const input ) {
+    __device__ __inline__ T inscan_add( T const input ) {
         T value = input;
         const int laneId = threadIdx.x & ( WARP_SIZE - 1 );
         #pragma unroll
@@ -280,6 +280,28 @@ namespace warp {
         return value;
     }
     
+    /**
+     * @brief Warp level reverse inclusive scan (add)
+     * 
+     * @note + Same as an inclusive scan but in the opposite order (right to left)
+     * @note + All threads in warp must participate
+     * 
+     * @tparam T            Function type
+     * @param input         Input value (independent for each lane)
+     * @return              reverse scan result (different for each lane)
+     */
+    template<class T>
+    __device__ __inline__ T rev_inscan_add( T const input ) {
+        T value = input;
+        const int laneId = threadIdx.x & ( WARP_SIZE - 1 );
+        #pragma unroll
+        for( int i = 1; i < WARP_SIZE; i <<= 1 ) {
+            T tmp = __shfl_down_sync( 0xffffffff, value, i );
+            if ( laneId < WARP_SIZE - i ) value += tmp;
+        }
+        return value;
+    }
+
 } // end of namespace warp
 
 /**

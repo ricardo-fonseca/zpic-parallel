@@ -199,8 +199,8 @@ void test_laser( ) {
     // Parallel partition
 //    uint2 partition = make_uint2( 1, 1 );
 //    uint2 partition = make_uint2( 1, 2 );
-//    uint2 partition = make_uint2( 2, 1 );
-    uint2 partition = make_uint2( 2, 2 );
+//    uint2 partition = make_uint2( 4, 1 );
+    uint2 partition = make_uint2( 4, 2 );
 
     uint2 ntiles = { 64, 16 };
     uint2 nx = { 16, 16 };
@@ -222,15 +222,16 @@ void test_laser( ) {
         emf.save( emf::b, fcomp::z );
     };
 
+/*
     Laser::PlaneWave laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
+*/
 
-/*
     Laser::Gaussian laser;
-    laser.start = 10.2;
+    laser.start = 10.2; //15.0; //10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
@@ -240,7 +241,6 @@ void test_laser( ) {
 
     laser.sin_pol = 0;
     laser.cos_pol = 1;
-*/
 
     laser.add( emf );
 
@@ -940,12 +940,12 @@ int main( int argc, char *argv[] ) {
 
     // test_grid( );  
     // test_vec3grid( );
-    // test_laser( );
+    test_laser( );
     // test_inj( );
     // test_mov( );
     // test_current( );
 
-    test_weibel( );
+    // test_weibel( );
 
     // test_mov_sim( );
 

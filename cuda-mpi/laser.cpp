@@ -42,128 +42,146 @@ float lon_env( Laser::Pulse & laser, float z ) {
     return 0.0;
 }
 
+/**
+ * @brief Divergence correction - Prefix scan local data to get longitudinal components
+ * 
+ * @note Must be called with grid( local_nx.y ) and block( WARP_SIZE )
+ * 
+ * @param E_buffer      E field tile buffer (including offset to cell [0,0])
+ * @param B_buffer      B field tile buffer (including offset to cell [0,0])
+ * @param ntiles        Number of tiles in local node (x,y)
+ * @param nx            Individual tile size
+ * @param ext_nx        Individual tile size including guard cells
+ * @param recvbuf       Message send buffer
+ */
 __global__
-void div_corr_x_A (
+void div_corr_x_scan (
     float3 * const __restrict__ E_buffer, 
     float3 * const __restrict__ B_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, unsigned int const offset,
-    double const dx_dy, double2 * const __restrict__ tmp )
+    uint2 const ntiles, uint2 const nx, uint2 const ext_nx,
+    double const dx_dy, double * const __restrict__ sendbuf
+)
 {
-    const uint2  tile_idx = { blockIdx.x, blockIdx.y };
-    const int    tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
-    const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
-    const size_t tile_off = tile_id * tile_vol;
+    int local_nx_y = gridDim.x;
+    int local_iy = blockIdx.x;
 
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const int ystride = ext_nx.x;
-    
-    auto * shm = block::shared_mem<float3>();
-    float3 __restrict__ * E_local = &shm[0];
-    float3 __restrict__ * B_local = &shm[tile_vol];
 
-    for( unsigned idx = block_thread_rank(); idx < tile_vol; idx += block_num_threads() ) {
-        E_local[idx] = E_buffer[ tile_off + idx ];
-        B_local[idx] = B_buffer[ tile_off + idx ];
-    }
+    int ty = local_iy / nx.y;
+    int iy = local_iy - ty * nx.y;
+
+    __shared__ double divEx; divEx = 0;
+    __shared__ double divBx; divBx = 0;
+
     block_sync();
 
-    float3 * const __restrict__ E = & E_local[ offset ];
-    float3 * const __restrict__ B = & B_local[ offset ]; 
+    // Process tiles right to left
+    for( int tx = ntiles.x-1; tx >=0; tx-- ) {
 
-    auto tmp_off = tile_idx.y * nx.y * ntiles.x;
+        const auto tile_idx = make_uint2( tx, ty );
+        const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+        const auto tile_off = tid * tile_vol;
 
-    for( int iy = block_thread_rank(); iy < nx.y; iy += block_num_threads() ) {
-        // Find divergence at left edge
-        double divEx = 0;
-        double divBx = 0;
-        for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-            divEx += dx_dy * (E[ix+1 + iy*ystride].y - E[ix+1 + (iy-1)*ystride ].y);
-            divBx += dx_dy * (B[ix + (iy+1)*ystride].y - B[ix + iy*ystride ].y);
+        float3 * const __restrict__ tile_E = & E_buffer[ tile_off ];
+        float3 * const __restrict__ tile_B = & B_buffer[ tile_off ];
+
+        int start = nx.x / WARP_SIZE;
+        for( int ix = start + block_thread_rank(); ix >= 0; ix -= WARP_SIZE ) {
+
+            double dEx = 0;
+            double dBx = 0;
+
+            // If inside tile read x divergence
+            if ( ix < nx.x ) {
+                dEx = dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
+                dBx = dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
+            }
+
+            // Do a right to left inclusive scan
+            {
+                const int laneId = threadIdx.x & ( WARP_SIZE - 1 );
+                #pragma unroll
+                for( int i = 1; i < WARP_SIZE; i <<= 1 ) {
+                    double tmp1 = __shfl_down_sync( 0xffffffff, dEx, i );
+                    double tmp2 = __shfl_down_sync( 0xffffffff, dBx, i );
+                    if ( laneId < WARP_SIZE - i ) {
+                        dEx += tmp1;
+                        dBx += tmp2;
+                    }
+                }
+            }
+
+            // If inside tile store longitudinal components
+            if ( ix < nx.x ) {
+                tile_E[ix + iy * ystride].x = divEx + dEx;
+                tile_B[ix + iy * ystride].x = divBx + dBx;
+            }
+
+            // Accumulate results for next loop
+            if ( block_thread_rank() == 0 ) {
+                divEx += dEx;
+                divBx += dBx;
+            }
+            block_sync();
         }
-
-        // Write result to tmp. array
-        tmp[ tmp_off + iy * ntiles.x + tile_idx.x ] = double2{ divEx, divBx };
     }
-}
-
-__global__
-void div_corr_x_B( double2 * const __restrict__ tmp, const uint2 ntiles )
-{
-    auto * buffer = block::shared_mem<double2>();
-
-    int giy = blockIdx.x;
-
-    for( int i = block_thread_rank(); i < ntiles.x; i += block_num_threads() ) {
-        buffer[i] = tmp[ giy * ntiles.x + i ];
-    }
-    block_sync();
-
-    // Perform scan operation (serial inside block)
+    
     if ( block_thread_rank() == 0 ) {
-        double2 a{ 0 };
-        for( int i = ntiles.x-1; i >= 0; i--) {
-            double2 b = buffer[i];
-            buffer[i] = a;
-            a.x += b.x;
-            a.y += b.y;
-        }
+        // Copy final divergence values to send buffer
+        sendbuf[              local_iy ] = divEx;
+        sendbuf[ local_nx_y + local_iy ] = divBx;
     }
-    block_sync();
 
-    // Copy data to global memory
-    for( int i = block_thread_rank(); i < ntiles.x; i += block_num_threads() ) {
-        tmp[ giy * ntiles.x + i ] = buffer[i];
-    }
 }
 
+/**
+ * @brief Divergence correction - Add contribution from other parallel nodes
+ * 
+ * @note Must be called with grid( local_nx.y )
+ * 
+ * @param E_buffer      E field tile buffer (including offset to cell [0,0])
+ * @param B_buffer      B field tile buffer (including offset to cell [0,0])
+ * @param ntiles        Number of tiles in local node (x,y)
+ * @param nx            Individual tile size
+ * @param ext_nx        Individual tile size including guard cells
+ * @param recvbuf       Message receive buffer
+ */
 __global__
-void div_corr_x_C( 
-    float3 * const __restrict__ E_buffer,
+void div_corr_x_sum (
+    float3 * const __restrict__ E_buffer, 
     float3 * const __restrict__ B_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, unsigned int const offset,
-    double const dx_dy, double2 const * const __restrict__ tmp )
+    uint2 const ntiles, uint2 const nx, uint2 const ext_nx,
+    double * const __restrict__ recvbuf
+)
 {
-    const uint2  tile_idx = { blockIdx.x, blockIdx.y };
-    const int    tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
-    const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
-    const size_t tile_off = tile_id * tile_vol;
+    int local_nx_y = gridDim.x;
+    int local_iy = blockIdx.x;
 
+    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const int ystride = ext_nx.x;
-    
-    auto * shm = block::shared_mem<float3>();
-    float3 __restrict__ * E_local = &shm[0];
-    float3 __restrict__ * B_local = &shm[tile_vol];
 
-    for( unsigned idx = block_thread_rank(); idx < tile_vol; idx += block_num_threads() ) {
-        E_local[idx] = E_buffer[ tile_off + idx ];
-        B_local[idx] = B_buffer[ tile_off + idx ];
-    }
-    block_sync();
+    double divEx = recvbuf[              local_iy ];
+    double divBx = recvbuf[ local_nx_y + local_iy ];
 
-    float3 * const __restrict__ E = & E_local[ offset ];
-    float3 * const __restrict__ B = & B_local[ offset ];
+    int ty = local_iy / nx.y;
+    int iy = local_iy - ty * nx.y;
 
-    auto tmp_off = tile_idx.y * nx.y * ntiles.x;
+    for( int tx = 0; tx < ntiles.x; tx++ ) {
 
-    for( int iy = block_thread_rank(); iy < nx.y; iy += block_num_threads() ) {
-        // Get divergence at right edge
-        double2 div = tmp[ tmp_off + iy * ntiles.x + tile_idx.x ];
-        double divEx = div.x;
-        double divBx = div.y;
+        const auto tile_idx = make_uint2( tx, ty );
+        const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+        const auto tile_off = tid * tile_vol;
 
-        for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-            divEx += dx_dy * (E[ix+1 + iy*ystride].y - E[ix+1 + (iy-1)*ystride ].y);
-            E[ ix + iy * ystride].x = divEx;
+        float3 * const __restrict__ tile_E = & E_buffer[ tile_off ];
+        float3 * const __restrict__ tile_B = & B_buffer[ tile_off ];
 
-            divBx += dx_dy * (B[ix + (iy+1)*ystride].y - B[ix + iy*ystride ].y);
-            B[ ix + iy * ystride].x = divBx;
+        for( int ix = block_thread_rank(); ix < nx.x; ix+= block_num_threads() ) {
+            tile_E[ ix + iy * ystride ].x += divEx;
+            tile_B[ ix + iy * ystride ].x += divBx;
         }
-    }
-    block_sync();
+    }    
 
-    for( unsigned idx = block_thread_rank(); idx < tile_vol; idx += block_num_threads() ) {
-        E_buffer[ tile_off + idx ] = E_local[idx];
-        B_buffer[ tile_off + idx ] = B_local[idx];
-    }   
 }
 
 }
@@ -172,95 +190,64 @@ void div_corr_x_C(
  * @brief Sets the longitudinal field components of E and B to ensure 0
  *        divergence
  * 
- * @note There are some opportunities for optimization, check the comments in
- *       the code
- * 
  * @warning The algorithm assumes 0 field at the right boundary of the box. If
  *          this is not true then the field values will be wrong.
  * 
  * @param E     E field
  * @param B     B field
  * @param dx    Cell size
- * @param q     Sycl queue
  */
 void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
 
-
-    // Check that local memory can hold up to 2 times the tile buffer
-    auto local_mem_size = block::shared_mem_size();
-    if ( local_mem_size < 2 * E.tile_vol * sizeof( float3 ) ) {
-        std::cerr << "(*error*) Tile size too large [" << E.nx.x << "," << E.nx.y << " (plus guard cells)\n";
-        std::cerr << "(*error*) Insufficient local memory (" << local_mem_size << " B) for div_corr_x() function.\n";
-        abort();
-    }
-
-    // Temporary buffer for divergence calculations
-    const auto ntiles     = E.get_ntiles();
-    size_t bsize = ntiles.x * ( ntiles.y * E.nx.y );
-    double2 * tmp = device::malloc<double2>( bsize );
-
-    /**
-     * Step A - Get per-tile E and B divergence at tile left edge starting
-     *          from 0.0
-     * 
-     * This could (potentially) be improved by processing each line in a warp,
-     * and replacing the divEx and divBx calculations by warp level reductions
-     */
-
-    dim3 grid( ntiles.x, ntiles.y );
-    dim3 block( 32 );
-    size_t shm_size = 2 * E.tile_vol * sizeof(float3);
+    double  * __restrict__ sendbuf = managed::malloc<double>( 2 * E.local_nx.y );
 
     const double dx_dy = (double) dx.x / (double) dx.y;
 
-    kernel::div_corr_x_A <<< grid, block, shm_size >>> ( 
-        E.d_buffer, B.d_buffer, 
-        ntiles, E.nx, E.ext_nx, E.offset,
-        dx_dy, tmp
+    dim3 grid( E.local_nx.y );
+    dim3 block( WARP_SIZE );
+
+    kernel::div_corr_x_scan <<< grid, block >>> ( 
+        & E.d_buffer[ E.offset ], & B.d_buffer[ B.offset ], 
+        E.get_ntiles(), E.nx, E.ext_nx, dx_dy, 
+        sendbuf
     );
 
-    /**
-     * Step B - Performs a left-going scan operation on the results from step A.
-     * 
-     * This could (potentially) be improved by processing each row of tiles in
-     * a warp:
-     * - Copy the data from tmp and store it in shared memory in reverse order
-     * - Do a normal ex-scan operation using warp accelerated code
-     * - Copy the data in reverse order from shared memory and store it in tmp
-     */
 
-    dim3 grid_B( E.local_nx.y );
-    dim3 block_B( ntiles.x > 32 ? 32 : ntiles.x );
-    size_t shm_size_B = ntiles.x * sizeof(double2);
+    // If there is a parallel partition along x, add in contribution from nodes to the right
+    if ( E.part.dims.x > 1 ) {
+        double * __restrict__ recvbuf = device::malloc<double>( 2 * E.local_nx.y );
+        
+        // Create a communicator with nodes having the same y coordinate
+        int color = E.part.get_coords().y;
+        // Reorder ranks right to left
+        int key   = E.part.dims.x - E.part.get_coords().x;
+        MPI_Comm newcomm;
+        MPI_Comm_split( E.part.get_comm(), color, key, &newcomm );
+        
+        // Add contribution from all nodes to the right
+        MPI_Exscan( sendbuf, recvbuf, 2 * E.local_nx.y, MPI_DOUBLE, MPI_SUM, newcomm );
 
-    kernel::div_corr_x_B <<< grid_B, block_B, shm_size_B >>> (
-        tmp, ntiles
-    );
+        // Add result to local grid
+        // Rightmost node does not need to do this
+        if ( key > 0 ) {
+            kernel::div_corr_x_sum <<< grid, block >>> ( 
+                & E.d_buffer[ E.offset ], & B.d_buffer[ B.offset ], 
+                E.get_ntiles(), E.nx, E.ext_nx, 
+                recvbuf );
+        }
 
-    /**
-     * Step C - Starting from the results from step B, get the longitudinal
-     *          components at each cell.
-     * 
-     * This could potentially be improved by processing each line within a warp
-     * - Copying the data from global memory and storing it in reverse x order
-     * - Get the divergence correction for each cell and perform a normal warp
-     *   level ex-scan adding the values from step B and store in shared memory
-     * - Copy the data back to global memory again reversing the order
-     */
-
-    kernel::div_corr_x_C <<< grid, block, shm_size >>> (
-        E.d_buffer, B.d_buffer, 
-        ntiles, E.nx, E.ext_nx, E.offset,
-        dx_dy, tmp
-    );
+        MPI_Comm_free( &newcomm );
+        device::free( recvbuf );
+    }
 
     // Free temporary memory
-    device::free( tmp );
+    device::free( sendbuf );    
 
     // Correct longitudinal values on guard cells
-    E.copy_to_gc( );
-    B.copy_to_gc( );
+    E.copy_to_gc();
+    B.copy_to_gc();
 }
+
 
 /**
  * @brief Validates laser parameters
@@ -435,7 +422,7 @@ namespace kernel {
 __device__ float gauss_phase( const float omega0, const float W0, const float z, const float r ) {
     const float z0   = omega0 * ( W0 * W0 ) / 2;
     const float rho2 = r*r;
-    const float curv = rho2 * z / (z0*z0 + z*z);
+    const float curv = 0.5 * rho2 * z / (z0*z0 + z*z);
     const float rWl2 = (z0*z0)/(z0*z0 + z*z);
     const float gouy_shift = atan2( z, z0 );
 
@@ -448,7 +435,7 @@ __global__
 void gaussian( 
     Laser::Gaussian beam, 
     float3 * __restrict__ E_buffer, float3 * __restrict__ B_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, unsigned int const offset,
+    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, uint2 const  global_tile_off,
     float2 const dx
 ) {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
@@ -456,11 +443,11 @@ void gaussian(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    float3 * const __restrict__ tile_E = & E_buffer[ tile_off + offset ];
-    float3 * const __restrict__ tile_B = & B_buffer[ tile_off + offset ];
+    float3 * const __restrict__ tile_E = & E_buffer[ tile_off ];
+    float3 * const __restrict__ tile_B = & B_buffer[ tile_off ];
 
-    const int ix0 = tile_idx.x * nx.x;
-    const int iy0 = tile_idx.y * nx.y;
+    const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
+    const int iy0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
 
     const int ystride = ext_nx.x;
 
@@ -527,16 +514,14 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     dim3 grid( ntiles.x, ntiles.y );
 
     kernel::gaussian<<<grid, block>>> (
-        *this, E.d_buffer, B.d_buffer,
-        ntiles, E.nx, E.ext_nx, E.offset,
-        dx
+        *this, & E.d_buffer[ E.offset ], & B.d_buffer[ B.offset ],
+        ntiles, E.nx, E.ext_nx, E.get_tile_off(), dx
     );
 
     E.copy_to_gc( );
     B.copy_to_gc( );
 
     if ( filter > 0 ) {
-
         Filter::Compensated fcomp( coord::x, filter);
         fcomp.apply( E );
         fcomp.apply( B );

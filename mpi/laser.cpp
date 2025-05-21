@@ -67,10 +67,6 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
     // If there is a parallel partition along x, add in contribution from nodes to the right
     if ( E.part.dims.x > 1 ) {
         double * __restrict__ recvbuf = memory::malloc<double>( 2 * local_nx.y );
-        
-        // Receive buffer must be set to 0 (at least on rank 0)
-        // Otherwise Exscan operation may be undefined
-        memory::zero( recvbuf, 2 * local_nx.y );
 
         // Create a communicator with nodes having the same y coordinate
         int color = E.part.get_coords().y;
@@ -83,28 +79,31 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         MPI_Exscan( sendbuf, recvbuf, 2 * local_nx.y, MPI_DOUBLE, MPI_SUM, newcomm );
 
         // Add result to local grid
-        #pragma omp parallel for
-        for( int local_iy = 0; local_iy < local_nx.y; local_iy ++ ) {
+        // Rightmost node does not need to do this
+        if ( key > 0 ) {
+            #pragma omp parallel for
+            for( int local_iy = 0; local_iy < local_nx.y; local_iy ++ ) {
 
-            double divEx = recvbuf[              local_iy ];
-            double divBx = recvbuf[ local_nx.y + local_iy ];
+                double divEx = recvbuf[              local_iy ];
+                double divBx = recvbuf[ local_nx.y + local_iy ];
 
-            int ty = local_iy / nx.y;
-            int iy = local_iy - ty * nx.y;
-            
-            for( int tx = 0; tx < ntiles.x; tx++ ) {
+                int ty = local_iy / nx.y;
+                int iy = local_iy - ty * nx.y;
+                
+                for( int tx = 0; tx < ntiles.x; tx++ ) {
 
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
+                    const auto tile_idx = make_uint2( tx, ty );
+                    const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+                    const auto tile_off = tid * tile_vol;
 
-                float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-                float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
+                    float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
+                    float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-                for( int ix = 0; ix < nx.x; ix++ ) {
+                    for( int ix = 0; ix < nx.x; ix++ ) {
 
-                    tile_E[ ix + iy * ystride].x += divEx;
-                    tile_B[ ix + iy * ystride].x += divBx;
+                        tile_E[ ix + iy * ystride].x += divEx;
+                        tile_B[ ix + iy * ystride].x += divBx;
+                    }
                 }
             }
         }
@@ -113,7 +112,12 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         memory::free( recvbuf );
     }
 
+    // Free temporary memory
     memory::free( sendbuf );
+
+    // Correct longitudinal values on guard cells
+    E.copy_to_gc();
+    B.copy_to_gc();
 }
 
 
@@ -285,7 +289,7 @@ int Laser::Gaussian::validate() {
 inline float gauss_phase( const float omega0, const float W0, const float z, const float r ) {
     const float z0   = omega0 * ( W0 * W0 ) / 2;
     const float rho2 = r*r;
-    const float curv = rho2 * z / (z0*z0 + z*z);
+    const float curv = 0.5 * rho2 * z / (z0*z0 + z*z);
     const float rWl2 = (z0*z0)/(z0*z0 + z*z);
     const float gouy_shift = atan2( z, z0 );
 
@@ -378,8 +382,6 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
 
     // Set longitudinal field components
     div_corr_x( E, B, dx );
-    E.copy_to_gc();
-    B.copy_to_gc();
 
     // Apply filtering if required
     if ( filter > 0 ) {

@@ -192,6 +192,7 @@ void test_laser( ) {
     }
 
     // Parallel partition
+//    uint2 partition = make_uint2( 1, 1 );
     uint2 partition = make_uint2( 4, 2 );
 
     uint2 ntiles = { 64, 16 };
@@ -754,13 +755,12 @@ int main( int argc, char *argv[] ) {
 
     // test_grid( );  
     // test_vec3grid( );
-    // test_laser( );
+    test_laser( );
     // test_inj( );
     // test_mov( );
     // test_current( );
     // test_weibel_debug();
-
-    test_weibel_96();
+    // test_weibel_96();
 
     /*
     if ( test == "weibel" ) {
