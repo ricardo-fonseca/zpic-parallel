@@ -170,6 +170,10 @@ void current_bcy(
  */
 void Current::process_bc() {
 
+    std::cout << "(*error*) Current::process_bc() have not been implemented yet,"
+              << " aborting.\n";
+    exit(1);
+
     const uint2 ntiles          = J -> get_ntiles();
     const unsigned int tile_vol = J -> tile_vol;
     const uint2 nx              = J -> nx;
@@ -236,7 +240,7 @@ void Current::advance() {
     J -> copy_to_gc( );
 
     // Do additional bc calculations if needed
-    process_bc();
+    // process_bc();
 
     // Apply filtering
     filter -> apply( *J );

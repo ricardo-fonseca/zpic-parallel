@@ -28,7 +28,7 @@ class Current {
     /// @brief Moving window information
     MovingWindow moving_window;
 
-    /// @brief Boundary condition
+    /// @brief Global boundary conditions
     current::bc_type bc;
 
     /// @brief Iteration number

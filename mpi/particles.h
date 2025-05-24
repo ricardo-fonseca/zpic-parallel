@@ -780,7 +780,6 @@ class Particles : public ParticleData {
 
         if ( periodic.y && parallel.dims.y == 1 ) 
             local_bnd.y.lower = local_bnd.y.upper = part::bnd_t::periodic;
-
     }
 
     /**
@@ -793,7 +792,7 @@ class Particles : public ParticleData {
         if ( ( new_periodic.x ) && 
              ( (! parallel.periodic.x ) && ( parallel.dims.x > 1 )) ) {
             std::cerr << "Particles::set_periodic() - Attempting to set ";
-            std::cerr << "parallel boundaries on non-parallel comm direction\n";
+            std::cerr << "parallel x boundaries on non-parallel comm direction\n";
             exit(1);
         }
 
@@ -801,7 +800,7 @@ class Particles : public ParticleData {
         if ( ( new_periodic.y ) && 
              ( (! parallel.periodic.y ) && ( parallel.dims.y > 1 )) ) {
             std::cerr << "Particles::set_periodic() - Attempting to set ";
-            std::cerr << "parallel boundaries on non-parallel comm direction\n";
+            std::cerr << "parallel y boundaries on non-parallel comm direction\n";
             exit(1);
         }
 

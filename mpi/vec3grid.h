@@ -45,7 +45,7 @@ class vec3grid : public grid< V >
 
     using grid< V > :: ntiles;
     using grid< V > :: tile_off;
-    using grid< V > :: periodic;
+    using grid< V > :: local_periodic;
 
     using grid< V > :: initialize;
 

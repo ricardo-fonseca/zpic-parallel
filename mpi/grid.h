@@ -32,7 +32,7 @@ class grid {
     uint2 tile_off;
 
     /// @brief Consider local boundaries periodic
-    int2 periodic;
+    int2 local_periodic;
 
     /// @brief Local grid size
     uint2 local_nx;
@@ -59,8 +59,8 @@ class grid {
         local_nx = ntiles * nx;
 
         // Get local periodic flag
-        periodic.x = part.periodic.x && (part.dims.x == 1);
-        periodic.y = part.periodic.y && (part.dims.y == 1);
+        local_periodic.x = part.periodic.x && (part.dims.x == 1);
+        local_periodic.y = part.periodic.y && (part.dims.y == 1);
 
         // Allocate main data buffer
         d_buffer = memory::malloc<T>( buffer_size() );
@@ -250,7 +250,7 @@ class grid {
     /**
      * @brief Buffer size
      * 
-     * @return total size of data buffers
+     * @return total size of data buffers (in elements)
      */
     const std::size_t buffer_size() {
         return (static_cast <std::size_t> (tile_vol)) * ( ntiles.x * ntiles.y ) ;
@@ -274,6 +274,8 @@ class grid {
     void set( T const & val ){
 
         const size_t size = buffer_size( );
+
+        #pragma omp parallel for
         for( size_t i = 0; i < size; i++ ) d_buffer[i] = val;
     };
 
@@ -297,6 +299,7 @@ class grid {
     void add( const grid<T> &rhs ) {
         size_t const size = buffer_size( );
 
+        #pragma omp parallel for
         for( size_t i = 0; i < size; i++ ) d_buffer[i] += rhs.d_buffer[i];
     };
 
@@ -348,8 +351,6 @@ class grid {
         return local_nx.x * local_nx.y;
     }
 
-#ifdef _OPENMP
-
     /**
      * @brief Copies edge values to X neighboring guard cells
      * 
@@ -362,34 +363,35 @@ class grid {
 
             const auto tile_idx = make_int2( tid % ntiles.x, tid / ntiles.x );
             const auto tile_off = tid * tile_vol;
+            const auto ystride  = ext_nx.x;
 
             auto * __restrict__ local = & d_buffer[ tile_off ];
 
             {   // Copy from lower neighbour
-                int neighbor_tx = tile_idx.x;
-                neighbor_tx -= 1;
-                if ( periodic.x && neighbor_tx < 0 ) neighbor_tx += ntiles.x;
+                int neighbor_tx = tile_idx.x - 1;
+                if ( local_periodic.x && neighbor_tx < 0 ) neighbor_tx += ntiles.x;
 
                 if ( neighbor_tx >= 0 ) {
-                    auto * __restrict__ x_lower = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                    for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                        for( unsigned i = 0; i < gc.x.lower; i++ ) {
-                            local[ i + j * ext_nx.x ] = x_lower[ nx.x + i + j * ext_nx.x ];
+                    const auto neighbor_off = (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
+                    auto * __restrict__ x_lower = & d_buffer[ neighbor_off ] ;
+                    for( int j = 0; j < ext_nx.y; j++ ) {
+                        for( int i = 0; i < gc.x.lower; i++ ) {
+                            local[ i + j * ystride ] = x_lower[ nx.x + i + j * ystride ];
                         }
                     }
                 }
             }
 
             {   // Copy from upper neighbour
-                int neighbor_tx = tile_idx.x;
-                neighbor_tx += 1;
-                if ( periodic.x && neighbor_tx >= static_cast<int>(ntiles.x) ) neighbor_tx -= ntiles.x;
+                int neighbor_tx = tile_idx.x + 1;
+                if ( local_periodic.x && neighbor_tx >= static_cast<int>(ntiles.x) ) neighbor_tx -= ntiles.x;
 
                 if ( neighbor_tx < static_cast<int>(ntiles.x) ) {
-                    auto * __restrict__ x_upper = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                    for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                        for( unsigned i = 0; i < gc.x.upper; i++ ) {
-                            local[ gc.x.lower + nx.x + i + j * ext_nx.x ] = x_upper[ gc.x.lower + i + j * ext_nx.x ];
+                    const auto neighbor_off = (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
+                    auto * __restrict__ x_upper =  & d_buffer[ neighbor_off ] ;
+                    for( int j = 0; j < ext_nx.y; j++ ) {
+                        for( int i = 0; i < gc.x.upper; i++ ) {
+                            local[ gc.x.lower + nx.x + i + j * ystride ] = x_upper[ gc.x.lower + i + j * ystride ];
                         }
                     }
                 }
@@ -408,142 +410,41 @@ class grid {
 
             const auto tile_idx = make_int2( tid % ntiles.x, tid / ntiles.x );
             const auto tile_off = tid * tile_vol;
+            const auto ystride  = ext_nx.x;
 
-            auto * __restrict__ local = d_buffer + tile_off;
+            auto * __restrict__ local = & d_buffer[ tile_off ];
             
             {   // Copy from lower neighbour
-                int neighbor_ty = tile_idx.y;
-                neighbor_ty -= 1;
-                if ( periodic.y && neighbor_ty < 0 ) neighbor_ty += ntiles.y;
+                int neighbor_ty = tile_idx.y - 1;
+                if ( local_periodic.y && neighbor_ty < 0 ) neighbor_ty += ntiles.y;
 
                 if ( neighbor_ty >= 0 ) {
-                    auto * __restrict__ y_lower = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                    for( unsigned j = 0; j < gc.y.lower; j++ ) {
-                        for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                            local[ i + j * ext_nx.x ] = y_lower[ i + ( nx.y + j ) * ext_nx.x ];
+                    const auto neighbor_off = (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
+                    auto * __restrict__ y_lower = & d_buffer [ neighbor_off ] ;
+                    for( int j = 0; j < gc.y.lower; j++ ) {
+                        for( int i = 0; i < ext_nx.x; i++ ) {
+                            local[ i + j * ystride ] = y_lower[ i + ( nx.y + j ) * ystride ];
                         }
                     }
                 }
             }
 
             {   // Copy from upper neighbour
-                int neighbor_ty = tile_idx.y;
-                neighbor_ty += 1;
-                if ( periodic.y && neighbor_ty >= static_cast<int>(ntiles.y) ) neighbor_ty -= ntiles.y;
+                int neighbor_ty = tile_idx.y + 1;
+                if ( local_periodic.y && neighbor_ty >= static_cast<int>(ntiles.y) ) neighbor_ty -= ntiles.y;
 
                 if ( neighbor_ty < static_cast<int>(ntiles.y) ) {
-                    auto * __restrict__ y_upper = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                    for( unsigned j = 0; j < gc.y.upper; j++ ) {
-                        for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                            local[ i + ( gc.y.lower + nx.y + j ) * ext_nx.x ] = y_upper[ i + ( gc.y.lower + j ) * ext_nx.x ];
+                    const auto neighbor_off = (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
+                    auto * __restrict__ y_upper = & d_buffer [ neighbor_off ];
+                    for( int j = 0; j < gc.y.upper; j++ ) {
+                        for( int i = 0; i < ext_nx.x; i++ ) {
+                            local[ i + ( gc.y.lower + nx.y + j ) * ystride ] = y_upper[ i + ( gc.y.lower + j ) * ystride ];
                         }
                     }
                 }
             }
         }
     }
-
-#else
-
-    /**
-     * @brief Copies edge values to X neighboring guard cells
-     * 
-     */
-    void local_copy_to_gc_x() {
-
-        // Loop over tiles
-        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
-
-                {   // Copy from lower neighbour
-                    int neighbor_tx = tile_idx.x;
-                    neighbor_tx -= 1;
-                    if ( periodic.x && neighbor_tx < 0 ) neighbor_tx += ntiles.x;
-
-                    if ( neighbor_tx >= 0 ) {
-                        auto * __restrict__ x_lower = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                        for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                            for( unsigned i = 0; i < gc.x.lower; i++ ) {
-                                local[ i + j * ext_nx.x ] = x_lower[ nx.x + i + j * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-
-                {   // Copy from upper neighbour
-                    int neighbor_tx = tile_idx.x;
-                    neighbor_tx += 1;
-                    if ( periodic.x && neighbor_tx >= static_cast<int>(ntiles.x) ) neighbor_tx -= ntiles.x;
-
-                    if ( neighbor_tx < static_cast<int>(ntiles.x) ) {
-                        auto * __restrict__ x_upper = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                        for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                            for( unsigned i = 0; i < gc.x.upper; i++ ) {
-                                local[ gc.x.lower + nx.x + i + j * ext_nx.x ] = x_upper[ gc.x.lower + i + j * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * @brief Copies edge values to Y neighboring guard cells
-     * 
-     */
-    void local_copy_to_gc_y() {
-
-        // Loop over tiles
-        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = d_buffer + tile_off;
-                
-                {   // Copy from lower neighbour
-                    int neighbor_ty = tile_idx.y;
-                    neighbor_ty -= 1;
-                    if ( periodic.y && neighbor_ty < 0 ) neighbor_ty += ntiles.y;
-
-                    if ( neighbor_ty >= 0 ) {
-                        auto * __restrict__ y_lower = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                        for( unsigned j = 0; j < gc.y.lower; j++ ) {
-                            for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                                local[ i + j * ext_nx.x ] = y_lower[ i + ( nx.y + j ) * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-
-                {   // Copy from upper neighbour
-                    int neighbor_ty = tile_idx.y;
-                    neighbor_ty += 1;
-                    if ( periodic.y && neighbor_ty >= static_cast<int>(ntiles.y) ) neighbor_ty -= ntiles.y;
-
-                    if ( neighbor_ty < static_cast<int>(ntiles.y) ) {
-                        auto * __restrict__ y_upper = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                        for( unsigned j = 0; j < gc.y.upper; j++ ) {
-                            for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                                local[ i + ( gc.y.lower + nx.y + j ) * ext_nx.x ] = y_upper[ i + ( gc.y.lower + j ) * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-#endif
 
     /**
      * @brief Copies x values to neighboring guard cells, including cells on 
@@ -556,8 +457,8 @@ class grid {
         int lnode = part.get_neighbor(-1, 0 );
         int unode = part.get_neighbor(+1, 0 );
 
-        // Disable messages if local periodic
-        if ( periodic.x ) lnode = unode = -1;
+        // Disable messages if only 1 node along  x direction
+        if ( part.dims.x == 1 ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -670,8 +571,8 @@ class grid {
         int lnode = part.get_neighbor(0, -1);
         int unode = part.get_neighbor(0, +1);
 
-        // Disable messages if local periodic
-        if ( periodic.y ) lnode = unode = -1;
+        // Disable messages if only 1 node along y direction
+        if ( part.dims.y == 1 ) lnode = unode = -1;
         
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -785,8 +686,6 @@ class grid {
 
     };
 
-#ifdef _OPENMP
-
     /**
      * @brief Adds values from neighboring x guard cells to local data
      * 
@@ -796,38 +695,39 @@ class grid {
 
         // Loop over tiles
         #pragma omp parallel for
-        for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+        for( int tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
 
             const auto tile_idx = make_int2( tid % ntiles.x, tid / ntiles.x );
             const auto tile_off = tid * tile_vol;
+            const auto ystride  = ext_nx.x;
 
-            auto * __restrict__ local = d_buffer + tile_off;
+            auto * __restrict__ local = & d_buffer[ tile_off ];
             
             {   // Add from lower neighbour
-                int neighbor_tx = tile_idx.x;
-                neighbor_tx -= 1;
-                if ( periodic.x && neighbor_tx < 0 ) neighbor_tx += ntiles.x;
+                int neighbor_tx = tile_idx.x - 1;
+                if ( local_periodic.x && neighbor_tx < 0 ) neighbor_tx += ntiles.x;
 
                 if ( neighbor_tx >= 0 ) {
-                    T * __restrict__ x_lower = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
+                    const auto neighbor_off = (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
+                    T * __restrict__ x_lower = & d_buffer[neighbor_off]; 
                     for( unsigned j = 0; j < ext_nx.y; j++ ) {
                         for( unsigned i = 0; i < gc.x.upper; i++ ) {
-                            local[ gc.x.lower + i + j * ext_nx.x ] += x_lower[ gc.x.lower + nx.x + i + j * ext_nx.x ];
+                            local[ gc.x.lower + i + j * ystride ] += x_lower[ gc.x.lower + nx.x + i + j * ystride ];
                         }
                     }
                 }
             }
 
             {   // Add from upper neighbour
-                int neighbor_tx = tile_idx.x;
-                neighbor_tx += 1;
-                if ( periodic.x && neighbor_tx >= static_cast<int>(ntiles.x) ) neighbor_tx -= ntiles.x;
+                int neighbor_tx = tile_idx.x + 1;
+                if ( local_periodic.x && neighbor_tx >= static_cast<int>(ntiles.x) ) neighbor_tx -= ntiles.x;
 
                 if ( neighbor_tx < static_cast<int>(ntiles.x) ) {
-                    auto * __restrict__ x_upper = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                    for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                        for( unsigned i = 0; i < gc.x.lower; i++ ) {
-                            local[ nx.x + i + j * ext_nx.x ] += x_upper[ i + j * ext_nx.x ];
+                    const auto neighbor_off = (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
+                    auto * __restrict__ x_upper = & d_buffer[neighbor_off]; 
+                    for( int j = 0; j < ext_nx.y; j++ ) {
+                        for( int i = 0; i < gc.x.lower; i++ ) {
+                            local[ nx.x + i + j * ystride ] += x_upper[ i + j * ystride ];
                         }
                     }
                 }
@@ -845,38 +745,39 @@ class grid {
 
         // Loop over tiles
         #pragma omp parallel for
-        for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+        for( int tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
 
             const auto tile_idx = make_int2( tid % ntiles.x, tid / ntiles.x );
             const auto tile_off = tid * tile_vol;
+            const auto ystride  = ext_nx.x;
 
-            auto * __restrict__ local = d_buffer + tile_off;
+            auto * __restrict__ local = & d_buffer[ tile_off ];
             
             {   // Add from lower neighbour
-                int neighbor_ty = tile_idx.y;
-                neighbor_ty -= 1;
-                if ( periodic.y && neighbor_ty < 0 ) neighbor_ty += ntiles.y;
+                int neighbor_ty = tile_idx.y - 1;
+                if ( local_periodic.y && neighbor_ty < 0 ) neighbor_ty += ntiles.y;
 
                 if ( neighbor_ty >= 0 ) {
-                    auto * __restrict__ y_lower = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                    for( unsigned j = 0; j < gc.y.upper; j++ ) {
-                        for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                            local[ i + ( gc.y.lower + j ) * ext_nx.x ] += y_lower[ i + ( gc.y.lower + nx.y + j ) * ext_nx.x ];
+                    const auto neighbor_off = (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
+                    auto * __restrict__ y_lower = & d_buffer [ neighbor_off ]; 
+                    for( int j = 0; j < gc.y.upper; j++ ) {
+                        for( int i = 0; i < ext_nx.x; i++ ) {
+                            local[ i + ( gc.y.lower + j ) * ystride ] += y_lower[ i + ( gc.y.lower + nx.y + j ) * ystride ];
                         }
                     }
                 }
             }
 
             {   // Add from upper neighbour
-                int neighbor_ty = tile_idx.y;
-                neighbor_ty += 1;
-                if ( periodic.y && neighbor_ty >= static_cast<int>(ntiles.y) ) neighbor_ty -= ntiles.y;
+                int neighbor_ty = tile_idx.y + 1;
+                if ( local_periodic.y && neighbor_ty >= static_cast<int>(ntiles.y) ) neighbor_ty -= ntiles.y;
 
                 if ( neighbor_ty < static_cast<int>(ntiles.y) ) {
-                    auto * __restrict__ y_upper = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
+                    const auto neighbor_off = (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
+                    auto * __restrict__ y_upper = & d_buffer [ neighbor_off ]; 
                     for( unsigned j = 0; j < gc.y.lower; j++ ) {
                         for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                            local[ i + ( nx.y + j ) * ext_nx.x ] += y_upper[ i + j * ext_nx.x ];
+                            local[ i + ( nx.y + j ) * ystride ] += y_upper[ i + j * ystride ];
                         }
                     }
                 }
@@ -884,114 +785,14 @@ class grid {
         }
     };
 
-
-#else
-
-    /**
-     * @brief Adds values from neighboring x guard cells to local data
-     * 
-     */
-    void local_add_from_gc_x() {
-        // Loop over tiles
-        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = d_buffer + tile_off;
-                
-                {   // Add from lower neighbour
-                    int neighbor_tx = tile_idx.x;
-                    neighbor_tx -= 1;
-                    if ( periodic.x && neighbor_tx < 0 ) neighbor_tx += ntiles.x;
-
-                    if ( neighbor_tx >= 0 ) {
-                        T * __restrict__ x_lower = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                        for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                            for( unsigned i = 0; i < gc.x.upper; i++ ) {
-                                local[ gc.x.lower + i + j * ext_nx.x ] += x_lower[ gc.x.lower + nx.x + i + j * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-
-                {   // Add from upper neighbour
-                    int neighbor_tx = tile_idx.x;
-                    neighbor_tx += 1;
-                    if ( periodic.x && neighbor_tx >= static_cast<int>(ntiles.x) ) neighbor_tx -= ntiles.x;
-
-                    if ( neighbor_tx < static_cast<int>(ntiles.x) ) {
-                        auto * __restrict__ x_upper = d_buffer + (tile_idx.y * ntiles.x + neighbor_tx) * tile_vol;
-                        for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                            for( unsigned i = 0; i < gc.x.lower; i++ ) {
-                                local[ nx.x + i + j * ext_nx.x ] += x_upper[ i + j * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * @brief Adds values from neighboring x guard cells to local data
-     * 
-     */
-    void local_add_from_gc_y() {
-        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = d_buffer + tile_off;
-                
-                {   // Add from lower neighbour
-                    int neighbor_ty = tile_idx.y;
-                    neighbor_ty -= 1;
-                    if ( periodic.y && neighbor_ty < 0 ) neighbor_ty += ntiles.y;
-
-                    if ( neighbor_ty >= 0 ) {
-                        auto * __restrict__ y_lower = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                        for( unsigned j = 0; j < gc.y.upper; j++ ) {
-                            for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                                local[ i + ( gc.y.lower + j ) * ext_nx.x ] += y_lower[ i + ( gc.y.lower + nx.y + j ) * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-
-                {   // Add from upper neighbour
-                    int neighbor_ty = tile_idx.y;
-                    neighbor_ty += 1;
-                    if ( periodic.y && neighbor_ty >= static_cast<int>(ntiles.y) ) neighbor_ty -= ntiles.y;
-
-                    if ( neighbor_ty < static_cast<int>(ntiles.y) ) {
-                        auto * __restrict__ y_upper = d_buffer + (neighbor_ty * ntiles.x + tile_idx.x) * tile_vol;
-                        for( unsigned j = 0; j < gc.y.lower; j++ ) {
-                            for( unsigned i = 0; i < ext_nx.x; i++ ) {
-                                local[ i + ( nx.y + j ) * ext_nx.x ] += y_upper[ i + j * ext_nx.x ];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-#endif
-
     void add_from_gc_x() {
 
         // Get x neighbors
         int lnode = part.get_neighbor(-1, 0 );
         int unode = part.get_neighbor(+1, 0 );
 
-        // Disable messages if local periodic
-        if ( periodic.x ) lnode = unode = -1;
+        // Disable messages if only 1 node along  x direction
+        if ( part.dims.x == 1 ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -1104,8 +905,8 @@ class grid {
         int lnode = part.get_neighbor( 0, -1 );
         int unode = part.get_neighbor( 0, +1 );
 
-        // Disable messages if local periodic
-        if ( periodic.y ) lnode = unode = -1;
+        // Disable messages if only 1 node along y direction
+        if ( part.dims.y == 1 ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -1229,82 +1030,24 @@ class grid {
      */
     void x_shift_left( unsigned int const shift ) {
 
-        /*
-         * Warning: This version cannot be made parallel inside tiles 
-         */
         if ( gc.x.upper >= shift ) {
 
             const int ystride = ext_nx.x;
 
             // Loop over tiles
-            for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                    const auto tile_idx = make_uint2( tx, ty );
-                    const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                    const auto tile_off = tid * tile_vol ;
-                    
-                    auto * __restrict__ buffer = d_buffer + tile_off;
-                    
-                    for( unsigned iy = 0; iy < ext_nx.y; iy++ ) {
-                        for( unsigned ix = 0; ix < ext_nx.x - shift; ix++ ) {
-                            buffer[ ix + iy * ystride ] = buffer[ ix + shift + iy * ystride ]; 
-                        }
-                        for( unsigned ix = ext_nx.x - shift; ix < ext_nx.x; ix++ ) {
-                            buffer[ ix + iy * ystride ] = T{0};
-                        }
+            #pragma omp parallel for
+            for( int tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+                const auto tile_off = tid * tile_vol ;
+                
+                auto * __restrict__ buffer = & d_buffer[ tile_off ];
+                
+                for( int iy = 0; iy < ext_nx.y; iy++ ) {
+                    for( int ix = 0; ix < ext_nx.x - shift; ix++ ) {
+                        buffer[ ix + iy * ystride ] = buffer[ ix + shift + iy * ystride ]; 
                     }
-                }
-            }
-
-            // Copy x guard cells
-            copy_to_gc_x();
-
-        } else {
-            std::cerr << "x_shift_left(), shift value too large, must be <= gc.x.upper\n";
-            exit(1);
-        }
-    }
-
-    /**
-     * @brief Left shifts data for a specified amount
-     * 
-     * @warning This operation is only allowed if the number of upper x guard cells
-     * is greater or equal to the requested shift
-     * 
-     * @param shift Number of cells to shift
-     */
-    void x_shift_left_mk2( unsigned int const shift ) {
-
-        if ( gc.x.upper >= shift ) {
-
-            const int ystride = ext_nx.x;
-
-            // Loop over tiles
-            for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-                    
-                    // On a GPU this would be on shared memory
-                    T local[tile_vol];
-
-                    const auto tile_idx = make_uint2( tx, ty );
-                    const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                    const auto tile_off = tid * tile_vol ;
-                    
-                    auto * __restrict__ buffer = d_buffer + tile_off;
-                    
-                    for( unsigned j = 0; j < ext_nx.y; j++ ) {
-                        for( unsigned i = 0; i < ext_nx.x - shift; i++ ) {
-                            local[ i + j * ystride ] = buffer[ i + shift + j * ystride ]; 
-                        }
-                        for( unsigned i = ext_nx.x - shift; i < ext_nx.x; i++ ) {
-                            local[ i + j * ystride ] = 0;
-                        }
+                    for( int ix = ext_nx.x - shift; ix < ext_nx.x; ix++ ) {
+                        buffer[ ix + iy * ystride ] = T{0};
                     }
-
-                    // sync ...
-                    for( unsigned i = 0; i < tile_vol; i++ ) buffer[i] = local[i];
-
                 }
             }
 
@@ -1326,40 +1069,39 @@ class grid {
      */
     template < typename S >
     void kernel3_x( S const a, S const b, S const c ) {
+
         if (( gc.x.lower > 0) && (gc.x.upper > 0)) {
 
             const int ystride = ext_nx.x;
 
             // Loop over tiles
-            #pragma omp for
-            for( unsigned int idx = 0; idx < ntiles.y * ntiles.x; idx++ ) {
-                auto tx = idx % ntiles.x;
-                auto ty = idx / ntiles.x;
+            #pragma omp parallel for
+            for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
 
                 // On a GPU these would be on block shared memory
                 T A[ tile_vol ];
                 T B[ tile_vol ];
 
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
                 const auto tile_off = tid * tile_vol ;
 
                 auto * __restrict__ buffer = & d_buffer[ tile_off ];
 
                 // Copy data from tile buffer
-                for( unsigned i = 0; i < tile_vol; i++ ) A[i] = buffer[i];
+                for( int i = 0; i < tile_vol; i++ ) {
+                    A[i] = B[i] = buffer[i];
+                }
 
                 // Apply kernel locally
-                for( unsigned iy = 0; iy < ext_nx.y; iy++ ) {
-                    for( unsigned ix = gc.x.lower; ix < nx.x + gc.x.lower; ix ++) {
-                        B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
-                                                    A[ iy * ystride +  ix    ] * b +
-                                                    A[ iy * ystride + (ix+1) ] * c;
+                for( int iy = 0; iy < ext_nx.y; iy++ ) {
+                    for( int ix = gc.x.lower; ix < gc.x.lower + nx.x; ix ++) {
+                        B[ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
+                                                 A[ iy * ystride +  ix    ] * b +
+                                                 A[ iy * ystride + (ix+1) ] * c;
                     }
                 }
 
                 // Copy data back to tile buffer
-                for( unsigned i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
+                for( int i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
             }
 
             // Update guard cells
@@ -1403,7 +1145,9 @@ class grid {
                 auto * __restrict__ buffer = & d_buffer[ tile_off ];
 
                 // Copy data from tile buffer
-                for( unsigned i = 0; i < tile_vol; i++ ) A[i] = buffer[i];
+                for( unsigned i = 0; i < tile_vol; i++ ) {
+                    A[i] = B[i] = buffer[i];
+                }
 
                 // Apply kernel locally
                 for( unsigned iy = gc.y.lower; iy < nx.y + gc.y.lower; iy++ ) {

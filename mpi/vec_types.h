@@ -111,7 +111,7 @@ __GEN_VEC2( double2, double, 16 )
  * + operator!=
  * + operator<<
  * + dot ( v3, v3 ) - dot product 
- * + cross ( v3, v3 ) - dot product 
+ * + cross ( v3, v3 ) - cross product 
  */
 
 #define __GEN_VEC3( V, S ) \

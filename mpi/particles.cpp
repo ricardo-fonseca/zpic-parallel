@@ -434,6 +434,7 @@ uint32_t update_tile_info(
     const int * __restrict__ new_np = sort.new_np;
 
     // Include ghost tiles in calculations
+    const auto ntiles     = part::local_tiles( tmp.ntiles );
     const auto ntiles_all = part::all_tiles( tmp.ntiles );
 
     int * __restrict__ offset = tmp.offset;
@@ -441,8 +442,14 @@ uint32_t update_tile_info(
 
     // Initialize offset[] with the new number of particles
     if ( extra != nullptr ) {
-        for( auto i = 0; i < ntiles_all; i++ ) {
+        // extra array only includes data for local tiles
+        for( auto i = 0; i < ntiles; i++ ) {
             offset[i] = new_np[i] + extra[i];
+            np[i] = 0;
+        }
+
+        for( auto i = ntiles; i < ntiles_all; i++ ) {
+            offset[i] = new_np[i];
             np[i] = 0;
         }
     } else {
@@ -878,71 +885,6 @@ void copy_sorted(
     }
 }
 
-#if 0
-/**
- * @brief Moves particles to the correct tiles
- * 
- * @note Particles are only expected to have moved no more than 1 tile
- *       in each direction. If necessary the code will grow the particle buffer
- * 
- * @param tmp       Temporary particle buffer
- * @param sort      Temporary sort index 
- * @param extra     Additional space to add to each tile. Leaves  room for
- *                  particles to be injected later.
- */
-void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
-
-    // Reset sort data
-    sort.reset();
-
-    // Get new number of particles per tile
-    bnd_check ( *this, sort, periodic );
-
-    if ( extra ) {
-        // Get new offsets, including extra values in offset calculations
-        // Used to reserve space in particle buffer for later injection
-        auto total_np = update_tile_info ( tmp, sort.new_np, extra );
-
-        if ( total_np > max_part ) { 
-
-            // grow tmp particle buffer
-            tmp.grow_buffer( total_np );
-
-            // copy all particles to correct tiles in tmp buffer
-            copy_sorted( *this, tmp, sort, periodic );
-
-            // swap buffers
-            swap_buffers( *this, tmp );
-
-            // grow tmp particle buffer for future use
-            grow_buffer( max_part );
-
-        } else {
-            // Copy outgoing particles (and particles needing shifting) to staging area
-            copy_out ( *this, tmp, sort, periodic );
-
-            // Copy particles from staging area into final positions in partile buffer
-            copy_in ( *this, tmp );
-        }
-
-    } else {
-        // Get new offsets
-        update_tile_info ( tmp, sort.new_np );
-
-        // Copy outgoing particles (and particles needing shifting) to staging area
-        copy_out ( *this, tmp, sort, periodic );
-
-        // Copy particles from staging area into final positions in partile buffer
-        copy_in ( *this, tmp );
-    }
-
-
-    // For debug only, remove from production code
-    // validate( "After tile_sort" );
-}
-#endif
-
-#if 1
 /**
  * @brief Moves particles to the correct tiles
  * 
@@ -974,8 +916,9 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     auto total_np = update_tile_info ( tmp, sort, extra );
 
     if ( total_np > max_part ) { 
-        std::cerr << "Particles::tile_sort() - particle buffer requires growing,";
-        std::cerr << " not implemented yet.";
+        std::cerr << "Particles::tile_sort() - particle buffer requires growing,"
+                  << "max_part: " << max_part << ", total_np: " << total_np
+                  << ", not implemented yet.\n";
         mpi::abort(1);
     }
 
@@ -1001,7 +944,6 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // parallel.barrier();
     // validate( "after tile_sort" );
 }
-#endif
 
 /**
  * @brief Shifts particle cells by the required amount
@@ -1017,20 +959,18 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
 void Particles::cell_shift( int2 const shift ) {
 
     // Loop over tiles
-    for( unsigned ty = 0; ty < ntiles.y; ++ty ) {
-        for( unsigned tx = 0; tx < ntiles.x; ++tx ) {
-            const auto tid  = ty * ntiles.x + tx;
-            const auto tile_off = offset[ tid ];
-            const auto tile_np  = np[ tid ];
+    #pragma omp parallel for schedule(dynamic)
+    for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+        const auto tile_off = offset[ tid ];
+        const auto tile_np  = np[ tid ];
 
-            int2 * const __restrict__ t_ix = &ix[ tile_off ];
+        int2 * const __restrict__ t_ix = &ix[ tile_off ];
 
-            for( int i = 0; i < tile_np; i++ ) {
-                int2 cell = t_ix[i];
-                cell.x += shift.x;
-                cell.y += shift.y;
-                t_ix[i] = cell;
-            }
+        for( int i = 0; i < tile_np; i++ ) {
+            int2 cell = t_ix[i];
+            cell.x += shift.x;
+            cell.y += shift.y;
+            t_ix[i] = cell;
         }
     }
 }

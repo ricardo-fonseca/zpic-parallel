@@ -1089,8 +1089,7 @@ void move_deposit_shift_kernel(
         };
 
         // Check for cell crossings and split trajectory
-        vint2 deltai;
-        vmask2 cross;
+        vint2 deltai; vmask2 cross;
 
         vint2 v0_ix; vfloat2 v0_x0, v0_x1; vfloat v0_qvz;
         vint2 v1_ix; vfloat2 v1_x0, v1_x1; vfloat v1_qvz;
@@ -1173,7 +1172,7 @@ void move_deposit_shift_kernel(
         // Modify cell and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
-            ix0.y + deltai.y + shift.x
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
@@ -1403,7 +1402,6 @@ void move_deposit_kernel(
     float2 const dt_dx, float const q, float2 const qnx ) 
 {
     const uint2 ntiles  = part.ntiles;
-
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     // This is usually in block shared memeory
@@ -1580,7 +1578,7 @@ void move_deposit_shift_kernel(
         // Modify cell and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
-            ix0.y + deltai.y + shift.x
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
@@ -1758,13 +1756,19 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
 
     // Create particle data structure
     particles = new Particles( global_ntiles, nx, max_part, parallel );
+
+    // Disable periodic boundaries if parallel partition does not support it
+    if ( ! parallel.periodic.x ) {
+        if ( bc.x.lower == species::bc::periodic ) {
+            bc.x.lower = species::bc::open;
+        }
+    };
     
     // Set periodic boundaries
     int2 periodic = {
         ( bc.x.lower == species::bc::periodic ),
         ( bc.y.lower == species::bc::periodic )
     };
-
     particles -> set_periodic( periodic );
 
     tmp = new Particles( global_ntiles, nx, max_part, parallel );
@@ -1782,7 +1786,6 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
 
     // Inject initial distribution
 
-/*
     // Count particles to inject and store in np_inj
     np_inject( particles -> local_range(), np_inj );
 
@@ -1791,18 +1794,6 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     for( unsigned i = 0; i < ntiles.x * ntiles.y; i ++ ) {
         particles -> offset[i] = off;
         off += np_inj[i];
-    }
-*/
-
-    // Count particles to inject and store in particles -> offset
-    np_inject( particles -> local_range(), particles -> offset );
-
-    // Do an exclusive scan to get the required offsets
-    uint32_t off = 0;
-    for( unsigned int i = 0; i < ntiles.x * ntiles.y; i++ ) {
-        auto tmp = particles -> offset[i];
-        particles -> offset[i] = off;
-        off += tmp;
     }
 
     // Inject the particles
@@ -1991,6 +1982,9 @@ void species_bcy(
  */
 void Species::process_bc() {
 
+    std::cout << "(*error*) Species::process_bc() have not been implemented yet,"
+              << " aborting.\n";
+    exit(1);
     // x boundaries
     if ( bc.x.lower > species::bc::periodic || bc.x.upper > species::bc::periodic ) {
         
@@ -2082,7 +2076,7 @@ void Species::advance( EMF const &emf, Current &current ) {
     move( current.J );
 
     // Process physical boundary conditions
-    process_bc();
+    // process_bc();
 
     // Increase internal iteration number
     iter++;
@@ -2107,10 +2101,6 @@ void Species::advance( EMF const &emf, Current &current ) {
  */
 void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
-    std::cerr << "Species::advance_mov_window() is not implemented yet, aborting\n";
-    exit(1);
-
-#if 0
     // Advance momenta
     push( emf.E, emf.B );
 
@@ -2120,22 +2110,31 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
         move( current.J, make_int2(-1,0) );
 
         // Process boundary conditions
-        process_bc();
+        // process_bc();
 
-        // Find range where new particles need to be injected
-        uint2 g_nx = particles -> gnx;
-        bnd<unsigned int> range;
-        range.x = pair<unsigned int>( g_nx.x - 1, g_nx.x - 1 );
-        range.y = pair<unsigned int>(          0, g_nx.y - 1 );
+        if ( particles->parallel.get_coords().x == particles->parallel.dims.x - 1 ) {
+            // Edge node needs to inject new particles
 
-        // Count new particles to be injected
-        np_inject( range, np_inj );
+            // Find range where new particles need to be injected
+            uint2 local_nx = particles -> get_local_nx();
+            bnd<unsigned int> range;
+            range.x = pair<unsigned int>( local_nx.x - 1, local_nx.x - 1 );
+            range.y = pair<unsigned int>(              0, local_nx.y - 1 );
 
-        // Sort particles over tiles, leaving room for new particles to be injected
-        particles -> tile_sort( *tmp, *sort, np_inj );
+            // Count new particles to be injected
+            np_inject( range, np_inj );
 
-        // Inject new particles
-        inject( range );
+            // Sort particles over tiles, leaving room for new particles to be injected
+            particles -> tile_sort( *tmp, *sort, np_inj );
+
+            // Inject new particles
+            inject( range );
+
+        } else {
+
+            // Remaining nodes just do a standard tile_sort
+            particles -> tile_sort( *tmp, *sort );
+        }
 
         // Advance moving window
         moving_window.advance();
@@ -2146,7 +2145,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
         move( current.J );
 
         // Process boundary conditions
-        process_bc();
+        // process_bc();
 
         // Sort particles over tiles
         particles -> tile_sort( *tmp, *sort );
@@ -2154,9 +2153,6 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
     // Increase internal iteration number
     iter++;
-
-#endif
-
 }
 
 

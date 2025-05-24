@@ -47,8 +47,12 @@ void test_grid( void ) {
     uint2 partition = make_uint2( 2, 2 );
 
     // Global number of tiles
-    const uint2 global_ntiles = { 4, 4 };
-    const uint2 nx     = { 12, 12 };
+    // const uint2 global_ntiles = { 4, 4 };
+    const uint2 global_ntiles = { 3, 2 };
+
+
+    // const uint2 nx     = { 12, 12 };
+    const uint2 nx     = { 11, 17 };
 
     bnd<unsigned int> gc;
     gc.x = {1,2};
@@ -68,7 +72,7 @@ void test_grid( void ) {
     }
 
     data.zero( );
-    data.set( 32.0 );
+    data.set( 1.0 );
 
     auto ext_nx = data.ext_nx;
 
@@ -415,6 +419,255 @@ void test_current( ) {
     }
 }
 
+void test_mov_window_emf( ) {
+
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+//    uint2 partition = make_uint2( 1, 1 );
+    uint2 partition = make_uint2( 4, 2 );
+
+    // Simulation grid and time step
+    uint2 ntiles = { 64, 16 };
+    uint2 nx = { 16, 16 };
+
+    float2 box = { 20.48, 25.6 };
+    double dt = 0.014;
+
+    // Disable periodic boundaries along x
+    int2 periodic = { 0, 1 };
+
+    // Create simulation object
+    Simulation sim( ntiles, nx, box, dt, partition, periodic );
+
+    // Set moving window along x
+    sim.set_moving_window();
+
+
+    auto save_emf = [ & sim ]( ) {
+        sim.emf.save( emf::e, fcomp::x );
+        sim.emf.save( emf::e, fcomp::y );
+        sim.emf.save( emf::e, fcomp::z );
+
+        sim.emf.save( emf::b, fcomp::x );
+        sim.emf.save( emf::b, fcomp::y );
+        sim.emf.save( emf::b, fcomp::z );
+    };
+
+    Laser::Gaussian laser;
+    laser.start = 20.0;
+    laser.fwhm = 4.0;
+    laser.a0 = 1.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 1.5;
+    laser.focus = 20.48;
+    laser.axis = 12.8;
+
+    laser.sin_pol = 0;
+    laser.cos_pol = 1;
+
+    laser.add( sim.emf );
+
+    save_emf();
+
+    int niter = 20.48 / dt / 2 ;
+    // int niter = 0;
+
+
+    if ( mpi::world_root() ) {
+        std::cout << "Starting test - " << niter << " iterations...\n";
+    }
+
+    auto t0 = Timer("test");
+
+    t0.start();
+
+    for( int i = 0; i < niter; i ++) {
+        sim.advance();
+        save_emf();
+    }
+
+    t0.stop();
+
+    if ( mpi::world_root() ) {
+        char buffer[128];
+        snprintf( buffer, 127, "%d iterations: ", niter );
+        t0.report( buffer );
+
+        std::cout << ansi::bold;
+        std::cout << "Done!\n";
+        std::cout << ansi::reset;
+    }
+}
+
+
+void test_mov_window_inj( ) {
+
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 1, 1 );
+//    uint2 partition = make_uint2( 1, 2 );
+//    uint2 partition = make_uint2( 2, 1 );
+//    uint2 partition = make_uint2( 2, 2 );
+
+    // Simulation grid and time step
+    uint2 ntiles{ 48,8 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 30.72, 25.6 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    // Disable periodic boundaries along x
+    int2 periodic = { 0, 1 };
+
+    // Create simulation object
+    Simulation sim( ntiles, nx, box, dt, partition, periodic );
+
+    // 
+    uint2 ppc{ 8, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density(Density::Step(coord::x, 1.0, box.x - 0.25));
+    sim.add_species( electrons );
+
+    // Set moving window along x
+    // Currently this must happen after sim.add_species()
+    sim.set_moving_window();
+
+    electrons.save_charge();
+
+    int niter = ( box.x + 1.0 ) / dt;
+
+    if ( mpi::world_root() ) {
+        std::cout << "Starting test - " << niter << " iterations...\n";
+    }
+
+    auto t0 = Timer("test");
+
+    t0.start();
+
+    for( int i = 0; i < niter; i ++) {
+        if ( sim.get_iter() % 100 == 0 )
+            electrons.save_charge();
+        sim.advance_mov_window();
+    }
+
+    electrons.save_charge();
+
+    t0.stop();
+
+    if ( mpi::world_root() ) {
+        char buffer[128];
+        snprintf( buffer, 127, "%d iterations: ", niter );
+        t0.report( buffer );
+
+        std::cout << ansi::bold;
+        std::cout << "Done!\n";
+        std::cout << ansi::reset;
+    }
+}
+
+void test_lwfa()
+{
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    // Simulation grid and time step
+    uint2 ntiles{ 48,8 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 30.72, 25.6 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    // Disable periodic boundaries along x
+    int2 periodic = { 0, 1 };
+
+    // Create simulation object
+    Simulation sim( ntiles, nx, box, dt, partition, periodic );
+
+    // Add background plasma
+    uint2 ppc{ 4, 4 };
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density(Density::Step(coord::x, 1.0, box.x - 0.25));
+    sim.add_species( electrons );
+    
+    // Add laser pulse
+    Laser::Gaussian laser;
+    laser.start = box.x - .25;
+    laser.fwhm = 2.0;
+    laser.a0 = 2.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 4.0;
+    laser.focus = box.x;
+    laser.axis = box.y / 2;
+    
+    laser.sin_pol = 1;
+    laser.cos_pol = 0;
+
+    laser.add( sim.emf );
+    
+    if ( mpi::world_root() ) {
+        std::cout << "Added " << laser << '\n';
+    }
+
+    // Set moving window and current filtering
+    sim.set_moving_window();
+    sim.current.set_filter(Filter::Compensated(coord::x, 4));
+
+    // Diagnostics
+    auto save = [ & sim, & electrons ]( ) {
+        sim.emf.save( emf::e, fcomp::x );
+        sim.emf.save( emf::e, fcomp::y );
+        sim.emf.save( emf::e, fcomp::z );
+
+        sim.current.save( fcomp::x );
+        sim.current.save( fcomp::y );
+        sim.current.save( fcomp::z );
+
+        electrons.save_charge();
+    };
+
+
+    auto t0 = Timer("test");
+
+    t0.start();
+
+    // Run simulation dumping diagnostics at every 100 timesteps
+    while ( sim.get_t() <= box.x * 1.5 ) {
+        if ( sim.get_iter() % 100 == 0 ) save();
+        sim.advance_mov_window();
+    }
+
+    save();
+
+    t0.stop();
+
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Done!\n";
+        std::cout << ansi::reset;
+        std::cout << "After " << sim.get_iter() << " iterations,";
+        t0.report();
+    }
+
+}
+
 void test_weibel_96( )
 {
     // MPI partition
@@ -755,10 +1008,13 @@ int main( int argc, char *argv[] ) {
 
     // test_grid( );  
     // test_vec3grid( );
-    test_laser( );
+    // test_laser( );
     // test_inj( );
     // test_mov( );
     // test_current( );
+    // test_mov_window_emf();
+    // test_mov_window_inj();
+    test_lwfa();
     // test_weibel_debug();
     // test_weibel_96();
 

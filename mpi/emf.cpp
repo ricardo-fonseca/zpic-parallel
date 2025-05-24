@@ -145,41 +145,37 @@ void EMF::advance() {
     float2 const dt_dx_2 = make_float2( dt_dx.x/2, dt_dx.y/2 );
 
     // Loop over tiles
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+    #pragma omp parallel for
+    for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * field_vol;
+        const auto tile_off = tid * field_vol;
 
-            // Copy E and B into shared memory
-            float3 E_local[ field_vol ];
-            float3 B_local[ field_vol ];
-            for( unsigned i = 0; i < field_vol; i++ ) {
-                E_local[i] = E->d_buffer[ tile_off + i ];
-                B_local[i] = B->d_buffer[ tile_off + i ];
-            }
+        // Copy E and B into shared memory
+        float3 E_local[ field_vol ];
+        float3 B_local[ field_vol ];
+        for( unsigned i = 0; i < field_vol; i++ ) {
+            E_local[i] = E->d_buffer[ tile_off + i ];
+            B_local[i] = B->d_buffer[ tile_off + i ];
+        }
 
-            float3 * const __restrict__ tile_E = & E_local[ offset ];
-            float3 * const __restrict__ tile_B = & B_local[ offset ];
+        float3 * const __restrict__ tile_E = & E_local[ offset ];
+        float3 * const __restrict__ tile_B = & B_local[ offset ];
 
-            // synchronize block (...)
+        // synchronize block (...)
+        yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
+        // synchronize block (...)
 
-            yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
-            // synchronize block (...)
+        yee_e( tile_E, tile_B, nx, ystride, dt_dx );
+        // synchronize block (...)
 
-            yee_e( tile_E, tile_B, nx, ystride, dt_dx );
-            // synchronize block (...)
+        yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
+        
+        // synchronize block (...)
 
-            yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
-            
-            // synchronize block (...)
-
-            // Copy data to global memory
-            for( unsigned i = 0; i < field_vol; i++ ) {
-                E->d_buffer[ tile_off + i ] = E_local[i];
-                B->d_buffer[ tile_off + i ] = B_local[i];
-            }
+        // Copy data to global memory
+        for( unsigned i = 0; i < field_vol; i++ ) {
+            E->d_buffer[ tile_off + i ] = E_local[i];
+            B->d_buffer[ tile_off + i ] = B_local[i];
         }
     }
 
@@ -188,7 +184,9 @@ void EMF::advance() {
     B -> copy_to_gc();
 
     // Do additional bc calculations if needed
-    process_bc();
+    // process_bc();
+
+
 
     // Advance internal iteration number
     iter += 1;
@@ -197,7 +195,6 @@ void EMF::advance() {
     if ( moving_window.active() ) move_window();
 
 }
-
 
 /**
  * @brief Physical boundary conditions for the x direction
@@ -421,6 +418,10 @@ void emf_bcy(
  */
 void EMF::process_bc() {
 
+    std::cout << "(*error*) EMF::process_bc() have not been implemented yet,"
+              << " aborting.\n";
+    exit(1);
+
     const auto ntiles   = E -> get_ntiles();
     const auto tile_vol = E -> tile_vol;
     const auto nx       = E -> nx;
@@ -514,7 +515,6 @@ void yeeJ_e(
  * @brief Advance EM fields 1 time step including current
  * 
  */
-
 void EMF::advance( Current & current ) {
 
     const auto ntiles    = E -> get_ntiles();
@@ -575,7 +575,7 @@ void EMF::advance( Current & current ) {
     B -> copy_to_gc();
 
     // Do additional bc calculations if needed
-    process_bc();
+    // process_bc();
 
     // Advance internal iteration number
     iter += 1;
@@ -583,7 +583,6 @@ void EMF::advance( Current & current ) {
     // Move simulation window if needed
     if ( moving_window.active() ) move_window();
 }
-
 
 /**
  * @brief Save EMF data to diagnostic file

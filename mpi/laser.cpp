@@ -319,6 +319,9 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
         sin_pol = std::sin( polarization );
     }
 
+    E.zero();
+    B.zero();
+
     uint2 global_nx = E.get_global_nx();;
 
     float2 dx = make_float2(
@@ -341,15 +344,14 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     for( int tid = 0; tid < ntiles.y * ntiles.x ; tid++ ) {
         const auto ty = tid / ntiles.x;
         const auto tx = tid % ntiles.x;
-        const auto tile_idx = make_uint2( tx, ty );
         const auto tile_off = tid * tile_vol;
 
         // Copy data to shared memory and block
         float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
         float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-        const int ix0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
-        const int iy0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
+        const int ix0 = ( global_tile_off.x + tx ) * nx.x;
+        const int iy0 = ( global_tile_off.y + ty ) * nx.y;
 
         for( unsigned iy = 0; iy < nx.y; iy++ ) {
             for( unsigned ix = 0; ix < nx.x; ix++ ) {

@@ -305,7 +305,7 @@ public:
             bc.x.lower = bc.x.upper = species::bc::open;
 
             // Disable periodic.x boundaries for particles object
-            auto periodic = particles -> get_periodic();
+            int2 periodic = particles -> get_periodic();
             periodic.x = false;
             particles -> set_periodic( periodic );
 

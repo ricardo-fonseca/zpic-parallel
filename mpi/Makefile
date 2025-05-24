@@ -36,13 +36,13 @@ CXXFLAGS += -fopenmp
 # --------------------------------------------------------------------------- #
 
 # Enable AVX2 extensions with FMA support
-CXXFLAGS += -DUSE_AVX2 -mavx2 -mfma
+# CXXFLAGS += -DUSE_AVX2 -mavx2 -mfma
 
 # Enable AVX512f extensions
 # CXXFLAGS += -DUSE_AVX512 -mavx512f
 
 # Enable ARM Neon extensions
-# CXXFLAGS += -DUSE_NEON
+CXXFLAGS += -DUSE_NEON
 
 # Enable ARM SVE extensions (512 bits)
 # CXXFLAGS += -DUSE_SVE -msve-vector-bits=512

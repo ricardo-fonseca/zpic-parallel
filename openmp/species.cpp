@@ -1173,7 +1173,7 @@ void move_deposit_shift_kernel(
         // Modify cell and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
-            ix0.y + deltai.y + shift.x
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
@@ -1580,7 +1580,7 @@ void move_deposit_shift_kernel(
         // Modify cell and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
-            ix0.y + deltai.y + shift.x
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }

@@ -66,6 +66,18 @@ class Pulse {
     virtual int validate();
 
     /**
+     * @brief Stream extraction
+     * 
+     * @param os 
+     * @param obj 
+     * @return std::ostream& 
+     */
+    friend std::ostream& operator<<(std::ostream& os, const Pulse& obj) {
+        os << "[Laser pulse base class]";
+        return os;
+    };
+
+    /**
      * @brief Launch a laser pulse
      * @note Sets E and B fields to the laser field
      * 
@@ -115,7 +127,7 @@ class Pulse {
      */
     int add( EMF & emf ) {
         vec3grid<float3> tmp_E( emf.E -> global_ntiles, emf.E-> nx, emf.E -> gc, emf.E -> part );
-        vec3grid<float3> tmp_B( emf.E -> global_ntiles, emf.B-> nx, emf.B -> gc, emf.E -> part );
+        vec3grid<float3> tmp_B( emf.E -> global_ntiles, emf.B-> nx, emf.B -> gc, emf.B -> part );
 
         // Get laser fields
         int ierr = launch( tmp_E, tmp_B, emf.box );
@@ -138,6 +150,21 @@ class PlaneWave : public Pulse {
     int validate() { return Pulse::validate(); };
     int launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box );
 
+    /**
+     * @brief Stream extraction
+     * 
+     * @param os 
+     * @param obj 
+     * @return std::ostream& 
+     */
+    friend std::ostream& operator<<(std::ostream& os, const PlaneWave& obj) {
+        os << "Plane wave"
+           << ", start: " << obj.start
+           << ", fwhm: " << obj.fwhm
+           << ", omega0: " << obj.omega0;
+        return os;
+    };
+
 };
 
 class Gaussian : public Pulse {
@@ -152,6 +179,27 @@ class Gaussian : public Pulse {
 
     int validate();
     int launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box );
+
+        /**
+     * @brief Stream extraction
+     * 
+     * @param os 
+     * @param obj 
+     * @return std::ostream& 
+     */
+    friend std::ostream& operator<<(std::ostream& os, const Gaussian& obj) {
+        os << "Gaussian beam"
+           << ", start: " << obj.start
+           << ", fwhm: " << obj.fwhm
+           << ", omega0: " << obj.omega0
+           << ", W0: " << obj.W0
+           << ", focus: " << obj.focus
+           << ", axis: " << obj.axis;
+
+        return os;
+    };
+
+
 };
 
 }

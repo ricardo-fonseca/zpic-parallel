@@ -89,12 +89,22 @@ class Simulation {
     /**
      * @brief Turns on the moving window algorithm
      * 
+     * @note This should be called after all species have been added to the
+     *       simulation
      */
     void set_moving_window() {
+        
+        if ( parallel.periodic.x ) {
+            std::cerr << "(*error*) Simulation::set_moving_window() - Unable to set_moving_window() with periodic x partition\n";
+            exit(1); 
+        }
+        
         emf.set_moving_window();
         current.set_moving_window();
-        for (unsigned i = 0; i < species.size(); i++)
-            species[i]->set_moving_window();
+
+        for ( auto & sp : species ) {
+            sp -> set_moving_window();
+        }
     }
 
     /**

@@ -23,7 +23,7 @@ namespace emf {
 
 class EMF {
 
-    /// @brief Boundary condition
+    /// @brief Global boundary conditions
     emf::bc_type bc;
 
     /// @brief cell size
@@ -152,13 +152,16 @@ class EMF {
      */
     int set_moving_window() { 
         if ( iter == 0 ) {
+
             if ( E -> part.periodic.x ) {
-                std::cerr << "(*error*) Unable to set_moving_window() with periodic x partition\n";
+                std::cerr << "(*error*) EMF::set_moving_window() - Unable to set_moving_window() with periodic x partition\n";
                 return -1; 
             }
-
             moving_window.init( dx.x );
-            bc.x.lower = bc.x.upper = emf::bc::none;
+
+            bc.x.lower = emf::bc::none;
+            bc.x.upper = emf::bc::none;
+
             return 0;
         } else {
             std::cerr << "(*error*) set_moving_window() called with iter != 0\n";

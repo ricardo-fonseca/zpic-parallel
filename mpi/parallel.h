@@ -289,6 +289,10 @@ class Partition {
         };
         coords = make_int2( lcoords[0], lcoords[1] );
 
+        if ( rank == 0 ) {
+            std::cout << "(*info*) Created " << dims << " Partition object\n";
+        }
+
         // Get neighbors
         // Since we also need the corner neighbors we cannot use MPI_Cart_shift()
         for( int iy = 0; iy < 3; iy ++) {
