@@ -443,9 +443,9 @@ inline void split2d(
  */
 inline vfloat rgamma( const vfloat3 u ) {
     vfloat c1 = vec_float(1);
-    return vec_div( c1, vec_fmadd( u.z, u.z,
-                        vec_fmadd( u.y, u.y,
-                        vec_fmadd( u.x, u.x, c1 ) ) ) );
+    return vec_div( c1, vec_sqrt( vec_fmadd( u.z, u.z,
+                                  vec_fmadd( u.y, u.y,
+                                  vec_fmadd( u.x, u.x, c1 ) ) ) ) );
 }
 
 /**
