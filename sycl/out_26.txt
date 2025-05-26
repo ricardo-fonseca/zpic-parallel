@@ -1,0 +1,19 @@
+Name               : NVIDIA A100-SXM-64GB
+Max. compute units : 124
+Local mem. size    : 166912 bytes 
+Max. # sub-groups  : 32
+** Large Weibel test **
+ # tiles          : 64, 64
+ tile size        : 32, 32
+ global size      : 2048, 2048
+ # part / species : 256 M 
+Running Weibel test up to n = 500...
+Simulation complete at i = 500
+(*info*) Energy at n = 500, t = 35
+(*info*) electrons = 3835.63
+(*info*) positrons = 3836.06
+(*info*) Total particle energy = 7671.68
+(*info*) Electric field = 4994.98
+(*info*) Magnetic field = 2251.44
+(*info*) total = 14918.1
+[benchmark] 10.3179 GPart/s
