@@ -124,7 +124,7 @@ template<typename T>
 inline T reduce_add( sycl::sub_group & sg, T const input ) {
     T value = input;
     for( int i = 1; i < sg.get_local_linear_range(); i <<= 1 )
-        value += sg.shuffle_xor(value, i);
+    	value += sycl::permute_group_by_xor(sg, value, i);
     return value;
 } 
 
@@ -132,7 +132,7 @@ template<typename T>
 inline T reduce_max( sycl::sub_group & sg, T const input ) {
     T value = input;
     for( int i = 1; i < sg.get_local_linear_range(); i <<= 1 ) {
-        T tmp = sg.shuffle_xor(value, i);
+	T tmp = sycl::permute_group_by_xor(sg, value, i);
         if (tmp > value) value = tmp;
     }
     return value;
@@ -142,7 +142,7 @@ template<typename T>
 inline T reduce_min( sycl::sub_group & sg, T const input ) {
     T value = input;
     for( int i = 1; i < sg.get_local_linear_range(); i <<= 1 ) {
-        T tmp = sg.shuffle_xor(value, i);
+	T tmp = sycl::permute_group_by_xor(sg, value, i); 
         if (tmp < value) value = tmp;
     }
     return value;
@@ -153,7 +153,7 @@ inline T inscan_add( sycl::sub_group & sg, T const input ) {
     T value = input;
     const int laneId = sg.get_local_linear_id();
     for( int i = 1; i < sg.get_local_linear_range(); i <<= 1 ) {
-        T tmp = sg.shuffle_up(value, i);
+	T tmp = sycl::shift_group_right(sg, value, i);
         if ( laneId >= i ) value += tmp;
     }
     return (laneId > 0) ? value : 0;
@@ -164,11 +164,11 @@ inline T exscan_add( sycl::sub_group & sg, T const input ) {
     T value = input;
     const int laneId = sg.get_local_linear_id();
     for( int i = 1; i < sg.get_local_linear_range(); i <<= 1 ) {
-        T tmp = sg.shuffle_up(value, i);
+        T tmp = sycl::shift_group_right(sg, value, i);
         if ( laneId >= i ) value += tmp;
     }
 
-    value = sg.shuffle_up( value, 1 );
+    value = sycl::shift_group_right(sg, value);
     return (laneId > 0) ? value : 0;
 }
 
