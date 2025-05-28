@@ -20,7 +20,9 @@ constexpr int local_align = 64;
  * @return float    Reciprocal Lorentz gamma factor
  */
 inline float rgamma( const float3 u ) {
-    return 1.0f/std::sqrt( ops::fma( u.z, u.z, ops::fma( u.y, u.y, ops::fma( u.x, u.x, 1.0f ) ) ) );
+    return 1.0f/std::sqrt( ops::fma( u.z, u.z, 
+                           ops::fma( u.y, u.y, 
+                           ops::fma( u.x, u.x, 1.0f ) ) ) );
 }
 
 /**
@@ -339,6 +341,7 @@ inline void split2d(
     int2 & v2_ix, float2 & v2_x0, float2 & v2_x1, float & v2_qvz,
     int2 & cross
 ) {
+    
     deltai = make_int2(
         ((x1.x >= 0.5f) - (x1.x < -0.5f)),
         ((x1.y >= 0.5f) - (x1.y < -0.5f))
@@ -443,9 +446,9 @@ inline void split2d(
  */
 inline vfloat rgamma( const vfloat3 u ) {
     vfloat c1 = vec_float(1);
-    return vec_div( c1, vec_fmadd( u.z, u.z,
-                        vec_fmadd( u.y, u.y,
-                        vec_fmadd( u.x, u.x, c1 ) ) ) );
+    return vec_div( c1, vec_sqrt( vec_fmadd( u.z, u.z,
+                                  vec_fmadd( u.y, u.y,
+                                  vec_fmadd( u.x, u.x, c1 ) ) ) ) );
 }
 
 /**
@@ -1032,7 +1035,6 @@ void move_deposit_shift_kernel(
     float2 const dt_dx, float const q, float2 const qnx, int2 const shift ) 
 {
     const uint2 ntiles  = part.ntiles;
-
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     alignas(local_align) float3 _move_deposit_buffer[ tile_size ];
@@ -1046,7 +1048,7 @@ void move_deposit_shift_kernel(
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J = _move_deposit_buffer + current_offset;
+    float3 * J = & _move_deposit_buffer[ current_offset ];
     const int ystride = ext_nx.x;
 
     const int part_offset    = part.offset[ tid ];
@@ -1209,7 +1211,7 @@ inline void vinterpolate_fld(
     vint i = ix.x;
     vint j = ix.y;
 
-    const vfloat c_1_2 = vec_float( 0.5 );
+    const vfloat c_1_2 = vec_float( 0.5f );
 
     const vfloat s0x = vec_sub( c_1_2, x.x );
     const vfloat s1x = vec_add( c_1_2, x.x );
@@ -1454,11 +1456,14 @@ void move_deposit_kernel(
         int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
         int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
 
-        split2d( ix0, x0, x1, delta, qvz, deltai,
+        split2d( 
+            ix0, x0, x1, delta, qvz, 
+            deltai,
             v0_ix, v0_x0, v0_x1, v0_qvz,
             v1_ix, v1_x0, v1_x1, v1_qvz,
             v2_ix, v2_x0, v2_x1, v2_qvz,
-            cross );
+            cross
+        );
         
         // Deposit current
                                   dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
@@ -1519,7 +1524,7 @@ void move_deposit_shift_kernel(
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J = _move_deposit_buffer + current_offset;
+    float3 * J = & _move_deposit_buffer[ current_offset ];
     const int ystride = ext_nx.x;
 
     const int part_offset     = part.offset[ tid ];
