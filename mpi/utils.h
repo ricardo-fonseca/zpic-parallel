@@ -185,7 +185,7 @@ void free( T * buffer ) {
  * @return T* 
  */
 template< typename T >
-T * zero( T * const __restrict__ data, unsigned int const size ) {
+T * zero( T * const __restrict__ data, std::size_t size ) {
     return (T *) std::memset( (void *) data, 0, size * sizeof(T) );
 }
 

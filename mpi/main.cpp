@@ -487,9 +487,10 @@ void test_mov_window_emf( ) {
     t0.start();
 
     for( int i = 0; i < niter; i ++) {
+        if ( i % 100 == 0 ) save_emf();
         sim.advance();
-        save_emf();
     }
+        save_emf();
 
     t0.stop();
 
@@ -585,6 +586,7 @@ void test_lwfa()
     }
 
     // Parallel partition
+//    uint2 partition = make_uint2( 1, 1 );
     uint2 partition = make_uint2( 2, 2 );
 
     // Simulation grid and time step
@@ -594,6 +596,10 @@ void test_lwfa()
     float2 box{ 30.72, 25.6 };
 
     auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    if ( mpi::world_root() ) {
+        std::cout << "(*info*) dt = " << dt << '\n';
+    }
 
     // Disable periodic boundaries along x
     int2 periodic = { 0, 1 };
@@ -623,7 +629,7 @@ void test_lwfa()
     laser.add( sim.emf );
     
     if ( mpi::world_root() ) {
-        std::cout << "Added " << laser << '\n';
+        std::cout << "(*info*) Added " << laser << '\n';
     }
 
     // Set moving window and current filtering
@@ -650,7 +656,10 @@ void test_lwfa()
 
     // Run simulation dumping diagnostics at every 100 timesteps
     while ( sim.get_t() <= box.x * 1.5 ) {
-        if ( sim.get_iter() % 100 == 0 ) save();
+        if ( sim.get_iter() % 100 == 0 ) {
+            if ( sim.parallel.root() ) std::cout << "i = " << sim.get_iter() << '\n';
+            save();
+        }
         sim.advance_mov_window();
     }
 

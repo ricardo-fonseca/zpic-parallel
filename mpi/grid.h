@@ -138,7 +138,7 @@ class grid {
     const unsigned int offset;
 
     /// @brief Tile volume (may be larger than product of cells for alignment)
-    const unsigned int tile_vol;
+    std::size_t tile_vol;
 
     /// @brief Object name
     std::string name;
@@ -252,7 +252,7 @@ class grid {
      * 
      * @return total size of data buffers (in elements)
      */
-    const std::size_t buffer_size() {
+    std::size_t buffer_size() {
         return (static_cast <std::size_t> (tile_vol)) * ( ntiles.x * ntiles.y ) ;
     };
 
@@ -272,11 +272,8 @@ class grid {
      * @param val       Value
      */
     void set( T const & val ){
-
-        const size_t size = buffer_size( );
-
         #pragma omp parallel for
-        for( size_t i = 0; i < size; i++ ) d_buffer[i] = val;
+        for( size_t i = 0; i < buffer_size( ); i++ ) d_buffer[i] = val;
     };
 
     /**
@@ -294,7 +291,6 @@ class grid {
      * @brief Adds another grid object on top of local object
      * 
      * @param rhs         Other object to add
-     * @return grid&    Reference to local object
      */
     void add( const grid<T> &rhs ) {
         size_t const size = buffer_size( );
@@ -785,6 +781,10 @@ class grid {
         }
     };
 
+    /**
+     * @brief Adds values from neighboring x guard cells to local data,
+     *        including cells from other parallel nodes
+     */
     void add_from_gc_x() {
 
         // Get x neighbors
@@ -898,7 +898,6 @@ class grid {
     /**
      * @brief Adds values from neighboring y guard cells to local data,
      *        including cells from other parallel nodes
-     * 
      */
     void add_from_gc_y() {
         // Get y neighbors
@@ -1030,7 +1029,7 @@ class grid {
      */
     void x_shift_left( unsigned int const shift ) {
 
-        if ( gc.x.upper >= shift ) {
+        if ( shift > 0 && shift < gc.x.upper ) {
 
             const int ystride = ext_nx.x;
 
@@ -1043,7 +1042,7 @@ class grid {
                 
                 for( int iy = 0; iy < ext_nx.y; iy++ ) {
                     for( int ix = 0; ix < ext_nx.x - shift; ix++ ) {
-                        buffer[ ix + iy * ystride ] = buffer[ ix + shift + iy * ystride ]; 
+                        buffer[ ix + iy * ystride ] = buffer[ (ix + shift) + iy * ystride ]; 
                     }
                     for( int ix = ext_nx.x - shift; ix < ext_nx.x; ix++ ) {
                         buffer[ ix + iy * ystride ] = T{0};
@@ -1055,7 +1054,7 @@ class grid {
             copy_to_gc_x();
 
         } else {
-            std::cerr << "x_shift_left(), shift value too large, must be <= gc.x.upper\n";
+            std::cerr << "x_shift_left(), invalid shift value, must be 0 < shift <= gc.x.upper\n";
             exit(1);
         }
     }

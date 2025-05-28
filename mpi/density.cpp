@@ -342,13 +342,13 @@ void inject_step_kernel(
     ParticleData const part )
 {
     const uint2 ntiles  = part.ntiles;
-    const uint2 nx = part.nx;
+    const int2 nx = make_int2( part.nx.x, part.nx.y );
 
     // Tile ID
     int const tid = tile_idx.y * ntiles.x + tile_idx.x;
 
     // Store number of particles before injection
-    int _np = part.np[ tid ];
+    int np_tile = part.np[ tid ];
 
     // sync
 
@@ -358,20 +358,16 @@ void inject_step_kernel(
 
     int rj0 = range.y.lower - tile_idx.y * nx.y;
     int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // Comparing signed and unsigned integers does not work
-    int const nxx = nx.x;
-    int const nxy = nx.y;
-    
+   
     // If range overlaps with tile
-    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
-        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
+        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
 
         // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nxx ) ri1 = nxx-1;
-        if (rj1 >= nxy ) rj1 = nxy-1;
+        if ( ri0 < 0 ) ri0 = 0;
+        if ( rj0 < 0 ) rj0 = 0;
+        if ( ri1 >= nx.x ) ri1 = nx.x-1;
+        if ( rj1 >= nx.y ) rj1 = nx.y-1;
 
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
@@ -409,7 +405,7 @@ void inject_step_kernel(
                     int off = 0; // always 0 with 1 thread
 
                     if ( inj ) {
-                        const int k = _np + off;
+                        const int k = np_tile + off;
                         ix[ k ] = cell;
                         x[ k ]  = pos;
                         u[ k ]  = make_float3(0,0,0);
@@ -420,7 +416,7 @@ void inject_step_kernel(
                     
                     {   // only 1 thread / tile does this
                         // atomicAdd( &_np, inj );
-                        _np += inj;
+                        np_tile += inj;
                     }
                 }
             }
@@ -429,7 +425,7 @@ void inject_step_kernel(
         // sync;
 
         {   // Only 1 thread per tile does this
-            part.np[ tid ] = _np;
+            part.np[ tid ] = np_tile;
         }
     }
 }
@@ -498,36 +494,31 @@ void np_inject_step_kernel(
     const float step, const uint2 ppc,
     ParticleData const part, int * np )
 {
-    const uint2 ntiles  = part.ntiles;
-    const uint2 nx = part.nx;
+    int const tid = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    int _np; _np = 0;
+    int np_tile; np_tile = 0;
     // sync;
 
     // Find injection range in tile coordinates
+    const int2 nx = make_int2( part.nx.x, part.nx.y );
+
     int ri0 = range.x.lower - tile_idx.x * nx.x;
     int ri1 = range.x.upper - tile_idx.x * nx.x;
 
     int rj0 = range.y.lower - tile_idx.y * nx.y;
     int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // Comparing signed and unsigned integers does not work
-    int const nxx = nx.x;
-    int const nxy = nx.y;
     
-    unsigned int inj_np = 0;
+    int inj_np = 0;
 
     // If range overlaps with tile
-    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
-        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
+        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
 
         // Limit to range inside this tile
         if (ri0 < 0) ri0 = 0;
         if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nxx ) ri1 = nxx-1;
-        if (rj1 >= nxy ) rj1 = nxy-1;
+        if (ri1 >= nx.x ) ri1 = nx.x-1;
+        if (rj1 >= nx.y ) rj1 = nx.y-1;
 
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
@@ -563,14 +554,14 @@ void np_inject_step_kernel(
     // Not needed with 1 thread / tile
     // inj_np = device::warp_reduce_add( inj_np );
     {   // only 1 thread / tile does this
-        // atomicAdd( &_np, inj_np );
-        _np += inj_np;
+        // atomicAdd( &np_tile, inj_np );
+        np_tile += inj_np;
     } 
 
     // sync
 
     {   // Only 1 thread per tile does this
-        np[ tid ] = _np;
+        np[ tid ] = np_tile;
     }
 }
 

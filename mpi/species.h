@@ -32,7 +32,7 @@ namespace phasespace {
             name = "uy"; label = "u_y"; units = "c";
             break;
         case uz :
-            name = "uz"; label = "u_y"; units = "c";
+            name = "uz"; label = "u_z"; units = "c";
             break;
         }
     }
@@ -173,16 +173,6 @@ public:
     Species( std::string const name, float const m_q, uint2 const ppc );
 
     /**
-     * @brief Initialize data structures
-     * 
-     * @param box       Simulation global box size
-     * @param ntiles    Number of tiles
-     * @param nx        Tile grid dimension
-     * @param dt        
-     * @param id 
-     */
-
-    /**
      * @brief Initialize data structures and inject initial particle distribution
      * 
      * @param box               Global simulation box size
@@ -265,13 +255,6 @@ public:
 
         // Store new values
         bc = new_bc;
-
-/*
-        std::string bc_name[] = {"open", "periodic", "reflecting"};
-        std::cout << "(*info*) Species " << name << " boundary conditions\n";
-        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
-*/
 
         // Set periodic flags on tile grids
         if ( particles ) {

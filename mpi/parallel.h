@@ -225,8 +225,7 @@ class Partition {
     Partition( uint2 dims, int2 periodic = make_int2(1,1) ) : dims(dims), periodic(periodic) 
     {
         // Check if MPI has been initialized
-        int flag;
-        MPI_Initialized( &flag );
+        int flag; MPI_Initialized( &flag );
 
         if ( ! flag ) {
             std::cerr << "(*error*) Unable to create partition object, MPI has not been initialized\n";

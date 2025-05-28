@@ -19,16 +19,15 @@ EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
     dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
     dt( dt ), box(box)
 {
-    
     // Verify Courant condition
-    float cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    auto cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
     if ( dt >= cour ){
         if ( mpi::world_root() ) {
             std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
             std::cerr << "(*error*) For the current resolution " << dx;
             std::cerr << " the maximum timestep is dt = " << cour <<'\n';
         }
-        mpi::abort(-1);
+        mpi::abort(1);
     }
 
     // Guard cells (1 below, 2 above)
@@ -185,8 +184,6 @@ void EMF::advance() {
 
     // Do additional bc calculations if needed
     // process_bc();
-
-
 
     // Advance internal iteration number
     iter += 1;
@@ -592,32 +589,43 @@ void EMF::advance( Current & current ) {
  */
 void EMF::save( const emf::field field, fcomp::cart const fc ) {
 
-    char vfname[16];	// Dataset name
-    char vflabel[16];	// Dataset label (for plots)
+    std::string vfname;  // Dataset name
+    std::string vflabel; // Dataset label (for plots)
 
-    char comp[] = {'x','y','z'};
-
-    if ( fc < 0 || fc > 2 ) {
-        std::cerr << "(*error*) Invalid field component (fc) selected, returning" << std::endl;
-        return;
-    }
-
-    // Choose field to save
     vec3grid<float3> * f;
-    switch (field) {
+
+    switch (field ) {
         case emf::e :
             f = E;
-            snprintf(vfname,16,"E%c",comp[fc]);
-            snprintf(vflabel,16,"E_%c",comp[fc]);
+            vfname = "E";
+            vflabel = "E_";
             break;
         case emf::b :
             f = B;
-            snprintf(vfname,16,"B%1c",comp[fc]);
-            snprintf(vflabel,16,"B_%c",comp[fc]);
+            vfname = "B";
+            vflabel = "B_";
             break;
         default:
-        std::cerr << "(*error*) Invalid field type selected, returning..." << std::endl;
-        return;
+            std::cerr << "(*error*) Invalid field type selected, returning..." << std::endl;
+            return;
+    }
+
+    switch ( fc ) {
+        case( fcomp::x ) :
+            vfname  += 'x';
+            vflabel += 'x';
+            break;
+        case( fcomp::y ) :
+            vfname  += 'y';
+            vflabel += 'y';
+            break;
+        case( fcomp::z ) :
+            vfname  += 'z';
+            vflabel += 'z';
+            break;
+        default:
+            std::cerr << "(*error*) Invalid field component (fc) selected, returning..." << std::endl;
+            return;
     }
 
     zdf::grid_axis axis[2];
@@ -638,16 +646,11 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     };
 
     zdf::grid_info info = {
-        .name = vfname,
-        .ndims = 2,
-        .label = vflabel,
+        .name = (char *) vfname.c_str(),
+        .label = (char *) vflabel.c_str(),
         .units = (char *) "m_e c \\omega_n e^{-1}",
         .axis = axis
     };
-
-    info.count[0] = E -> local_nx.x;
-    info.count[1] = E -> local_nx.y;
-
 
     zdf::iteration iteration = {
         .n = iter,
