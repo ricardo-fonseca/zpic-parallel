@@ -129,6 +129,9 @@ class Pulse {
         vec3grid<float3> tmp_E( emf.E -> global_ntiles, emf.E-> nx, emf.E -> gc, emf.E -> part );
         vec3grid<float3> tmp_B( emf.E -> global_ntiles, emf.B-> nx, emf.B -> gc, emf.B -> part );
 
+        tmp_E.zero();
+        tmp_B.zero();
+
         // Get laser fields
         int ierr = launch( tmp_E, tmp_B, emf.box );
 
@@ -161,7 +164,8 @@ class PlaneWave : public Pulse {
         os << "Plane wave"
            << ", start: " << obj.start
            << ", fwhm: " << obj.fwhm
-           << ", omega0: " << obj.omega0;
+           << ", omega0: " << obj.omega0
+           << ", a0: " << obj.a0;
         return os;
     };
 
@@ -180,7 +184,7 @@ class Gaussian : public Pulse {
     int validate();
     int launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box );
 
-        /**
+    /**
      * @brief Stream extraction
      * 
      * @param os 
@@ -192,13 +196,13 @@ class Gaussian : public Pulse {
            << ", start: " << obj.start
            << ", fwhm: " << obj.fwhm
            << ", omega0: " << obj.omega0
+           << ", a0: " << obj.a0
            << ", W0: " << obj.W0
            << ", focus: " << obj.focus
            << ", axis: " << obj.axis;
 
         return os;
     };
-
 
 };
 

@@ -71,7 +71,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         // Create a communicator with nodes having the same y coordinate
         int color = E.part.get_coords().y;
         // Reorder ranks right to left
-        int key   = E.part.dims.x - E.part.get_coords().x;
+        int key   = E.part.dims.x - 1 - E.part.get_coords().x;
         MPI_Comm newcomm;
         MPI_Comm_split( E.part.get_comm(), color, key, &newcomm );
         
@@ -79,7 +79,8 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         MPI_Exscan( sendbuf, recvbuf, 2 * local_nx.y, MPI_DOUBLE, MPI_SUM, newcomm );
 
         // Add result to local grid
-        // Rightmost node does not need to do this
+        // Rightmost node should not do this because the exscan result is undetermined
+        // i.e. not necessarily 0
         if ( key > 0 ) {
             #pragma omp parallel for
             for( int local_iy = 0; local_iy < local_nx.y; local_iy ++ ) {
@@ -176,8 +177,6 @@ int Laser::Pulse::validate() {
  */
 int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box ) {
 
-    // std::cout << "Launching plane wave...\n";
-
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
@@ -252,8 +251,6 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
         fcomp.apply(B);
     }
 
-    // std::cout << "Plane wave launched\n";
-
     return 0;
 }
 
@@ -310,17 +307,12 @@ inline float gauss_phase( const float omega0, const float W0, const float z, con
  */
 int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 const box ) {
 
-    // std::cout << "Launching gaussian pulse...\n";
-
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
         cos_pol = std::cos( polarization );
         sin_pol = std::sin( polarization );
     }
-
-    E.zero();
-    B.zero();
 
     uint2 global_nx = E.get_global_nx();;
 
@@ -330,10 +322,10 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     );
 
     // Grid tile parameters
-    const auto ntiles   = E.get_ntiles();
-    const auto tile_vol = E.tile_vol;
-    const auto nx       = E.nx;
-    const auto offset   = E.offset;
+    const int2 ntiles   = make_int2( E.get_ntiles().x, E.get_ntiles().y );
+    const int  tile_vol = E.tile_vol;
+    const int2 nx       = make_int2( E.nx.x, E.nx.y );
+    const int  offset   = E.offset;
     const int  ystride  = E.ext_nx.x;   // ystride must be signed
     const uint2 global_tile_off  = E.get_tile_off();
 
@@ -342,24 +334,24 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     // Loop over tiles
     #pragma omp parallel for
     for( int tid = 0; tid < ntiles.y * ntiles.x ; tid++ ) {
-        const auto ty = tid / ntiles.x;
-        const auto tx = tid % ntiles.x;
-        const auto tile_off = tid * tile_vol;
+        const int ty = tid / ntiles.x;
+        const int tx = tid % ntiles.x;
+        const int tile_off = tid * tile_vol;
 
-        // Copy data to shared memory and block
         float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
         float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
         const int ix0 = ( global_tile_off.x + tx ) * nx.x;
         const int iy0 = ( global_tile_off.y + ty ) * nx.y;
 
-        for( unsigned iy = 0; iy < nx.y; iy++ ) {
-            for( unsigned ix = 0; ix < nx.x; ix++ ) {
+        for( int iy = 0; iy < nx.y; iy++ ) {
+
+            for( int ix = 0; ix < nx.x; ix++ ) {
                 const float z   = ( ix0 + ix ) * dx.x;
                 const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
 
-                const float r   = (iy0 + iy ) * dx.y - axis;
-                const float r_2 = (iy0 + iy + 0.5 ) * dx.y - axis;
+                const float r   = ( iy0 + iy ) * dx.y       - axis;
+                const float r_2 = ( iy0 + iy + 0.5 ) * dx.y - axis;
 
                 const float lenv   = amp * lon_env( z   );
                 const float lenv_2 = amp * lon_env( z_2 );
@@ -376,9 +368,11 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
                 );
 
             }
+
         }
     }
 
+    // Set guard cell values
     E.copy_to_gc();
     B.copy_to_gc();
 

@@ -220,7 +220,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         // Create a communicator with nodes having the same y coordinate
         int color = E.part.get_coords().y;
         // Reorder ranks right to left
-        int key   = E.part.dims.x - E.part.get_coords().x;
+        int key   = E.part.dims.x - 1 - E.part.get_coords().x;
         MPI_Comm newcomm;
         MPI_Comm_split( E.part.get_comm(), color, key, &newcomm );
         
@@ -228,7 +228,8 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         MPI_Exscan( sendbuf, recvbuf, 2 * E.local_nx.y, MPI_DOUBLE, MPI_SUM, newcomm );
 
         // Add result to local grid
-        // Rightmost node does not need to do this
+        // Rightmost node should not do this because the exscan result is undetermined
+        // i.e. not necessarily 0
         if ( key > 0 ) {
             kernel::div_corr_x_sum <<< grid, block >>> ( 
                 & E.d_buffer[ E.offset ], & B.d_buffer[ B.offset ], 
