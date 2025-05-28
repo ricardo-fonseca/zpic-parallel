@@ -165,7 +165,7 @@ inline int edge_tile_off( const int dir, const uint2 ntiles ) {
  * @param local_bnd     local boundary type (none, local periodic, comm)
  * @return int          Tile id on success, -1 on out of bounds
  */
-inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd ) {
+inline int tid_coords( int2 coords, int2 const ntiles, part::bnd_type const local_bnd ) {
 
     // Local (non-parallel) x periodic
     if ( local_bnd.x.lower == part::bnd_t::periodic ) {
@@ -179,7 +179,7 @@ inline int tid_coords( int2 coords, int2 const ntiles, bnd_type const local_bnd 
         else if ( coords.y >= ntiles.y ) coords.y -= ntiles.y;
     }
 
-    // Parallel shift
+    // Edge (communication with other nodes) shift
     int xshift = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
     int yshift = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
     int dir    = part::edge_dir_shift( xshift, yshift );
@@ -323,7 +323,7 @@ struct ParticleSortData {
     /// @brief Local number of tiles
     const uint2 ntiles;
 
-    ParticleSortData( const uint2 ntiles, Partition & par ) : 
+    ParticleSortData( const uint2 ntiles ) : 
         ntiles(ntiles) {};
 };
 
@@ -382,7 +382,6 @@ class ParticleSort : public ParticleSortData {
     /// @brief Outgoing messages
     ParticleSort::Message send;
 
-
     /**
      * @brief Construct a new Particle Sort object
      * 
@@ -391,7 +390,7 @@ class ParticleSort : public ParticleSortData {
      * @param par           Parallel partition
      */
     ParticleSort( uint2 const ntiles, uint32_t const max_part, Partition & par ) :
-        ParticleSortData( ntiles, par )
+        ParticleSortData( ntiles )
     {
         idx = memory::malloc<int>( max_part );
 
@@ -414,8 +413,8 @@ class ParticleSort : public ParticleSortData {
         send.buffer = &new_np[ local_tiles ];
 
         // Receive buffer
-        // recv.buffer = &new_np[ local_tiles + edge_tiles ];
         recv.buffer = memory::malloc<int>( edge_tiles );
+        memory::zero( recv.buffer, edge_tiles );
 
         // MPI Communicator
         comm = par.get_comm();
@@ -780,6 +779,15 @@ class Particles : public ParticleData {
 
         if ( periodic.y && parallel.dims.y == 1 ) 
             local_bnd.y.lower = local_bnd.y.upper = part::bnd_t::periodic;
+
+    }
+
+    /**
+     * @brief Get local node boundary types
+     * 
+     */
+    part::bnd_type get_local_bnd() {
+        return local_bnd;
     }
 
     /**

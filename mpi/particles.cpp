@@ -10,8 +10,9 @@
  * @brief Exchange number of particles in edge cells
  *
  */
-void ParticleSort::exchange_np( ) {
+void ParticleSort::exchange_np() {
 
+    // Size of message according to direction
     const int ntx = ntiles.x;
     const int nty = ntiles.y;
 
@@ -36,7 +37,7 @@ void ParticleSort::exchange_np( ) {
         idx += size(dir);
     }
 
-    // Post sends and update send.msg_np[]
+    // Post sends
     idx = 0;
     for( auto dir = 0; dir < 9; dir++ ) {
         if ( neighbor[dir] >= 0 ) {
@@ -558,8 +559,8 @@ void copy_out(
         
         int _dir_offset[9];
 
-        // The _dir_offset variables hold the offset for each of the 9 target
-        // tiles so the tmp_* variables just point to the beginning of the buffers
+        // The _dir_offset variable holds the offset for each of the 9 target
+        // tiles so the tmp_* variables just point to the beggining of the buffers
         int2* __restrict__  tmp_ix  = tmp.ix;
         float2* __restrict__ tmp_x  = tmp.x;
         float3* __restrict__ tmp_u  = tmp.u;
@@ -824,7 +825,7 @@ void copy_sorted(
             // sync
 
             // Copy particles moving away from tile and fill holes
-            for( unsigned i = 0; i < nidx; i++ ) {
+            for( int i = 0; i < nidx; i++ ) {
                 
                 int k = idx[i];
 
@@ -841,8 +842,6 @@ void copy_sorted(
                 if ( _dir_offset[dir] >= 0 ) {        
 
                     // _dir_offset[] includes the offset in the global tmp particle buffer
-
-                    // int l = atomicAdd( & _dir_offset[dir], 1 );
                     int l = _dir_offset[dir]; _dir_offset[dir] += 1;
 
                     nix.x -= xcross * lim.x;
@@ -858,11 +857,9 @@ void copy_sorted(
                     int c, invalid;
 
                     do {
-                        // c = atomicAdd( &_c, 1 );
                         c = _c; _c += 1;
-
-                        invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x) || 
-                                  ( ix[c].y < 0 ) || ( ix[c].y >= lim.y);
+                        invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x ) || 
+                                  ( ix[c].y < 0 ) || ( ix[c].y >= lim.y );
                     } while (invalid);
 
                     ix[ k ] = ix[ c ];

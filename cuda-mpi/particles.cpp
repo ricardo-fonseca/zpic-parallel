@@ -1360,7 +1360,7 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // Wait for receive messages to complete
     recv.wait();
 
-    // Wait for messages to be received and unpack data
+    // Unpack received message data
     unpack_msg( sort, recv );
 
     // Wait for sends to complete

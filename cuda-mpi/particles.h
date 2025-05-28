@@ -423,6 +423,8 @@ class ParticleSort : public ParticleSortData {
 
         // Receive buffer
         recv.buffer = device::malloc<int>( edge_tiles );
+        device::zero( recv.buffer, edge_tiles );
+        
         recv.msg_np = managed::malloc<int>(9);
 
         // Only required when not receiving messages from all neighbors
