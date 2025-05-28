@@ -101,6 +101,7 @@ void Species::inject( ) {
 /**
  * @brief Inject particles in a specific cell range
  * 
+ * @param range     Cell range in which to inject
  */
 void Species::inject( bnd<unsigned int> range ) {
 
@@ -256,6 +257,10 @@ void species_bcy(
  */
 void Species::process_bc() {
 
+    std::cout << "(*error*) Species::process_bc() have not been implemented yet,"
+              << " aborting.\n";
+    exit(1);
+
     dim3 block( 1024 );
 
     // x boundaries
@@ -283,7 +288,7 @@ void Species::advance( ) {
     move();
     
     // Process physical boundary conditions
-    process_bc();
+    // process_bc();
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
@@ -339,7 +344,7 @@ void Species::advance( EMF const &emf, Current &current ) {
     move( current.J );
 
     // Process physical boundary conditions
-    process_bc();
+    // process_bc();
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
@@ -363,11 +368,6 @@ void Species::advance( EMF const &emf, Current &current ) {
  */
 void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
-    std::cerr << "Species::advance_mov_window() is not implemented yet, aborting\n";
-    exit(1);
-
-#if 0
-
     // Advance momenta
     push( emf.E, emf.B );
 
@@ -377,22 +377,31 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
         move( current.J, make_int2(-1,0) );
 
         // Process boundary conditions
-        process_bc();
+        // process_bc();
 
-        // Find range where new particles need to be injected
-        uint2 g_nx = particles -> gnx;
-        bnd<unsigned int> range;
-        range.x = { .lower = g_nx.x - 1, .upper = g_nx.x - 1 };
-        range.y = { .lower = 0, .upper = g_nx.y - 1 };
+        if ( particles->parallel.get_coords().x == static_cast<int>( particles->parallel.dims.x ) - 1 ) {
+            // Edge node needs to inject new particles
 
-        // Count new particles to be injected
-        np_inject( range, np_inj );
+            // Find range where new particles need to be injected
+            uint2 local_nx = particles -> get_local_nx();
+            bnd<unsigned int> range;
+            range.x = pair<unsigned int>( local_nx.x - 1, local_nx.x - 1 );
+            range.y = pair<unsigned int>(              0, local_nx.y - 1 );
 
-        // Sort particles over tiles, leaving room for new particles to be injected
-        particles -> tile_sort( *tmp, *sort, np_inj );
+            // Count new particles to be injected
+            np_inject( range, np_inj );
 
-        // Inject new particles
-        inject( range );
+            // Sort particles over tiles, leaving room for new particles to be injected
+            particles -> tile_sort( *tmp, *sort, np_inj );
+
+            // Inject new particles
+            inject( range );
+
+        } else {
+
+            // Remaining nodes just do a standard tile_sort
+            particles -> tile_sort( *tmp, *sort );
+        }
 
         // Advance moving window
         moving_window.advance();
@@ -403,7 +412,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
         move( current.J );
 
         // Process boundary conditions
-        process_bc();
+        // process_bc();
 
         // Sort particles over tiles
         particles -> tile_sort( *tmp, *sort );
@@ -411,8 +420,6 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
     // Increase internal iteration number
     iter++;
-
-    #endif
 
 }
 
@@ -472,196 +479,6 @@ __device__ __inline__ void dep_current_seg(
     block::atomic_fetch_add( &Js[ stride3 + 0 + 2 ], qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f ));
     block::atomic_fetch_add( &Js[ stride3 + 3 + 2 ], qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f ));
 }
-
-#if 0
-__global__
-void __launch_bounds__(opt_move_block) move_deposit(
-    ParticleData part,
-    float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
-    float2 const dt_dx, float const q, float2 const qnx, 
-    unsigned long long * const __restrict__ d_nmove
-) {
-    const int ystride = ext_nx.x; 
-    const auto tile_vol = roundup4( ext_nx.x * ext_nx.y );
-    const auto ntiles = part.ntiles;
-
-    /// @brief [shared] Local copy of current density
-    extern __shared__ float3 J_local[];
-
-        // Zero local current buffer
-        for( auto i = block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
-            J_local[i] = make_float3( 0, 0, 0 );
-
-        float3 * __restrict__ J = & J_local[ current_offset ];
-
-        block_sync();
-
-        // Move particles and deposit current
-        const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
-        const int tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
-
-        const int offset          = part.offset[ tile_id ];
-        const int np              = part.np[ tile_id ];
-        int2   * __restrict__ ix  = &part.ix[ offset ];
-        float2 * __restrict__ x   = &part.x[ offset ];
-        float3 * __restrict__ u   = &part.u[ offset ];
-
-        for( auto i = block_thread_rank(); i < np; i+= block_num_threads() ) {
-            float3 pu = u[i];
-            float2 const x0 = x[i];
-            int2   const ix0 =ix[i];
-
-            // Get 1 / Lorentz gamma
-            float const rg = rgamma( pu );
-
-            // Get particle motion
-            float2 const delta = make_float2(
-                dt_dx.x * rg * pu.x,
-                dt_dx.y * rg * pu.y
-            );
-
-            // Advance position
-            float2 x1 = make_float2(
-                x0.x + delta.x,
-                x0.y + delta.y
-            );
-
-            // Check for cell crossings
-            int2 const deltai = make_int2(
-                ((x1.x >= 0.5f) - (x1.x < -0.5f)),
-                ((x1.y >= 0.5f) - (x1.y < -0.5f))
-            );
-
-            // Split trajectories:
-            int nvp = 1;
-            int2 v0_ix; float2 v0_x0, v0_x1; float v0_qvz;
-            int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
-            int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
-
-            float eps, xint, yint;
-            float qvz = q * pu.z * rg * 0.5f;
-
-            // Initial position is the same on all cases
-            v0_ix = ix0; v0_x0 = x0;
-
-            switch( 2*(deltai.x != 0) + (deltai.y != 0) )
-            {
-            case(0): // no splits
-                v0_x1 = x1; v0_qvz = qvz;
-                break;
-
-            case(1): // only y crossing
-                nvp++;
-
-                yint = 0.5f * deltai.y;
-                eps  = ( yint - x0.y ) / delta.y;
-                xint = x0.x + delta.x * eps;
-
-                v0_x1  = make_float2(xint,yint);
-                v0_qvz = qvz * eps;
-
-                v1_ix = make_int2( ix0.x, ix0.y  + deltai.y );
-                v1_x0 = make_float2(xint,-yint);
-                v1_x1 = make_float2( x1.x, x1.y  - deltai.y );
-                v1_qvz = qvz * (1-eps);
-
-                break;
-
-            case(2): // only x crossing
-            case(3): // x-y crossing
-                
-                // handle x cross
-                nvp++;
-                xint = 0.5f * deltai.x;
-                eps  = ( xint - x0.x ) / delta.x;
-                yint = x0.y + delta.y * eps;
-
-                v0_x1 = make_float2(xint,yint);
-                v0_qvz = qvz * eps;
-
-                v1_ix = make_int2( ix0.x + deltai.x, ix0.y);
-                v1_x0 = make_float2(-xint,yint);
-                v1_x1 = make_float2( x1.x - deltai.x, x1.y );
-                v1_qvz = qvz * (1-eps);
-
-                // handle additional y-cross, if need be
-                if ( deltai.y ) {
-                    float yint2 = 0.5f * deltai.y;
-                    nvp++;
-
-                    if ( yint >= -0.5f && yint < 0.5f ) {
-                        // y crosssing on 2nd vp
-                        eps   = (yint2 - yint) / (x1.y - yint );
-                        float xint2 = -xint + (x1.x - xint ) * eps;
-                        
-                        v2_ix = make_int2( v1_ix.x, v1_ix.y + deltai.y );
-                        v2_x0 = make_float2(xint2,-yint2);
-                        v2_x1 = make_float2( v1_x1.x, v1_x1.y - deltai.y );
-                        v2_qvz = v1_qvz * (1-eps);
-
-                        // Correct other particle
-                        v1_x1 = make_float2(xint2,yint2);
-                        v1_qvz *= eps;
-                    } else {
-                        // y crossing on 1st vp
-                        eps   = (yint2 - x0.y) / ( yint - x0.y );
-                        float xint2 = x0.x + ( xint - x0.x ) * eps;
-
-                        v2_ix = make_int2( v0_ix.x, v0_ix.y + deltai.y );
-                        v2_x0 = make_float2( xint2,-yint2);
-                        v2_x1 = make_float2( v0_x1.x, v0_x1.y - deltai.y );
-                        v2_qvz = v0_qvz * (1-eps);
-
-                        // Correct other particles
-                        v0_x1 = make_float2(xint2,yint2);
-                        v0_qvz *= eps;
-
-                        v1_ix.y += deltai.y;
-                        v1_x0.y -= deltai.y;
-                        v1_x1.y -= deltai.y;
-                    }
-                }
-                break;
-            }
-
-            // Deposit vp current
-                           dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
-            if ( nvp > 1 ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
-            if ( nvp > 2 ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
-
-            // Correct position and store
-            x1.x -= deltai.x;
-            x1.y -= deltai.y;
-                    
-            x[i] = x1;
-
-            // Modify cell and store
-            int2 ix1 = make_int2(
-                ix0.x + deltai.x,
-                ix0.y + deltai.y
-            );
-            ix[i] = ix1;
-
-        }
-
-        block_sync();
-
-        // Add current to global buffer
-        const int tile_off = tile_id * tile_vol;
-
-        for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
-            d_current[tile_off + i] += J_local[i];
-
-
-        if ( block_thread_rank() == 0 ) {
-            // Update total particle pushes counter (for performance metrics)
-            unsigned long long np64 = np;
-            device::atomic_fetch_add( d_nmove, np64 );
-        }
-}
-
-#else
-
 
 __global__
 void __launch_bounds__(opt_move_block) move_deposit(
@@ -820,7 +637,7 @@ void __launch_bounds__(opt_move_block) move_deposit(
         }
 
         // Deposit vp current
-                        dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
+                       dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
         if ( nvp > 1 ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
         if ( nvp > 2 ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
 
@@ -865,8 +682,6 @@ void __launch_bounds__(opt_move_block) move_deposit(
     }
 }
 
-#endif
-
 }
 
 /**
@@ -903,7 +718,7 @@ void Species::move( vec3grid<float3> * J )
 namespace kernel {
 
 __global__
-void move_deposit_shift(
+void __launch_bounds__(opt_move_block) move_deposit_shift(
     ParticleData part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
     float2 const dt_dx, float const q, float2 const qnx, int2 const shift,
@@ -920,21 +735,27 @@ void move_deposit_shift(
     for( auto i = block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
         J_local[i] = make_float3( 0, 0, 0 );
 
-    float3 * __restrict__ J = & J_local[ current_offset ];
-
     block_sync();
+
+    float3 * __restrict__ J = & J_local[ current_offset ];
 
     // Move particles and deposit current
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
     const int tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
 
     const int offset          = part.offset[ tile_id ];
-    const int np              = part.np[ tile_id ];
+    const int tile_np         = part.np[ tile_id ];
     int2   * __restrict__ ix  = &part.ix[ offset ];
     float2 * __restrict__ x   = &part.x[ offset ];
     float3 * __restrict__ u   = &part.u[ offset ];
 
-    for( auto i = block_thread_rank(); i < np; i+= block_num_threads() ) {
+    // Select subset of particles to move
+    // We are using multiple blocks per tile (blockIdx.z)
+    const int set_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
+    const int begin = blockIdx.z * set_size;
+    const int end   = ( begin + set_size < tile_np ) ? begin + set_size : tile_np;
+
+    for( auto i = begin + block_thread_rank(); i < end; i+= block_num_threads() ) {
         float3 pu = u[i];
         float2 const x0 = x[i];
         int2   const ix0 =ix[i];
@@ -1053,7 +874,7 @@ void move_deposit_shift(
         }
 
         // Deposit vp current
-                        dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
+                       dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
         if ( nvp > 1 ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
         if ( nvp > 2 ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
 
@@ -1063,7 +884,7 @@ void move_deposit_shift(
                 
         x[i] = x1;
 
-        // Modify cell and store
+        // Modify cell, add shift and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
             ix0.y + deltai.y + shift.y
@@ -1077,13 +898,23 @@ void move_deposit_shift(
     // Add current to global buffer
     const int tile_off = tile_id * tile_vol;
 
-    for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
-        d_current[tile_off + i] += J_local[i];
+    if ( gridDim.z > 1 ) {
+        for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
+            device::atomic_fetch_add( & d_current[tile_off + i].x, J_local[i].x );
+            device::atomic_fetch_add( & d_current[tile_off + i].y, J_local[i].y );
+            device::atomic_fetch_add( & d_current[tile_off + i].z, J_local[i].z );
+        }
+    } else {
+        for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
+            d_current[tile_off + i] += J_local[i];
+        }
+    }
 
-
-    if ( block_thread_rank() == 0 ) {
+    if ( block_thread_rank() == 0 && blockIdx.z == 0 ) {
         // Update total particle pushes counter (for performance metrics)
-        unsigned long long np64 = np;
+        // for whatever reason atomicAdd does not recognize uint64_t
+        // must use unsigned long long instead
+        unsigned long long np64 = tile_np;
         device::atomic_fetch_add( (unsigned long long *) d_nmove, np64 );
     }
 }
@@ -1109,8 +940,8 @@ void Species::move( vec3grid<float3> * J, const int2 shift )
         q * dx.y / dt
     );
 
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
-    auto block = 1024;
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, 1 );
+    auto block = opt_move_block;
     size_t shm_size = J -> tile_vol * sizeof(float3);
 
     block::set_shmem_size( kernel::move_deposit_shift, shm_size );
@@ -2417,12 +2248,18 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     // Create particle data structure
     particles = new Particles( global_ntiles, nx, max_part, parallel );
     
+    // Disable periodic boundaries if parallel partition does not support it
+    if ( ! parallel.periodic.x ) {
+        if ( bc.x.lower == species::bc::periodic ) {
+            bc.x.lower = species::bc::open;
+        }
+    };
+    
     // Set periodic boundaries
     int2 periodic = {
         ( bc.x.lower == species::bc::periodic ),
         ( bc.y.lower == species::bc::periodic )
     };
-
     particles -> set_periodic( periodic );
 
     tmp = new Particles( global_ntiles, nx, max_part, parallel );
@@ -2442,11 +2279,11 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
 
     // Inject initial distribution
 
-    // Count particles to inject and store in particles -> offset
-    np_inject( particles -> local_range(), particles -> offset );
+    // Count particles to inject and store in np_inj
+    np_inject( particles -> local_range(), np_inj );
 
     // Do an exclusive scan to get the required offsets
-    device::exscan_add( particles -> offset, ntiles.x * ntiles.y );
+    device::exscan_add( particles -> offset, np_inj, ntiles.x * ntiles.y );
 
     // Inject the particles
     inject( particles -> local_range() );

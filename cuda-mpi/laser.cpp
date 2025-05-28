@@ -521,14 +521,15 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     E.copy_to_gc( );
     B.copy_to_gc( );
 
+    // Get longitudinal field components by enforcing div = 0
+    div_corr_x( E, B, dx );
+
+    // Apply filtering if required
     if ( filter > 0 ) {
         Filter::Compensated fcomp( coord::x, filter);
         fcomp.apply( E );
         fcomp.apply( B );
     }
-
-    // Get longitudinal field components by enforcing div = 0
-    div_corr_x( E, B, dx );
-
+    
     return 0;
 }

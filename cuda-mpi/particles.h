@@ -184,7 +184,7 @@ inline int tid_coords( int2 coords, int2 const ntiles, part::bnd_type const loca
         else if ( coords.y >= ntiles.y ) coords.y -= ntiles.y;
     }
 
-    // Parallel shift
+    // Edge (communication with other nodes) shift
     int xshift = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
     int yshift = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
     int dir    = part::edge_dir_shift( xshift, yshift );
@@ -331,7 +331,8 @@ struct ParticleSortData {
     /// @brief Local number of tiles
     const uint2 ntiles;
 
-    ParticleSortData( const uint2 ntiles ) : ntiles(ntiles) {}; 
+    ParticleSortData( const uint2 ntiles ) :
+        ntiles(ntiles) {}; 
 };
 
 /**
@@ -420,7 +421,7 @@ class ParticleSort : public ParticleSortData {
         send.buffer = &new_np[ local_tiles ];
         send.msg_np = managed::malloc<int>(9);
 
-        // Use a separate buffer for receiving messages
+        // Receive buffer
         recv.buffer = device::malloc<int>( edge_tiles );
         recv.msg_np = managed::malloc<int>(9);
 
@@ -475,6 +476,39 @@ class ParticleSort : public ParticleSortData {
      */
     void exchange_np( );
 
+
+    /**
+     * @brief print recv.buffer contents
+     * 
+     */
+    void info_recv_buffer( std::string msg ) {
+        
+        size_t bsize = part::msg_tiles( ntiles );
+        int * buffer = host::malloc<int>( bsize );
+
+        device::memcpy_tohost( buffer, recv.buffer, bsize );
+        mpi::cout << msg << " recv.buffer [" << part::msg_tiles(ntiles) << "]:";
+        for( int i = 0; i < part::msg_tiles(ntiles); i++) mpi::cout << " " << std::setw(2) << buffer[ i ];
+        mpi::cout << '\n';
+
+        host::free( buffer );
+    }
+
+    /**
+     * @brief print recv.buffer contents
+     * 
+     */
+    void info_send_buffer( std::string msg ) {
+        size_t bsize = part::msg_tiles( ntiles );
+        int * buffer = host::malloc<int>( bsize );
+        
+        device::memcpy_tohost( buffer, send.buffer, bsize );
+        mpi::cout << msg << " send.buffer [" << part::msg_tiles(ntiles) << "]:";
+        for( int i = 0; i < part::msg_tiles(ntiles); i++) mpi::cout << " " << std::setw(2) << buffer[ i ];
+        mpi::cout << '\n';
+
+        host::free( buffer );
+    }
 };
 
 
@@ -547,13 +581,7 @@ class ParticleMessage {
         for( int dir = 0; dir < 9; dir++ ) {
             int shiftx, shifty;
             part::edge_shift_dir( dir, shiftx, shifty );
-            neighbor[ dir ] = par.get_neighbor( shiftx, shifty );            
-            
-            // Disable messages to self
-            // This is for debug purposes only, there should never be any particles
-            // being sent to self
-            if ( neighbor[ dir ] == rank ) neighbor[ dir ] = -1;
-            
+            neighbor[ dir ] = ( dir != 4 ) ? par.get_neighbor( shiftx, shifty ) : -1;            
             requests[ dir ] = MPI_REQUEST_NULL;
         }
 
@@ -741,7 +769,6 @@ class ParticleMessage {
         send( parallel ), recv( parallel ),
         parallel( parallel )
     {
-
         // Get local number of tiles and position on tile grid
         parallel.grid_local( global_ntiles, ntiles, tile_off );
 
@@ -805,7 +832,6 @@ class ParticleMessage {
 
         if ( periodic.y && parallel.dims.y == 1 ) 
             local_bnd.y.lower = local_bnd.y.upper = part::bnd_t::periodic;
-
     }
 
     /**
@@ -826,7 +852,7 @@ class ParticleMessage {
         if ( ( new_periodic.x ) && 
              ( (! parallel.periodic.x ) && ( parallel.dims.x > 1 )) ) {
             std::cerr << "Particles::set_periodic() - Attempting to set ";
-            std::cerr << "parallel boundaries on non-parallel comm direction\n";
+            std::cerr << "parallel x boundaries on non-parallel comm direction\n";
             exit(1);
         }
 
@@ -834,7 +860,7 @@ class ParticleMessage {
         if ( ( new_periodic.y ) && 
              ( (! parallel.periodic.y ) && ( parallel.dims.y > 1 )) ) {
             std::cerr << "Particles::set_periodic() - Attempting to set ";
-            std::cerr << "parallel boundaries on non-parallel comm direction\n";
+            std::cerr << "parallel y boundaries on non-parallel comm direction\n";
             exit(1);
         }
 
@@ -1023,9 +1049,6 @@ class ParticleMessage {
      *                  room for particles to be injected later.
      */
     void tile_sort( Partition & parallel, const int * __restrict__ extra = nullptr ){
-       
-        std::cout << "in Particles::tile_sort( parallel, extra )\n";
-
         // Create temporary buffers
         Particles    tmp( global_ntiles, nx, max_part, parallel );
         ParticleSort sort( ntiles, max_part, parallel );
@@ -1118,9 +1141,9 @@ class ParticleMessage {
                 std::cout << '\n';
                 mpi::cout << "#particles per tile:\n";
 
-                for( unsigned int j = 0; j < ntiles.y; j++ ) {
+                for( unsigned j = 0; j < ntiles.y; j++ ) {
                     mpi::cout << j << ':';
-                    for( unsigned int i = 0; i < ntiles.x; i++ ) {
+                    for( unsigned i = 0; i < ntiles.x; i++ ) {
                         int tid = j * ntiles.x + i;
                         mpi::cout << " " << h_np[tid];
                     }
@@ -1131,6 +1154,8 @@ class ParticleMessage {
             }
             parallel.barrier();
         }
+
+        host::free( h_np );
     }
 };
 

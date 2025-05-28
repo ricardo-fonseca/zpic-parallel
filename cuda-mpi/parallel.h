@@ -161,6 +161,15 @@ static inline int world_root( void ) {
 }
 
 /**
+ * @brief Performs an MPI_Barrier on the global MPI communicator
+ * 
+ * @return int 
+ */
+static inline int world_barrier( void ) {
+    return MPI_Barrier( MPI_COMM_WORLD );
+}
+
+/**
  * @brief Abort the parallel code using an MPI_Abort()
  * 
  * @param errorcode     Error code to return to invoking environment
@@ -216,8 +225,7 @@ class Partition {
     Partition( uint2 dims, int2 periodic = make_int2(1,1) ) : dims(dims), periodic(periodic) 
     {
         // Check if MPI has been initialized
-        int flag;
-        MPI_Initialized( &flag );
+        int flag; MPI_Initialized( &flag );
 
         if ( ! flag ) {
             std::cerr << "(*error*) Unable to create partition object, MPI has not been initialized\n";
@@ -246,8 +254,11 @@ class Partition {
         }
 
         if ( dims.x * dims.y != (unsigned) size ) {
-            std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of parallel nodes (" << size << ") don't match\n";
-            std::cerr << "(*error*) aborting...\n";
+            if ( mpi::world_root() ) {
+                std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of MPI parallel nodes (" << size << ") don't match\n";
+                std::cerr << "(*error*) aborting...\n";
+            }
+            mpi::world_barrier();
             exit(1);
         }
 
@@ -276,7 +287,11 @@ class Partition {
             exit(1);
         };
         coords = make_int2( lcoords[0], lcoords[1] );
-
+        
+        if ( rank == 0 ) {
+            std::cout << "(*info*) Created " << dims << " Partition object\n";
+        }
+        
         // Get neighbors
         // Since we also need the corner neighbors we cannot use MPI_Cart_shift()
         for( int iy = 0; iy < 3; iy ++) {

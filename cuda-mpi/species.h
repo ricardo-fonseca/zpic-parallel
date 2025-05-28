@@ -1,14 +1,3 @@
-/**
- * @file species.hpp
- * @author your name (you@domain.com)
- * @brief 
- * @version 0.1
- * @date 2022-08-06
- * 
- * @copyright Copyright (c) 2022
- * 
- */
-
 #ifndef SPECIES_H_
 #define SPECIES_H_
 
@@ -267,13 +256,6 @@ public:
         // Store new values
         bc = new_bc;
 
-/*
-        std::string bc_name[] = {"open", "periodic", "reflecting"};
-        std::cout << "(*info*) Species " << name << " boundary conditions\n";
-        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
-*/
-
         // Set periodic flags on tile grids
         if ( particles ) {
             particles -> set_periodic( make_int2( 
@@ -306,7 +288,7 @@ public:
             bc.x.lower = bc.x.upper = species::bc::open;
 
             // Disable periodic.x boundaries for particles object
-            auto periodic = particles -> get_periodic();
+            int2 periodic = particles -> get_periodic();
             periodic.x = false;
             particles -> set_periodic( periodic );
 
@@ -435,6 +417,24 @@ public:
         return nmove;
     }
 
+    /**
+     * @brief Gets the number of iterations
+     * 
+     * @return auto 
+     */
+    auto get_iter() const {
+        return iter;
+    }
+
+    /**
+     * @brief Returns the maximum number of particles per tile
+     * 
+     * @return auto 
+     */
+    uint32_t np_max_tile() const {
+        return particles -> np_max_tile();
+    }
+    
     /**
      * @brief Returns the (node) local number of particles
      * 

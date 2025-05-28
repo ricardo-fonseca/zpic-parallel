@@ -250,7 +250,7 @@ void add_from_gc_y_kernel( T * const __restrict__ d_buffer,
 
 template< typename T >
 __global__
-void x_shift_left_kernel( T * const __restrict__ d_buffer, const uint2 ntiles, const uint2 ext_nx, const unsigned shift )
+void kernel_x_shift_left( T * const __restrict__ d_buffer, const uint2 ntiles, const uint2 ext_nx, const unsigned shift )
 {
 
     auto * local = block::shared_mem<T>();
@@ -265,12 +265,12 @@ void x_shift_left_kernel( T * const __restrict__ d_buffer, const uint2 ntiles, c
     auto * __restrict__ buffer = & d_buffer[ tile_off ];
 
     for( int idx = block_thread_rank(); idx < tile_vol; idx += block_num_threads() ) {
-        const auto i = idx % ext_nx.x;
-        const auto j = idx / ext_nx.x;
+        const int i = idx % ext_nx.x;
+        const int j = idx / ext_nx.x;
         if ( i < ext_nx.x - shift ) {
             local[ i + j * ystride ] = buffer[ (i + shift) + j * ystride ];
         } else {
-            local[ i + j * ystride ] = {0};
+            local[ i + j * ystride ] = T{0};
         }
     }
 
@@ -282,7 +282,7 @@ void x_shift_left_kernel( T * const __restrict__ d_buffer, const uint2 ntiles, c
 
 template< typename T, typename S >
 __global__
-void kernel3_x_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
+void kernel_kernel3_x( T * const __restrict__ d_buffer, const uint2 ntiles,
     const uint2 nx, const uint2 ext_nx, const int gc_x_lower, 
     S const a, S const b, S const c )
 {
@@ -300,7 +300,7 @@ void kernel3_x_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Copy data from tile buffer
     for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
-        A[i] = buffer[i];
+        A[i] = B[i] = buffer[i];
 
     // Synchronize 
     block_sync();
@@ -325,7 +325,7 @@ void kernel3_x_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
 
 template< typename T, typename S >
 __global__
-void kernel3_y_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
+void kernel_kernel3_y( T * const __restrict__ d_buffer, const uint2 ntiles,
     const uint2 nx, const uint2 ext_nx, const int gc_y_lower, 
     S const a, S const b, S const c )
 {
@@ -838,7 +838,7 @@ class grid {
     uint2 tile_off;
 
     /// @brief Consider local boundaries periodic
-    int2 periodic;
+    int2 local_periodic;
 
     /// @brief Local grid size
     uint2 local_nx;
@@ -865,8 +865,8 @@ class grid {
         local_nx = ntiles * nx;
 
         // Get local periodic flag
-        periodic.x = part.periodic.x && (part.dims.x == 1);
-        periodic.y = part.periodic.y && (part.dims.y == 1);
+        local_periodic.x = part.periodic.x && (part.dims.x == 1);
+        local_periodic.y = part.periodic.y && (part.dims.y == 1);
 
         // Allocate main data buffer on device memory
         d_buffer = device::malloc<T>( buffer_size() );
@@ -1055,7 +1055,7 @@ class grid {
     /**
      * @brief Buffer size
      * 
-     * @return total size of data buffers
+     * @return total size of data buffers (in elements)
      */
     std::size_t buffer_size() {
         return (static_cast <std::size_t> (tile_vol)) * ( ntiles.x * ntiles.y ) ;
@@ -1116,7 +1116,7 @@ class grid {
     }
 
     /**
-     * @brief Gather field into a contiguos grid
+     * @brief Gather local grid into a contiguous grid
      * 
      * Used mostly for diagnostic output
      * 
@@ -1147,7 +1147,22 @@ class grid {
         // Copy along x direction
         copy_to_gc_x_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
-            periodic.x, gc.x.lower, gc.x.upper
+            local_periodic.x, gc.x.lower, gc.x.upper
+        );
+    }
+
+    /**
+     * @brief Copies edge values to Y neighboring guard cells
+     * 
+     */
+    void local_copy_to_gc_y() {
+        dim3 grid( ntiles.x, ntiles.y );
+        dim3 block( 64 );
+
+        // Copy along y direction
+        copy_to_gc_y_kernel <<< grid, block >>> (
+            d_buffer, ntiles, nx, ext_nx,
+            local_periodic.y, gc.y.lower, gc.y.upper
         );
     }
 
@@ -1162,8 +1177,8 @@ class grid {
         int lnode = part.get_neighbor(-1, 0 );
         int unode = part.get_neighbor(+1, 0 );
 
-        // Disable messages if local periodic
-        if ( periodic.x ) lnode = unode = -1;
+        // Disable messages if only 1 node along  x direction
+        if ( part.dims.x == 1 ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -1220,22 +1235,6 @@ class grid {
     }
 
 
-
-    /**
-     * @brief Copies edge values to Y neighboring guard cells
-     * 
-     */
-    void local_copy_to_gc_y() {
-        dim3 grid( ntiles.x, ntiles.y );
-        dim3 block( 64 );
-
-        // Copy along y direction
-        copy_to_gc_y_kernel <<< grid, block >>> (
-            d_buffer, ntiles, nx, ext_nx,
-            periodic.y, gc.y.lower, gc.y.upper
-        );
-    }
-
     /**
      * @brief Copies y values to neighboring guard cells, including cells on 
      *        other parallel nodes
@@ -1247,8 +1246,8 @@ class grid {
         int lnode = part.get_neighbor(0, -1);
         int unode = part.get_neighbor(0, +1);
 
-        // Disable messages if local periodic
-        if ( periodic.y ) lnode = unode = -1;
+        // Disable messages if only 1 node along y direction
+        if ( part.dims.y == 1 ) lnode = unode = -1;
         
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -1330,7 +1329,7 @@ class grid {
         // Add along x direction
         add_from_gc_x_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
-            periodic.x, gc.x.lower, gc.x.upper
+            local_periodic.x, gc.x.lower, gc.x.upper
         );
     }
 
@@ -1345,14 +1344,13 @@ class grid {
         // Add along y direction
         add_from_gc_y_kernel <<< grid, block >>> (
             d_buffer, ntiles, nx, ext_nx,
-            periodic.y, gc.y.lower, gc.y.upper
+            local_periodic.y, gc.y.lower, gc.y.upper
         );
     }
 
     /**
-     * @brief Adds values from neighboring y guard cells to local data,
+     * @brief Adds values from neighboring x guard cells to local data,
      *        including cells from other parallel nodes
-     * 
      */
     void add_from_gc_x() {
 
@@ -1360,8 +1358,8 @@ class grid {
         int lnode = part.get_neighbor(-1, 0 );
         int unode = part.get_neighbor(+1, 0 );
 
-        // Disable messages if local periodic
-        if ( periodic.x ) lnode = unode = -1;
+        // Disable messages if only 1 node along  x direction
+        if ( part.dims.x == 1 ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -1420,15 +1418,14 @@ class grid {
     /**
      * @brief Adds values from neighboring y guard cells to local data,
      *        including cells from other parallel nodes
-     * 
      */
     void add_from_gc_y() {
         // Get y neighbors
         int lnode = part.get_neighbor( 0, -1 );
         int unode = part.get_neighbor( 0, +1 );
 
-        // Disable messages if local periodic
-        if ( periodic.y ) lnode = unode = -1;
+        // Disable messages if only 1 node along y direction
+        if ( part.dims.y == 1 ) lnode = unode = -1;
 
         // Post message receives
         if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
@@ -1510,22 +1507,22 @@ class grid {
      */
     void x_shift_left( unsigned int const shift ) {
 
-        if ( gc.x.upper >= shift ) {
+        if ( shift > 0 && shift < gc.x.upper ) {
 
             dim3 grid( ntiles.x, ntiles.y );
 
             // Shift data using guard cell values
             size_t shm_size = tile_vol * sizeof(T);
             
-            block::set_shmem_size( x_shift_left_kernel<T>, shm_size );
-            x_shift_left_kernel <<< grid, 1024, shm_size >>> ( 
+            block::set_shmem_size( kernel_x_shift_left<T>, shm_size );
+            kernel_x_shift_left <<< grid, 1024, shm_size >>> ( 
                 d_buffer, ntiles, ext_nx, shift
             );
 
             copy_to_gc_x();
 
         } else {
-            ABORT( "grid::x_shift_left(), shift value too large, must be <= gc.x.upper" );
+            ABORT( "x_shift_left(), invalid shift value, must be 0 < shift <= gc.x.upper" );
         }
     }
 
@@ -1549,8 +1546,8 @@ class grid {
                 ABORT("grid::x_shift_left(), tile size too large, insufficient shared memory");
             }
 
-            block::set_shmem_size( kernel3_x_kernel<T,S>, shm_size );
-            kernel3_x_kernel <<< grid, 1024, shm_size >>> ( 
+            block::set_shmem_size( kernel_kernel3_x<T,S>, shm_size );
+            kernel_kernel3_x <<< grid, 1024, shm_size >>> ( 
                 d_buffer, ntiles, nx, ext_nx, gc.x.lower, a, b, c
             ); 
 
@@ -1577,8 +1574,8 @@ class grid {
 
             size_t shm_size = 2 * tile_vol * sizeof(T);
 
-            block::set_shmem_size( kernel3_y_kernel<T,S>, shm_size );
-            kernel3_y_kernel <<< grid, 1024, shm_size >>> ( 
+            block::set_shmem_size( kernel_kernel3_y<T,S>, shm_size );
+            kernel_kernel3_y <<< grid, 1024, shm_size >>> ( 
                 d_buffer, ntiles, nx, ext_nx, gc.y.lower, a, b, c
             ); 
 
@@ -1607,7 +1604,7 @@ class grid {
      */
     void save( zdf::grid_info &info, zdf::iteration &iter, std::string path ) {
 
-        // Fill in grid dimensions
+        // Fill in global grid dimensions
         info.ndims = 2;
         info.count[0] = global_ntiles.x * nx.x;
         info.count[1] = global_ntiles.y * nx.y;

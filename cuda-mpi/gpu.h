@@ -494,6 +494,17 @@ namespace block {
  * 
  */
 namespace device {
+    
+    /**
+     * @brief Wait for compute device to finish.
+     * 
+     * @return      If the GPU is in an error state, the function will return an error
+     */
+    __host__
+    inline int sync() {
+        return cudaDeviceSynchronize();
+    }
+
     /**
      * @brief   Allocate memory on device
      * 
@@ -662,13 +673,13 @@ namespace device {
     namespace {
     
     /**
-     * @brief Kernel for `exscan_add()` function
+     * @brief Kernel for `exscan_add()` inplace function
      * 
-     * @tparam T 
-     * @param data 
-     * @param size 
-     * @param reduction 
-     * @return __global__ 
+     * @tparam T            Template datatype
+     * @param data          Data buffer (in/out)
+     * @param size          Data buffer size (number of elements)
+     * @param reduction     Output reduction (optional). Set to a non-null pointer to
+     *                      store global reduction on this address.
      */
     template < typename T >
     __global__ 
@@ -715,9 +726,81 @@ namespace device {
         if ( reduction != nullptr )
             if ( block_thread_rank() == 0 ) *reduction = prev;
     }
+
+    /**
+     * @brief Kernel for `exscan_add()` function
+     * 
+     * @tparam T            Template datatype
+     * @param out           Output data buffer
+     * @param in            Input data buffer
+     * @param size          Data buffer size (number of elements)
+     * @param reduction     Output reduction (optional). Set to a non-null pointer to
+     *                      store global reduction on this address.
+     */
+    template < typename T >
+    __global__ 
+    void exscan_add_kernel(
+        T * __restrict__ out, T * __restrict__ in, 
+        unsigned int const size, T * __restrict__ reduction = nullptr
+    ) {
     
+        static_assert( MAX_WARPS <= WARP_SIZE, "This implementation requires MAX_WARPS to be <= WARP_SIZE");
+        
+        __shared__ T tmp[ MAX_WARPS ];
+        __shared__ T prev;
+    
+        // Contribution from previous warp
+        prev = 0;
+    
+        for( unsigned int i = block_thread_rank(); i < size; i += block_num_threads() ) {
+            auto s = in[i];
+    
+            auto v = warp::exscan_add(s);
+            if ( warp::thread_rank() == WARP_SIZE - 1 ) tmp[ warp::group_rank() ] = v + s;
+            block_sync();
+    
+            // Only 1 warp does this
+            if (warp::group_rank() == 0 ) {
+                // The maximum number of warps will always be less or equal than
+                // the warp size, so we only need to do this once
+                auto t = tmp[ warp::thread_rank() ];
+                t = warp::exscan_add(t);
+                tmp[ warp::thread_rank() ] = t + prev;
+            }
+            block_sync();
+    
+            // Add in contribution from previous threads
+            v += tmp[ warp::group_rank() ];
+            out[i] = v;
+    
+            if ((block_thread_rank() == block_num_threads() - 1) || ( i + 1 == size ) )
+                prev = v + s;
+    
+            block_sync();
+        }
+    
+        // The reduction (sum) value is also available, store it if requested
+        if ( reduction != nullptr )
+            if ( block_thread_rank() == 0 ) *reduction = prev;
+    }
+
     }
     
+    /**
+     * @brief Perform exclusive scan (add) operation on device (inplace)
+     * 
+     * @tparam T        Template data type
+     * @param data      Data buffer (input/output)
+     * @param size      Data buffer size (number of elements)
+     */
+    template< typename T >
+    __host__
+    void exscan_add( T * const __restrict__ data, size_t const size )
+    {
+        unsigned int block = ( size < 1024 ) ? size : 1024 ;
+        exscan_add_kernel <<< 1, block >>> ( data, size );
+    }
+
     /**
      * @brief Perform exclusive scan (add) operation on device
      * 
@@ -728,10 +811,10 @@ namespace device {
      */
     template< typename T >
     __host__
-    void exscan_add( T * const __restrict__ data, size_t const size )
+    void exscan_add( T * const __restrict__ out, T * const __restrict__ in, size_t const size )
     {
         unsigned int block = ( size < 1024 ) ? size : 1024 ;
-        exscan_add_kernel <<< 1, block >>> ( data, size );
+        exscan_add_kernel <<< 1, block >>> ( out, in, size );
     }
     
     /**

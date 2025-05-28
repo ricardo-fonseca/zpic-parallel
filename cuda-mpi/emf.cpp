@@ -21,11 +21,13 @@ EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
     dt( dt ), box(box)
 {
     // Verify Courant condition
-    auto cour2d = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
-    if ( dt >= cour2d ){
-        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
-        std::cerr << "(*error*) For the current resolution [" << dx.x << "," << dx.y << "]\n";
-        std::cerr << " the maximum timestep is dt = " << cour2d <<'\n';
+    auto cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    if ( dt >= cour ){
+        if ( mpi::world_root() ) {
+            std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
+            std::cerr << "(*error*) For the current resolution " << dx;
+            std::cerr << " the maximum timestep is dt = " << cour <<'\n';
+        }
         mpi::abort(1);
     }
 
@@ -222,7 +224,7 @@ void EMF::advance() {
     B -> copy_to_gc();
 
     // Do additional bc calculations if needed
-    process_bc();
+    // process_bc();
 
     // Advance internal iteration number
     iter += 1;
@@ -482,6 +484,10 @@ void emf_bcy(
  */
 void EMF::process_bc() {
 
+    std::cout << "(*error*) EMF::process_bc() have not been implemented yet,"
+              << " aborting.\n";
+    exit(1);
+
     const auto ntiles   = E -> get_ntiles();
 
     dim3 block( 64 );
@@ -630,7 +636,7 @@ void EMF::advance( Current & current ) {
     B -> copy_to_gc( );
 
     // Do additional bc calculations if needed
-    process_bc( );
+    // process_bc( );
 
     // Advance internal iteration number
     iter += 1;

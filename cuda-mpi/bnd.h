@@ -108,7 +108,7 @@ class bnd {
         os << "x:" << obj.x;
         os << ", ";
         os << "y:" << obj.y;
-        os << "}\n";
+        os << "}";
 
         return os;
     }

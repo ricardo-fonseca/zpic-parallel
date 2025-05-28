@@ -55,6 +55,7 @@ namespace kernel {
         int size = 1;                                   // corners
         if ( dir == 1 || dir == 7 ) size = ntiles.x;    // y boundary
         if ( dir == 3 || dir == 5 ) size = ntiles.y;    // x boundary
+        // if ( dir == 4 ) size = 0;                    // local - not needed
 
         block_sync();
 
@@ -103,6 +104,7 @@ void ParticleSort::exchange_np() {
     const int ntx = ntiles.x;
     const int nty = ntiles.y;
 
+    // Size of message according to direction
     auto size = [ ntx, nty ]( int dir ) -> unsigned int {
         unsigned int s = 1;                   // corners
         if ( dir == 1 || dir == 7 ) s = ntx;  // y boundary
@@ -111,29 +113,31 @@ void ParticleSort::exchange_np() {
         return s;
     };
 
+
     // Post receives
-    unsigned int idx = 0;
+    size_t offset = 0;
     for( auto dir = 0; dir < 9; dir++ ) {            
         if ( neighbor[dir] >= 0 ) {
-            MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+            MPI_Irecv( &recv.buffer[offset], size(dir), MPI_INT, neighbor[dir],
                     source_tag(dir), comm, &recv.requests[dir]);      
         } else {
             recv.requests[dir] = MPI_REQUEST_NULL;
         }
-        idx += size(dir);
+        offset += size(dir);
     }
 
     // Post sends
-    idx = 0;
+    offset = 0;
     for( auto dir = 0; dir < 9; dir++ ) {
         if ( neighbor[dir] >= 0 ) {
-            MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+            MPI_Isend( &send.buffer[offset], size(dir), MPI_INT, neighbor[dir],
                 dest_tag(dir), comm, &send.requests[dir]);
         } else {
             send.requests[dir] = MPI_REQUEST_NULL;
         }
-        idx += size(dir);
+        offset += size(dir);
     }
+
 
     // Wait for receives to complete
     MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );
@@ -152,7 +156,7 @@ void ParticleSort::exchange_np() {
     MPI_Waitall( 9, send.requests, MPI_STATUSES_IGNORE );
 
     // Ensure kernel::update_msg_np has completed     
-    cudaDeviceSynchronize();
+    device::sync();
 }
 
 
@@ -660,8 +664,7 @@ void __launch_bounds__(opt_bnd_check_block) bnd_check(
  */
 void bnd_check( ParticleData part, ParticleSortData sort, 
     const part::bnd_type local_bnd )
-{
-    
+{   
     dim3 grid( part.ntiles.x, part.ntiles.y );
     auto block = opt_bnd_check_block;    
     kernel::bnd_check <<<grid,block>>> ( part, sort, local_bnd );
@@ -717,8 +720,14 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
 
     // Initialize offset[] with the new number of particles
     if ( extra != nullptr ) {
-        for( auto i = block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
+        // extra array only includes data for local tiles
+        for( auto i = block_thread_rank(); i < ntiles_local; i += block_num_threads() ) {
             offset[i] = new_np[i] + extra[i];
+            np[i] = 0;
+        }
+        
+        for( auto i = ntiles_local + block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
+            offset[i] = new_np[i];
             np[i] = 0;
         }
     } else {
@@ -967,6 +976,7 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             // _dir_offset[] includes the offset in the global tmp particle buffer
             int l = block::atomic_fetch_add( & _dir_offset[dir], 1 );
 
+            // Correct positions - nix is ok for new tile
             nix.x -= xcross * lim.x;
             nix.y -= ycross * lim.y;
 
@@ -1273,7 +1283,7 @@ void copy_sorted(
     // Copy particles staying in tile
     const int start = _dir_offset[4];
 
-    for( int i = block_thread_rank(); i < nidx; i += block_num_threads() ) {
+    for( int i = block_thread_rank(); i < n0; i += block_num_threads() ) {
         tmp_ix[ start + i ] = ix[i];
         tmp_x [ start + i ] = x[i];
         tmp_u [ start + i ] = u[i];
@@ -1301,69 +1311,6 @@ void copy_sorted( Particles & part, ParticleData & tmp, const ParticleSortData &
     // dim3 block( 1024 );
     // kernel::copy_sorted <<< grid, block >>> ( part, tmp, sort, ... );
 }
-
-#if 0
-/**
- * @brief Moves particles to the correct tiles
- * 
- * @note Particles are only expected to have moved no more than 1 tile
- *       in each direction. If necessary the code will grow the particle buffer
- * 
- * @param tmp       Temporary particle buffer
- * @param sort      Temporary sort index 
- * @param extra     Additional space to add to each tile. Leaves  room for
- *                  particles to be injected later.
- */
-void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __restrict__ extra ) {
-
-    // Reset sort data
-    sort.reset();
-
-    // Get new number of particles per tile
-    bnd_check( sort );
-
-    if ( extra ) {
-        // Get new offsets, including extra values in offset calculations
-        // Used to reserve space in particle buffer for later injection
-        auto total_np = update_tile_info ( tmp, sort.new_np, extra, dev_tmp_uint32 );
-
-        if ( total_np > max_part ) { 
-
-            // grow tmp particle buffer
-            tmp.grow_buffer( total_np );
-
-            // copy all particles to correct tiles in tmp buffer
-            copy_sorted( tmp, sort );
-
-            // swap buffers
-            swap_buffers( *this, tmp );
-
-            // grow tmp particle buffer for future use
-            tmp.grow_buffer( max_part );
-
-        } else {
-            // Copy outgoing particles (and particles needing shifting) to staging area
-            copy_out ( tmp, sort );
-
-            // Copy particles from staging area into final positions in partile buffer
-            copy_in ( tmp );
-        }
-
-    } else {
-        // Get new offsets
-        update_tile_info ( tmp, sort.new_np );
-
-        // Copy outgoing particles (and particles needing shifting) to staging area
-        copy_out ( tmp, sort );
-
-        // Copy particles from staging area into final positions in partile buffer
-        copy_in ( tmp );
-    }
-
-    // For debug only, remove from production code
-    // validate( "After tile_sort" );
-}
-#endif
 
 /**
  * @brief Moves particles to the correct tiles
@@ -1396,9 +1343,9 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     auto total_np = update_tile_info ( tmp, sort, extra, dev_tmp_uint32 );
 
     if ( total_np > max_part ) { 
-        std::cerr << "Particles::tile_sort() - particle buffer requires growing,";
-        std::cerr << " not implemented yet.";
-        mpi::abort(1);
+        std::cerr << "Particles::tile_sort() - particle buffer requires growing,"
+                  << "max_part: " << max_part << ", total_np: " << total_np
+                  << ", not implemented yet.\n";        mpi::abort(1);
     }
 
     // Copy outgoing particles (and particles needing shifting) to staging area
@@ -1413,7 +1360,7 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     // Wait for receive messages to complete
     recv.wait();
 
-    // Unpack received message data
+    // Wait for messages to be received and unpack data
     unpack_msg( sort, recv );
 
     // Wait for sends to complete
@@ -1489,16 +1436,13 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
     float2 const * const __restrict__ x  = &part.x[ offset ];
     float3 const * const __restrict__ u  = &part.u[ offset ];
 
-    __shared__ int _err;
-    _err = 0;
+    __shared__ int _err; _err = 0;
+    block_sync();
 
     int2 const lb = make_int2( -over, -over );
     int2 const ub = make_int2( part.nx.x + over, part.nx.y + over ); 
 
-    block_sync();
-
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
-
         int err = 0;
 
         if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) {
@@ -1777,7 +1721,7 @@ void Particles::isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &
             send.size[i] = sort.send.msg_np[i] * particle_size();
             send_np += sort.send.msg_np[i];
         } else {
-            // sort.send.msg_np[i] = 0;    // this should not be necessary
+            sort.send.msg_np[i] = 0;    // this should not be necessary
             send.size[i] = 0;
         }
     }
@@ -1814,7 +1758,7 @@ namespace kernel {
         int * __restrict__ recv_msg_tile_np ) {
 
         ///@brief Number of message tiles
-        const int   msg_tiles = blockDim.x;
+        const int msg_tiles = gridDim.x;
 
         ///@brief tile id in message array
         int msg_idx = blockIdx.x;
@@ -1836,14 +1780,15 @@ namespace kernel {
         msg_tile_off[8] = 3 + 2*ntiles.x + 2*ntiles.y;
 
         // Copy recv_msg_np and recv_msg_tile_np to shared memory using coalescent access
+        auto * msg_tile_np = block::shared_mem<int>();
+        
+        for( int i = block_thread_rank(); i < msg_tiles; i += block_num_threads() ) {
+            msg_tile_np[i] = recv_msg_tile_np[i];
+        }
+
         __shared__ int msg_np[9];
         for( int i = block_thread_rank(); i < 9; i += block_num_threads() ) {
             msg_np[i] = recv_msg_np[i];
-        }
-
-        extern __shared__ int msg_tile_np[];
-        for( int i = block_thread_rank(); i < msg_tiles; i += block_num_threads() ) {
-            msg_tile_np[i] = recv_msg_tile_np[i];
         }
 
         block_sync();
@@ -1853,6 +1798,7 @@ namespace kernel {
 
         // If any particles received in this tile
         if ( recv_np > 0 ) {
+
             ///@brief message direction
             int dir = -1;
             for( int i = 0; i < 8; i++ ) {
@@ -1954,11 +1900,13 @@ void Particles::unpack_msg( ParticleSort &sort,
         dim3 grid( part::msg_tiles( ntiles ) );
         dim3 block( 32 );
 
-        kernel::unpack_msg <<< grid, block >>> ( 
+        size_t shm_size = part::msg_tiles( ntiles ) * sizeof(int);
+        block::set_shmem_size( kernel::unpack_msg, shm_size );
+        kernel::unpack_msg <<< grid, block, shm_size >>> ( 
             *this,                      // Particle data
             recv.buffer,                // Message receive buffer (all messages)
-            sort.recv.msg_np,           // Number of particles per message
-            sort.recv.buffer            // Number of particles per tile
+            sort.recv.msg_np,           // Number of received particles per message
+            sort.recv.buffer            // Number of received particles per tile
         );
     }
 }
