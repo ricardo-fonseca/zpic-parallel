@@ -409,7 +409,7 @@ class ParticleSort : public ParticleSortData {
                           4;             // corners
 
         // Include send buffer for number of particles leaving node
-        new_np = device::malloc<int>( local_tiles + edge_tiles );
+        new_np = managed::malloc<int>( local_tiles + edge_tiles );
         
         // Number of particles leaving each local tile
         nidx   = device::malloc<int>( local_tiles );
@@ -422,7 +422,7 @@ class ParticleSort : public ParticleSortData {
         send.msg_np = managed::malloc<int>(9);
 
         // Receive buffer
-        recv.buffer = device::malloc<int>( edge_tiles );
+        recv.buffer = managed::malloc<int>( edge_tiles );
         device::zero( recv.buffer, edge_tiles );
         
         recv.msg_np = managed::malloc<int>(9);
@@ -455,11 +455,12 @@ class ParticleSort : public ParticleSortData {
     ~ParticleSort() {
         managed::free( send.msg_np );
         managed::free( recv.msg_np );
-        device::free( recv.buffer );
+        
+        managed::free( recv.buffer );
 
         device::free( npt );
         device::free( nidx );
-        device::free( new_np );
+        managed::free( new_np );
         device::free( idx );
     }
 
@@ -497,7 +498,7 @@ class ParticleSort : public ParticleSortData {
     }
 
     /**
-     * @brief print recv.buffer contents
+     * @brief print send.buffer contents
      * 
      */
     void info_send_buffer( std::string msg ) {
@@ -601,7 +602,7 @@ class ParticleMessage {
                 MPI_Cancel( &tmp );
             }
         }
-        device::free( buffer );
+        managed::free( buffer );
     }
 
     /**
@@ -615,7 +616,7 @@ class ParticleMessage {
         if ( total_size > max_size ) {
             device::free( buffer );
             max_size = roundup<1048576>(total_size);
-            buffer = device::malloc<uint8_t>( max_size );
+            buffer = managed::malloc<uint8_t>( max_size );
         }
     }
 
@@ -630,6 +631,9 @@ class ParticleMessage {
         }
 
         active = MessageType::send;
+
+        // Ensure send data is up to date
+        device::sync();
 
         uint32_t offset = 0;
         for( int i = 0; i < 9; i++ ) {
@@ -672,8 +676,16 @@ class ParticleMessage {
      * @return int 
      */
     int wait() {
+
+        if ( active == MessageType::none ) {
+            std::cerr << "wait() - Tried to wait on an inactive message\n";
+            mpi::abort(1);
+        }
+
         int ierr = MPI_Waitall( 9, requests, MPI_STATUSES_IGNORE );
+
         active = MessageType::none;
+ 
         return ierr;
     }
 };

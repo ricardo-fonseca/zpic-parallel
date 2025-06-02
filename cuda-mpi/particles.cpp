@@ -113,9 +113,9 @@ void ParticleSort::exchange_np() {
         return s;
     };
 
-
     // Post receives
-    size_t offset = 0;
+    size_t offset;
+    offset = 0;
     for( auto dir = 0; dir < 9; dir++ ) {            
         if ( neighbor[dir] >= 0 ) {
             MPI_Irecv( &recv.buffer[offset], size(dir), MPI_INT, neighbor[dir],
@@ -125,6 +125,9 @@ void ParticleSort::exchange_np() {
         }
         offset += size(dir);
     }
+
+    // Ensure send data is up to date
+    device::sync();
 
     // Post sends
     offset = 0;
@@ -137,7 +140,6 @@ void ParticleSort::exchange_np() {
         }
         offset += size(dir);
     }
-
 
     // Wait for receives to complete
     MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );

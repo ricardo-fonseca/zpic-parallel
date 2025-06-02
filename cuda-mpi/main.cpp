@@ -433,11 +433,10 @@ void test_weibel( )
     }
 
     // Parallel partition
-    uint2 partition = make_uint2( 2, 1 );
-//    uint2 partition = make_uint2( 1, 2 );
-
-//    uint2 partition = make_uint2( 2, 2 );
-//    uint2 partition = make_uint2( 3, 2 );
+    // uint2 partition{ 1, 1 };
+    // uint2 partition{ 2, 1 };
+    uint2 partition{ 2, 2 };
+    // uint2 partition{ 3, 2 };
 
     // Create simulation box
     uint2 ntiles{8, 8};
@@ -447,7 +446,7 @@ void test_weibel( )
                                         
     Simulation sim( ntiles, nx, box, dt, partition );
                             
-    uint2 ppc{4, 4};
+    uint2 ppc{8, 8};
 
     Species electrons("electrons", -1.0f, ppc);
     electrons.set_udist(
@@ -494,9 +493,9 @@ void test_weibel( )
     while (sim.get_iter() < imax)
     {     
         if ( sim.get_iter() % 50 == 0 ) {
-            // diag();
             if ( sim.parallel.root() ) 
-                std::cout << "i = " << sim.get_iter() << '\n';    
+                std::cout << "i = " << sim.get_iter() << '\n';
+            // diag();
         }        
         sim.advance();
     }
@@ -1225,8 +1224,8 @@ int main( int argc, char *argv[] ) {
     // test_current( );
     // test_mov_window_emf();
     // test_mov_window_inj();
-    test_lwfa();
-    // test_weibel( );
+    // test_lwfa();
+    test_weibel( );
 
     // test_warm( );
 

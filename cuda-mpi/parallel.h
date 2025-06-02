@@ -684,7 +684,7 @@ class Message {
         active( none ), request( MPI_REQUEST_NULL ), 
         comm( comm ), max_count( max_count )
     {
-        buffer = memory::malloc<T, memspace::device >( max_count );
+        buffer = managed::malloc<T>( max_count );
     }
 
     /**
@@ -696,7 +696,7 @@ class Message {
             MPI_Request tmp = request;
             MPI_Cancel( &tmp );
         }
-        memory::free<T, memspace::device >( buffer );
+        managed::free( buffer );
     }
 
     /**
@@ -720,6 +720,10 @@ class Message {
         }
 
         active = Message::send;
+
+        // Ensure send data is up-to-date
+        device::sync();
+        
         return MPI_Isend( buffer, count, mpi::data_type<T>(), recipient, tag, comm, &request) ;
     }
 
