@@ -112,7 +112,7 @@ typedef VecInt    VecInt_s;
 typedef VecMask   VecMask_s;
 
 // Initialize the SVE vector length
-inline int simd_init() { return prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8) };
+inline int simd_init() { return prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8); };
 
 #define SIMD SVE
 
