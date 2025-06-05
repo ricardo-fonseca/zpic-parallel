@@ -830,6 +830,99 @@ void test_lwfa()
 
 }
 
+void test_weibel( std::string param ) {
+    
+    // param is expected to be in the form "px, py, ntx, nty"
+    // Where (px,py) are the parallel MPI dimensions and (ntx,nty) the global number of tiles
+
+    // Parse parameters
+    uint2 partition { 0 };
+    uint2 ntiles { 0 };
+
+    if ( std::sscanf( param.c_str(), "%d, %d, %d, %d", 
+        &partition.x, &partition.y, 
+        &ntiles.x, &ntiles.y ) != 4 ) {
+        
+        if ( mpi::world_root() ) 
+            std::cerr << "Invalid test parameters: '" << param << "'\n";
+        mpi::abort(1);
+    };
+
+    if ( mpi::world_root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running Weibel test\n";
+        std::cout << ansi::reset;
+        std::cout << "MPI partition : " << partition << '\n';
+        std::cout << "Global tiles  : " << ntiles << '\n';
+    }
+
+
+    // Create simulation box
+    uint2 nx {32, 32};
+    uint2 ppc {8, 8};
+                                                                                                                                                                      
+    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+                    
+    float dt = 0.07;
+                                        
+    Simulation sim(ntiles, nx, box, dt, partition );
+                            
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3(0, 0, 0.6 )
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3( 0, 0, -0.6 )
+        )
+    );
+
+    sim.add_species( positrons );
+                     
+    // Run simulation    
+    int const imax = 500;
+                
+    if ( mpi::world_root() )
+        std::cout << "Running test up to n = " << imax << "...\n";
+
+    Timer timer;
+                  
+    timer.start();
+                                 
+    while (sim.get_iter() < imax)
+    {
+        // std::cout << "n = " << sim.get_iter() << '\n';
+        sim.advance();
+    }
+                 
+    timer.stop();
+    
+    if ( mpi::world_root() )
+        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+                      
+    sim.energy_info();
+
+/*
+    sim.emf.save(emf::b, fcomp::x);
+    sim.emf.save(emf::b, fcomp::y);
+    sim.emf.save(emf::b, fcomp::z);
+*/                                                                  
+    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
+
+    if ( mpi::world_root() ) {
+        std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+                  << ", Performance: " << perf << " GPart/s\n";
+    }   
+
+}
 
 #if 0
 
@@ -1116,14 +1209,22 @@ void benchmark_weibel()
 /**
  * @brief Print information about the environment
  * 
+ * @note Only MPI root node prints this
  */
 void info( void ) {
 
     if ( mpi::world_root() ) {
 
+        std::cout << ansi::bold;
+        std::cout << "Environment\n";
+        std::cout << ansi::reset;
+
+        char name[MPI_MAX_PROCESSOR_NAME];
+        int len; MPI_Get_processor_name(name, &len);
+
         std::cout << "MPI running on " << mpi::world_size() << " processes\n";
 
-        std::cout << "GPU devices on rank 0:\n";
+        std::cout << "GPU devices on rank 0 (" << name << "):\n";
         print_gpu_info();
 
     }
@@ -1225,9 +1326,15 @@ int main( int argc, char *argv[] ) {
     // test_mov_window_emf();
     // test_mov_window_inj();
     // test_lwfa();
-    test_weibel( );
-
     // test_warm( );
+
+    if ( test == "weibel" ) {
+        test_weibel( param );
+    } else {
+        if ( mpi::world_root() ) 
+            std::cerr << "Unknonw test '" << test << "', aborting...\n";
+        mpi::abort(1);
+    }
 
     // benchmark_weibel();
 
