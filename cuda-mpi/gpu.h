@@ -123,26 +123,31 @@
  */
 static inline void print_gpu_info( ) {
 
-    int nDevices;
+    int device, nDevices;
+    cudaDeviceProp prop;
 
-    cudaGetDeviceCount(&nDevices);
-    for (int i = 0; i < nDevices; i++) {
-        cudaDeviceProp prop;
-        cudaGetDeviceProperties(&prop, i);
-        std::cout << "Device Number           : " << i << '\n';
-        std::cout << "  Device name           : " << prop.name << '\n';
+    CHECK_ERR( cudaGetDevice( & device ), 
+               "unable to get current device" );
+    CHECK_ERR( cudaGetDeviceCount( & nDevices ),
+               "unable to get number of devices" );
+    CHECK_ERR( cudaGetDeviceProperties(&prop, device),
+               "unable to get device properties" );
 
-//        std::cout << "  Memory Clock Rate     : " << prop.memoryClockRate << " (KHz) \n";
-//        std::cout << "  Memory Bus Width      : " << prop.memoryBusWidth << " (bits) \n";
-//        std::cout << "  Peak Memory Bandwidth : " <<
-//            2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6 << " (GB/s) \n";
+    std::cout << "Device Number           : " << device << " (of " << nDevices << ")\n";
+    std::cout << "  Device name           : " << prop.name << '\n';
 
-        std::cout << "  Max. block size       : " << prop.maxThreadsPerBlock << "\n";
-        std::cout << "  Warp size             : " << prop.warpSize << "\n";
-        std::cout << "  Max. warps/block      : " << prop.maxThreadsPerBlock / prop.warpSize << "\n";
-        std::cout << "  Shared memory (def.)  : " << prop.sharedMemPerBlock / 1024 << " (kB) \n";
-        std::cout << "  Shared memory (optin) : " << prop.sharedMemPerBlockOptin / 1024 << " (kB) \n";
-    }
+#if 0
+    std::cout << "  Memory Clock Rate     : " << prop.memoryClockRate << " (KHz) \n";
+    std::cout << "  Memory Bus Width      : " << prop.memoryBusWidth << " (bits) \n";
+    std::cout << "  Peak Memory Bandwidth : " <<
+        2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6 << " (GB/s) \n";
+#endif
+
+    std::cout << "  Max. block size       : " << prop.maxThreadsPerBlock << "\n";
+    std::cout << "  Warp size             : " << prop.warpSize << "\n";
+    std::cout << "  Max. warps/block      : " << prop.maxThreadsPerBlock / prop.warpSize << "\n";
+    std::cout << "  Shared memory (def.)  : " << prop.sharedMemPerBlock / 1024 << " (kB) \n";
+    std::cout << "  Shared memory (optin) : " << prop.sharedMemPerBlockOptin / 1024 << " (kB) \n";
 }
 
 /**
