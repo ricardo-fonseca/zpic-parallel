@@ -138,7 +138,6 @@ inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
  * @param ntiles    Number of local tiles (x,y)
  * @return int      Offset of edge tiles in the specified direction
  */
-__host__ __device__
 inline int edge_tile_off( const int dir, const uint2 ntiles ) {
     int a, b, c;
     a = b = c = 0;
@@ -276,7 +275,6 @@ inline int tid_coords( int2 coords, int2 const ntiles, part::bnd_type const loca
  * @param ntiles    Local number of tiles (x,y)
  * @return int      Total number of tiles
  */
-__host__ __device__
 inline constexpr int msg_tiles( const uint2 ntiles ) {
     return  2 * ntiles.y +          // x boundary
             2 * ntiles.x +          // y boundary
@@ -289,7 +287,6 @@ inline constexpr int msg_tiles( const uint2 ntiles ) {
  * @param ntiles    Local number of tiles (x,y)
  * @return int      Total number of tiles
  */
-__host__ __device__
 inline constexpr int local_tiles( const uint2 ntiles ) {
     return ntiles.x * ntiles.y;
 }
@@ -300,7 +297,6 @@ inline constexpr int local_tiles( const uint2 ntiles ) {
  * @param ntiles    Local number of tiles (x,y)
  * @return int      Total number of tiles
  */
-__host__ __device__
 inline constexpr int all_tiles( const uint2 ntiles ) {
     return local_tiles( ntiles ) + msg_tiles( ntiles );
 }
@@ -347,8 +343,10 @@ class ParticleSort : public ParticleSortData {
     struct Message {
         /// @brief Buffer for all 8 messages (in device memory)
         int * buffer;
-        /// @brief Number of incoming particles per message (in managed memory)
-        int * msg_np;
+        /// @brief Number of incoming particles per message (in device memory)
+        int * d_msg_np;
+        /// @brief Number of incoming particles per message (in host memory)
+        int * h_msg_np;
         /// @brief Total number of particles to be exchanged
         int total_np;
         /// @brief Message requests
@@ -409,7 +407,7 @@ class ParticleSort : public ParticleSortData {
                           4;             // corners
 
         // Include send buffer for number of particles leaving node
-        new_np = managed::malloc<int>( local_tiles + edge_tiles );
+        new_np = device::malloc<int>( local_tiles + edge_tiles );
         
         // Number of particles leaving each local tile
         nidx   = device::malloc<int>( local_tiles );
@@ -419,13 +417,15 @@ class ParticleSort : public ParticleSortData {
 
         // Send buffer
         send.buffer = &new_np[ local_tiles ];
-        send.msg_np = managed::malloc<int>(9);
+        send.d_msg_np = device::malloc<int>(9);
+        send.h_msg_np = host::malloc<int>(9);
 
         // Receive buffer
-        recv.buffer = managed::malloc<int>( edge_tiles );
+        recv.buffer = device::malloc<int>( edge_tiles );
         device::zero( recv.buffer, edge_tiles );
         
-        recv.msg_np = managed::malloc<int>(9);
+        recv.d_msg_np = device::malloc<int>(9);
+        recv.h_msg_np = host::malloc<int>(9);
 
         // Only required when not receiving messages from all neighbors
         device::zero( recv.buffer, edge_tiles );
@@ -453,14 +453,18 @@ class ParticleSort : public ParticleSortData {
      * 
      */
     ~ParticleSort() {
-        managed::free( send.msg_np );
-        managed::free( recv.msg_np );
         
-        managed::free( recv.buffer );
+        device::free( send.d_msg_np );
+        device::free( recv.d_msg_np );
+
+        host::free( send.h_msg_np );
+        host::free( recv.h_msg_np );
+
+        device::free( recv.buffer );
 
         device::free( npt );
         device::free( nidx );
-        managed::free( new_np );
+        device::free( new_np );
         device::free( idx );
     }
 
@@ -602,7 +606,7 @@ class ParticleMessage {
                 MPI_Cancel( &tmp );
             }
         }
-        managed::free( buffer );
+        device::free( buffer );
     }
 
     /**
@@ -616,7 +620,7 @@ class ParticleMessage {
         if ( total_size > max_size ) {
             device::free( buffer );
             max_size = roundup<1048576>(total_size);
-            buffer = managed::malloc<uint8_t>( max_size );
+            buffer = device::malloc<uint8_t>( max_size );
         }
     }
 
@@ -798,6 +802,13 @@ class ParticleMessage {
         // Tile information
         np = device::malloc<int>( bsize );
         offset = device::malloc<int>( bsize );
+
+        // Check shared memory (for update_tile_info)
+        if ( block::shared_mem_size() < bsize * sizeof(int) ) {
+            std::cerr << "(*error*) Tile size too large " << nx << " (plus guard cells)\n";
+            std::cerr << "(*error*) Insufficient local memory (" << block::shared_mem_size() << " B) for Particles object.\n";
+            abort();
+        }
 
         // Initially empty
         device::zero( np, bsize );

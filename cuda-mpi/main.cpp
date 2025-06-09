@@ -918,8 +918,8 @@ void test_weibel( std::string param ) {
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 
     if ( mpi::world_root() ) {
-        std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-                  << ", Performance: " << perf << " GPart/s\n";
+        std::cout << "Elapsed time: " << timer.elapsed(timer::s) << " s\n";
+        std::cout << "Performance: " << perf << " GPart/s\n";
     }   
 
 }

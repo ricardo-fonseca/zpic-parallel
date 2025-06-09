@@ -25,17 +25,11 @@ error() {
 usage() {
 cat << _EOM
 Usage:
-$0 [-h] [test_name]
--h          Print this message and exit.
-test_name   Name of test to run, defaults to "weibel" (currently ignored)
+$0 [-h] [test options]
+-h            Print this message and exit.
+test options  Passed to binary
 _EOM
 }
-
-if [ $# -gt 1 ]; then
-    error "Invalid number of arguments"
-    usage
-    exit 1
-fi
 
 if [ "$1" = "-h" ]; then
     usage
@@ -53,15 +47,15 @@ fi
 
 info "\nRunning warm up test..."
 
-if ! ${BIN} $1; then
-    error "Test $1 failed, aborting."
+if ! ${BIN} "$@"; then
+    error "Test $@ failed, aborting."
     exit 1
 fi
 
 info "\nAveraging 10 measurements..."
 for i in {1..10}; do
-    ${BIN} $1
-done | awk '/benchmark/ { \
+    ${BIN} "$@"
+done | awk '/Performance/ { \
     n++; x=$2; b=a+(x-a)/n; q+=(x-a)*(x-b); a=b; \
     printf("[%2d/10] %s\n",n,$0) \
     } END {print "avg:",a,"GPart/s, dev:", 100 * sqrt(q/n)/a, "%"}'

@@ -684,7 +684,7 @@ class Message {
         active( none ), request( MPI_REQUEST_NULL ), 
         comm( comm ), max_count( max_count )
     {
-        buffer = managed::malloc<T>( max_count );
+        buffer = device::malloc<T>( max_count );
     }
 
     /**
@@ -696,7 +696,7 @@ class Message {
             MPI_Request tmp = request;
             MPI_Cancel( &tmp );
         }
-        managed::free( buffer );
+        device::free( buffer );
     }
 
     /**

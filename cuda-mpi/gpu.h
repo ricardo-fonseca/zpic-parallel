@@ -631,7 +631,6 @@ namespace device {
             exit(1);
         }
     }
-    
 
     /**
      * @brief Atomic fetch-add operation. Returns the value before the operation.
@@ -827,7 +826,7 @@ namespace device {
      * 
      * @note This class simplifies the creation of scalar variables in unified
      *       memory. Note that getting the variable in the host (`get()`) will
-     *       always trigger a device synchronization.
+     *       always cause a memcpy from device to host.
      * 
      * @tparam T    Variable datatype
      */
@@ -844,7 +843,7 @@ namespace device {
          * 
          */
         Var() {
-            auto err = cudaMallocManaged( &data, sizeof(T) );
+            auto err = cudaMalloc( &data, sizeof(T) );
             CHECK_ERR( err, "Unable to allocate managed memory for device::Var" );
         }
     
@@ -865,18 +864,22 @@ namespace device {
          */
         ~Var() {
             auto err = cudaFree( data );
-            CHECK_ERR( err, "Unable to free managed memory for device::Var" );
+            CHECK_ERR( err, "Unable to free memory for device::Var" );
         }
     
         __host__
         /**
          * @brief Sets the value of the Var<T> object
          * 
+         * @note Data is copied to device using cudaMemcpyAsync()
+         * 
          * @param val       value to set
          * @return T const  returns same value
          */
         T const set( const T val ) {
-            *data = val;
+            auto err = cudaMemcpyAsync( data, &val, sizeof(T), cudaMemcpyHostToDevice );
+            CHECK_ERR( err, "Failed to copy value to device on device::Var.set()" );
+
             return val;
         }
     
@@ -895,15 +898,18 @@ namespace device {
         /**
          * @brief Returns value of variable
          * 
-         * @warning Device operations will be synchcronized first.
+         * @warning This will always perform a cudaMemcpy()
          * 
          * @return T const 
          */
         T const get() const { 
-            // Ensure any kernels still running terminate
-            auto err = cudaDeviceSynchronize();
-            CHECK_ERR( err, "Failed to synchronize device on device::Var.get()" );
-            return *data;
+            
+            T val;
+
+            auto err = cudaMemcpy( &val, data, sizeof(T), cudaMemcpyDeviceToHost );
+            CHECK_ERR( err, "Failed to copy data from device on device::Var.get()" );
+
+            return val;
         }
     
         __host__ 
@@ -1055,7 +1061,27 @@ namespace host {
     T * zero( T * const __restrict__ data, unsigned int const size ) {
         return (T *) std::memset( (void *) data, 0, size * sizeof(T) );
     }
-    
+
+    /**
+     * @brief Copies data from host to device
+     * 
+     * @tparam T        Data type
+     * @param d_out     Output device buffer
+     * @param h_in      Input host buffer
+     * @param size      Buffer size (number of elements)
+     */
+    template< typename T >
+    void memcpy_todevice( T * const __restrict__ d_out, T const * const __restrict__ h_in, size_t const size) {
+        
+        auto err = cudaMemcpy( d_out, h_in, size * sizeof(T), cudaMemcpyHostToDevice );
+        if ( err != cudaSuccess ) {
+            std::cerr << "(*error*) Unable to copy " << size << " elements of type " << typeid(T).name() << " from host to device.\n";
+            std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+            cudaDeviceReset();
+            exit(1);
+        }
+    }
+
 } // end of namespace host
 
 #endif

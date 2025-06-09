@@ -199,7 +199,7 @@ void div_corr_x_sum (
  */
 void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
 
-    double  * __restrict__ sendbuf = managed::malloc<double>( 2 * E.local_nx.y );
+    double  * __restrict__ sendbuf = device::malloc<double>( 2 * E.local_nx.y );
 
     const double dx_dy = (double) dx.x / (double) dx.y;
 
@@ -224,6 +224,9 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         MPI_Comm newcomm;
         MPI_Comm_split( E.part.get_comm(), color, key, &newcomm );
         
+        // Ensure all device data is up to date
+        device::sync();
+
         // Add contribution from all nodes to the right
         MPI_Exscan( sendbuf, recvbuf, 2 * E.local_nx.y, MPI_DOUBLE, MPI_SUM, newcomm );
 

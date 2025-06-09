@@ -112,7 +112,8 @@ private:
     double * d_energy;
 
     /// @brief Total number of particles moved
-    uint64_t * d_nmove;
+    /// @note CUDA gets confused with uint64_t, don't use it
+    unsigned long long * d_nmove;
 
     /**
      * @brief Shift particle positions due to moving window motion
@@ -154,7 +155,7 @@ private:
 
 public:
 
-     /// @brief Species name
+    /// @brief Species name
     const std::string name;
 
      /// @brief  Mass over charge ratio
@@ -410,8 +411,8 @@ public:
      * 
      * @return uint64_t
      */
-    uint64_t get_nmove() const {
-        uint64_t nmove;
+    unsigned long long get_nmove() const {
+        unsigned long long nmove;
         device::memcpy_tohost( &nmove, d_nmove, 1 );
 
         return nmove;

@@ -11,10 +11,10 @@
 /**
  * Optimized parameters for NVIDIA A100
  */
-#define opt_bnd_check_block 1024
-#define opt_update_tile_info_block 64
-#define opt_copy_out_block 32
-#define opt_copy_in_block 1024
+constexpr int opt_bnd_check_block        = 1024;
+constexpr int opt_update_tile_info_block = 1024;
+constexpr int opt_copy_out_block         = 1024;
+constexpr int opt_copy_in_block          = 1024;
 
 namespace kernel {
 
@@ -144,21 +144,19 @@ void ParticleSort::exchange_np() {
     // Wait for receives to complete
     MPI_Waitall( 9, recv.requests, MPI_STATUSES_IGNORE );
 
-    // update send.msg_np[] and recv.msg_np[]
+    // update send.d_msg_np[] and recv.d_msg_np[]
     // This is avoids copying send.buffer and recv.buffer to host
     dim3 grid( 3, 3 );
     auto block = 32;
     kernel::update_msg_np <<< grid, block >>> ( 
-        send.buffer, send.msg_np, 
-        recv.buffer, recv.msg_np,
+        send.buffer, send.d_msg_np, 
+        recv.buffer, recv.d_msg_np,
         ntiles
     );
 
     // Wait for sends to complete
     MPI_Waitall( 9, send.requests, MPI_STATUSES_IGNORE );
 
-    // Ensure kernel::update_msg_np has completed     
-    device::sync();
 }
 
 
@@ -678,6 +676,10 @@ __global__
 /**
  * @brief Recalculates particle tile offset, leaving room for additional particles
  * 
+ * @note The routine must be called using a single block so that all threads
+ *       involved in the calculation have access to the same shared memory 
+ *       block
+ * 
  * @note The number of particles in each tile is set to 0
  * 
  * @param tmp_part      (out) Particle buffer
@@ -695,17 +697,20 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
     // New number of particles per tile
     const int * __restrict__ new_np = sort.new_np;
 
-    // Include ghost tiles in calculations
-    const auto ntiles_all   = part::all_tiles( tmp_part.ntiles );
-    const auto ntiles_msg   = part::msg_tiles( tmp_part.ntiles );
-    const auto ntiles_local = part::local_tiles( tmp_part.ntiles );
+    // Include message tiles in calculations
+    const auto ntiles_local = tmp_part.ntiles.x * tmp_part.ntiles.y;
+    const auto ntiles_msg   = 2 * tmp_part.ntiles.x + 2 * tmp_part.ntiles.y + 4;
+    const auto ntiles_all   = ntiles_local + ntiles_msg;
 
     /// @brief [shared] Sum of previous warp
     __shared__ int _prev; _prev = 0;
     /// @brief [shared] Temporary results from each warp
     __shared__ int _tmp[ MAX_WARPS ];
 
-    __shared__ unsigned int msg_tile_off[9];
+    /// @brief [shared] message tile offsets
+    /// @note Values are calculated at ParticleSort()
+    __shared__ int msg_tile_off[9];
+
     msg_tile_off[0] = 0;
     msg_tile_off[1] = 1;
     msg_tile_off[2] = 1 +   tmp_part.ntiles.x;
@@ -715,27 +720,21 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
     msg_tile_off[6] = 2 +   tmp_part.ntiles.x + 2*tmp_part.ntiles.y;
     msg_tile_off[7] = 3 +   tmp_part.ntiles.x + 2*tmp_part.ntiles.y;
     msg_tile_off[8] = 3 + 2*tmp_part.ntiles.x + 2*tmp_part.ntiles.y;
-   
+    
 
-    int * __restrict__ offset = tmp_part.offset;
-    int * __restrict__ np     = tmp_part.np;
+    int * __restrict__ offset = block::shared_mem<int>();
 
     // Initialize offset[] with the new number of particles
     if ( extra != nullptr ) {
-        // extra array only includes data for local tiles
-        for( auto i = block_thread_rank(); i < ntiles_local; i += block_num_threads() ) {
-            offset[i] = new_np[i] + extra[i];
-            np[i] = 0;
-        }
-        
-        for( auto i = ntiles_local + block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
+        for( auto i = block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
             offset[i] = new_np[i];
-            np[i] = 0;
+            // extra array only includes data for local tiles
+            if ( i < ntiles_local ) offset[i] += extra[i];
         }
+
     } else {
         for( auto i = block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
             offset[i] = new_np[i];
-            np[i] = 0;
         }
     }
 
@@ -776,12 +775,18 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
 
         // Some tiles (corner) will receive particles from multiple messages
         // so we need to use an atomic operation
-        device::atomic_fetch_add( & offset[ target_tid ], recv_buffer[ msg_idx ] );
+        block::atomic_fetch_add( & offset[ target_tid ], recv_buffer[ msg_idx ] );
     }
-
     block_sync();
 
-    // Block-wide exclusive scan
+    // Block-wide exclusive scan using warp functions
+
+    // Note: although it is possible for some threads to not participate in the
+    //       final iteration (if ntiles_all is not a multiple of WARP_SIZE) there
+    //       is no problem in using __syncthreads() or warp functions because these
+    //       threads will not be active anymore and therefore will be ignored in
+    //       these functions
+    
     for( int i = block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
         auto s = offset[i];
         auto v = warp::exscan_add( s );
@@ -809,7 +814,15 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
         block_sync();
     }
 
-    // Total number of particles
+    // Copy result to device memory and set np to 0
+    int * __restrict__ tmp_np  = tmp_part.np;
+    int * __restrict__ tmp_off = tmp_part.offset;
+    for( int i = block_thread_rank(); i < ntiles_all; i += block_num_threads() ) {
+        tmp_np [i] = 0;
+        tmp_off[i] = offset[i];
+    }
+
+    // Return total number of particles
     if ( block_thread_rank() == 0 ) {
         dev_np[0] = _prev;
     }
@@ -839,7 +852,9 @@ uint32_t update_tile_info(
     const auto ntiles_all   = part::all_tiles( tmp.ntiles );
     auto block = ( ntiles_all < opt_update_tile_info_block ) ? ntiles_all : opt_update_tile_info_block;
 
-    kernel::update_tile_info <<<1,block>>> ( tmp, sort, sort.recv.buffer, extra, dev_np.ptr() );
+    size_t shm_size = ntiles_all * sizeof(int);
+    block::set_shmem_size( kernel::update_tile_info, shm_size );
+    kernel::update_tile_info <<< 1, block, shm_size >>> ( tmp, sort, sort.recv.buffer, extra, dev_np.ptr() );
 
     return dev_np.get();
 }
@@ -1578,10 +1593,13 @@ void Particles::irecv_msg( ParticleSort &sort, ParticleMessage &recv ) {
     /// @brief Total size (bytes) of data to be received
     uint32_t total_size = 0;
 
+    // Copy msg_np from device memory
+    device::memcpy_tohost( sort.recv.h_msg_np, sort.recv.d_msg_np, 9 );
+
     // Set individual message sizes:
     for( int i = 0; i < 9; i++) {
         if ( i != 4 ) {
-            recv.size[i] = sort.recv.msg_np[i] * particle_size();
+            recv.size[i] = sort.recv.h_msg_np[i] * particle_size();
             total_size += recv.size[i];
         } else {
             recv.size[i] = 0;
@@ -1717,24 +1735,28 @@ void Particles::isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &
     /// @brief Total number of particles being sent
     uint32_t send_np = 0;
 
+    // Copy msg_np from device memory
+    device::memcpy_tohost( sort.send.h_msg_np, sort.send.d_msg_np, 9 );
+
     // Get offsets and check send buffer size
     for( int i = 0; i < 9; i++ ) {
         if (i != 4) {
-            send.size[i] = sort.send.msg_np[i] * particle_size();
-            send_np += sort.send.msg_np[i];
+            send.size[i] = sort.send.h_msg_np[i] * particle_size();
+            send_np += sort.send.h_msg_np[i];
         } else {
-            sort.send.msg_np[i] = 0;    // this should not be necessary
             send.size[i] = 0;
         }
     }
 
-    // Check if msg buffer is large enough
-    send.check_buffer( send_np * particle_size() );
+    if ( send_np > 0 ) {
+        // Check if msg buffer is large enough
+        send.check_buffer( send_np * particle_size() );
 
-    // Pack data
-    dim3 grid( part::msg_tiles( tmp.ntiles ) );
-    dim3 block( 256 );
-    kernel::pack_msg <<< grid, block >>> ( tmp, send.buffer, sort.send.msg_np );
+        // Pack data
+        dim3 grid( part::msg_tiles( tmp.ntiles ) );
+        dim3 block( 256 );
+        kernel::pack_msg <<< grid, block >>> ( tmp, send.buffer, sort.send.d_msg_np );
+    }
 
     // Start sending messages
     send.isend();
@@ -1907,7 +1929,7 @@ void Particles::unpack_msg( ParticleSort &sort,
         kernel::unpack_msg <<< grid, block, shm_size >>> ( 
             *this,                      // Particle data
             recv.buffer,                // Message receive buffer (all messages)
-            sort.recv.msg_np,           // Number of received particles per message
+            sort.recv.d_msg_np,         // Number of received particles per message
             sort.recv.buffer            // Number of received particles per tile
         );
     }
