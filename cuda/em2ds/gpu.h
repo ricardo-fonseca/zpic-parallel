@@ -510,6 +510,13 @@ namespace device {
         return cudaDeviceSynchronize();
     }
 
+
+    __host__
+    [[noreturn]] inline void exit(int status) {
+        cudaDeviceReset();
+        exit( status );
+    }
+
     /**
      * @brief   Allocate memory on device
      * 

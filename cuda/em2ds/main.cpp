@@ -1,0 +1,229 @@
+// For getopt
+#include <unistd.h>
+
+#include <iostream>
+#include <fstream>
+
+#include "gpu.h"
+#include "utils.h"
+#include "grid.h"
+
+#include "fft.h"
+
+namespace kernel {
+
+__global__
+void set_charge( 
+    float * const __restrict__ d_buffer, 
+    uint2 const nx, uint2 const ext_nx, 
+    float2 dx, float2 x0, float r ) 
+{
+    const uint2  tile_idx = { blockIdx.x, blockIdx.y };
+    const int    tile_id  = tile_idx.y * gridDim.x + tile_idx.x;
+    const size_t tile_off = tile_id * roundup4( ext_nx.x * ext_nx.y );
+    auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
+
+    for( auto idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
+        const auto iy =  idx / nx.x; 
+        const auto ix =  idx % nx.x;    
+
+        float x = ( tile_idx.x * nx.x + ix ) * dx.x;
+        float y = ( tile_idx.y * nx.y + iy ) * dx.y;
+
+        tile_data[ iy * ext_nx.x + ix ] = (x-x0.x)*(x-x0.x) + (y-x0.y) * (y-x0.y) <= r*r; 
+    }
+}
+
+__global__
+/**
+ * @brief CUDA kernel for Poisson equation
+ * 
+ * @note Kernel must be called with grid(dims.y)
+ * 
+ * @param data 
+ * @param dims 
+ * @param dk 
+ */
+void poisson(
+        fft::complex64 * const __restrict__ data, uint2 const dims, float2 const dk
+    )
+{
+    const int iy   = blockIdx.x;  // Line
+    const float ky = ((iy < dims.y/2) ? iy : (iy - int(dims.y)) ) * dk.y;
+
+    const int stride = dims.x;
+    for( auto ix = block_thread_rank(); ix < dims.x; ix += block_num_threads() ) {
+        auto idx = iy * stride + ix;
+
+        const float kx = ix * dk.x;
+        const float k2 = kx*kx + ky*ky;
+
+        const float scale = (k2 > 0)? 1.f / k2 : 0.;
+
+        data[ idx ] *= scale;
+    }
+}
+
+}
+
+/**
+ * @brief Save a contiguos 2D complex grid on the device to disk
+ * 
+ * @param data  Pointer to data
+ * @param dims  Data dimensions
+ * @param name  Data name (for file metadata)
+ * @param file  File name
+ */
+void save_device_complex( fft::complex64 * data, uint2 dims, std::string name, std::string file ) {
+
+    std::complex<float> * buffer = host::malloc< std::complex<float> >( dims.x * dims.y );
+
+    device::memcpy_tohost( buffer, 
+        reinterpret_cast< std::complex<float> * >(data), 
+        dims.x * dims.y );
+    
+    uint64_t grid_dims[] = {dims.x, dims.y};
+    zdf::save_grid( buffer, 2, grid_dims, name, file );
+
+    host::free( buffer );
+}
+
+void test_grid( void ) {
+    
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    const float2 box{1.0, 1.0};
+    const uint2 ntiles{ 16, 16 };
+    const uint2 nx    { 16, 16 };
+
+    uint2 in_dims{ ntiles.x * nx.x, ntiles.y * nx.y };
+    float2 dx{ box.x / in_dims.x, box.y / in_dims.y };
+
+    bnd<unsigned int> gc;
+    gc.x = {0,1};
+    gc.y = {0,1};
+
+    std::cout << "Allocating arrays..." << '\n';
+
+    grid<float> charge( ntiles, nx, gc );
+    grid<float> potential( ntiles, nx, gc );
+
+    dim3 grid( ntiles.x, ntiles.y );
+    dim3 block( 64 );
+
+    std::cout << "Setting charge..." << '\n';
+
+    kernel::set_charge <<< grid, block >>> (
+        charge.d_buffer + charge.offset, nx, charge.ext_nx,
+        dx, float2{ 0.25, 0.25 }, 0.1
+    );
+
+    std::cout << "Saving charge to disk..." << '\n';
+    charge.save("charge.zdf");
+
+    fft::plan plan_r2c( in_dims, fft::type::r2c );
+    fft::plan plan_c2r( in_dims, fft::type::c2r );
+    
+    uint2 out_dims = plan_r2c.output_dims();
+    fft::complex64 * fpotential = device::malloc<fft::complex64>( out_dims.x * out_dims.y );
+
+    plan_r2c.transform( charge, fpotential );
+
+    save_device_complex( fpotential, out_dims, "F(charge)", "charge_k.zdf" );
+
+    kernel::poisson <<< out_dims.y, 64 >>> (
+        fpotential, out_dims, fft::dk( box )
+    );
+
+    save_device_complex( fpotential, out_dims, "F(potential)", "potential_k.zdf" );
+
+    plan_c2r.transform( fpotential, charge );
+
+    std::cout << "Saving potential to disk..." << '\n';
+    charge.save("potential.zdf");
+
+    device::free( fpotential );
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;       
+}
+
+/**
+ * @brief Initialize GPU device
+ * 
+ */
+void gpu_init( ) {
+
+    // Reset current device
+    deviceReset();
+}
+
+/**
+ * @brief Print information about the environment
+ * 
+ */
+void info( void ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Environment\n";
+    std::cout << ansi::reset;
+
+    char name[HOST_NAME_MAX + 1];
+    gethostname(name, HOST_NAME_MAX);
+
+    std::cout << "GPU device on " << name << ":\n";
+    print_gpu_info();
+}
+
+void cli_help( char * argv0 ) {
+    std::cerr << "Usage: " << argv0 << " [-h] [-s] [-t name] [-n parameter]\n";
+
+    std::cerr << '\n';
+    std::cerr << "Options:\n";
+    std::cerr << "  -h                  Display this message and exit\n";
+    std::cerr << "  -s                  Silence information about host/CUDA device\n";
+    std::cerr << "  -t <name>           Name of the test to run. Defaults to 'weibel'\n";
+    std::cerr << "  -p <parameters>     Test parameters (string). Purpose will depend on the \n";
+    std::cerr << "                      test chosen. Defaults to '2,2,16,16'\n";
+    std::cerr << '\n';
+}
+
+int main( int argc, char *argv[] ) {
+
+    // Initialize the gpu device
+    gpu_init();
+
+    // Process command line arguments
+    int opt;
+    int silent = 0;
+    std::string test = "weibel";
+    std::string param = "16,16";
+    while ((opt = getopt(argc, argv, "ht:p:s")) != -1) {
+        switch (opt) {
+            case 't':
+            test = optarg;
+            break;
+        case 'p':
+            param = optarg;
+            break;
+        case 's':
+            silent = 1;
+            break;
+        case 'h':
+        case '?':
+            cli_help( argv[0] );
+            device::exit(0);
+        default:
+            cli_help( argv[0] );    
+            device::exit(1);
+        }
+    }
+    
+    // Print information about the environment
+    if ( ! silent ) info();    
+
+    test_grid();
+}

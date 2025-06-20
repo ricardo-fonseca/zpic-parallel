@@ -3,6 +3,13 @@
 
 #include <ostream>
 
+/**
+ * @brief 2D Boundary information
+ * 
+ * @note Data is to be addressed using e.g. bnd.y.lower
+ * 
+ * @tparam T    Typename to use (e.g. int)
+ */
 template< typename T >
 class pair {
     public:
