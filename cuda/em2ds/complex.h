@@ -251,7 +251,7 @@ class complex64 : public float2 {
 
     __host__ __device__
     inline constexpr friend complex64 conj( const complex64& z ) {
-        return complex64( z.x, -z.y);
+        return complex64( z.x, -z.y );
     }
 
     __host__ __device__

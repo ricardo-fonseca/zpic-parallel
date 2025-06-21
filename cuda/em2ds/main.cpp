@@ -3,10 +3,12 @@
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
 
 #include "gpu.h"
 #include "utils.h"
 #include "grid.h"
+#include "basic_grid.h"
 
 #include "fft.h"
 
@@ -66,28 +68,6 @@ void poisson(
 
 }
 
-/**
- * @brief Save a contiguos 2D complex grid on the device to disk
- * 
- * @param data  Pointer to data
- * @param dims  Data dimensions
- * @param name  Data name (for file metadata)
- * @param file  File name
- */
-void save_device_complex( fft::complex64 * data, uint2 dims, std::string name, std::string file ) {
-
-    std::complex<float> * buffer = host::malloc< std::complex<float> >( dims.x * dims.y );
-
-    device::memcpy_tohost( buffer, 
-        reinterpret_cast< std::complex<float> * >(data), 
-        dims.x * dims.y );
-    
-    uint64_t grid_dims[] = {dims.x, dims.y};
-    zdf::save_grid( buffer, 2, grid_dims, name, file );
-
-    host::free( buffer );
-}
-
 void test_grid( void ) {
     
     std::cout << ansi::bold;
@@ -127,28 +107,122 @@ void test_grid( void ) {
     fft::plan plan_c2r( in_dims, fft::type::c2r );
     
     uint2 out_dims = plan_r2c.output_dims();
-    fft::complex64 * fpotential = device::malloc<fft::complex64>( out_dims.x * out_dims.y );
+    basic_grid<std::complex<float>> fpotential( out_dims );
 
     plan_r2c.transform( charge, fpotential );
 
-    save_device_complex( fpotential, out_dims, "F(charge)", "charge_k.zdf" );
+    fpotential.name = "F(charge)";
+    fpotential.save( "charge_k.zdf" );
 
     kernel::poisson <<< out_dims.y, 64 >>> (
-        fpotential, out_dims, fft::dk( box )
+        reinterpret_cast< fft::complex64 * > ( fpotential.d_buffer ),
+        out_dims, fft::dk( box )
     );
 
-    save_device_complex( fpotential, out_dims, "F(potential)", "potential_k.zdf" );
+    fpotential.name = "F(potential)";
+    fpotential.save( "potential_k.zdf" );
 
     plan_c2r.transform( fpotential, charge );
 
     std::cout << "Saving potential to disk..." << '\n';
     charge.save("potential.zdf");
 
-    device::free( fpotential );
-
     std::cout << ansi::bold;
     std::cout << "Done!\n";
     std::cout << ansi::reset;       
+}
+
+#include "emf.h"
+#include "laser.h"
+
+#include "timer.h"
+
+void test_laser( ) {
+
+    std::cout << ansi::bold
+              << "Running " << __func__ << "()..."
+              << ansi::reset << std::endl;
+
+    uint2 ntiles{ 64, 16 };
+    uint2 nx{ 16, 16 };
+
+    float2 box{ 20.48, 25.6 };
+    double dt{ 0.014 };
+
+    EMF emf( ntiles, nx, box, dt );
+
+    auto save_emf = [ & emf ]( ) {
+        emf.save( emf::e, fcomp::x );
+        emf.save( emf::e, fcomp::y );
+        emf.save( emf::e, fcomp::z );
+
+        emf.save( emf::b, fcomp::x );
+        emf.save( emf::b, fcomp::y );
+        emf.save( emf::b, fcomp::z );
+
+        emf.save( emf::fet, fcomp::x );
+        emf.save( emf::fet, fcomp::y );
+        emf.save( emf::fet, fcomp::z );
+
+        emf.save( emf::fb, fcomp::x );
+        emf.save( emf::fb, fcomp::y );
+        emf.save( emf::fb, fcomp::z );
+
+    };
+
+/*
+    Laser::PlaneWave laser;
+    laser.start = 10.2;
+    laser.fwhm = 4.0;
+    laser.a0 = 1.0;
+    laser.omega0 = 10.0;
+*/
+
+    Laser::Gaussian laser;
+    laser.start = 10.2;
+    laser.fwhm = 4.0;
+    laser.a0 = 1.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 1.5;
+    laser.focus = 20.48;
+    laser.axis = 12.8;
+
+    laser.sin_pol = 0;
+    laser.cos_pol = 1;
+
+    std::cout << "Adding laser...\n";
+    laser.add( emf );
+
+    save_emf();
+
+    int niter = 20.48 / dt / 2;
+    // int niter{ 10 };
+
+    std::cout << "Starting test - " << niter << " iterations...\n";
+
+    Timer t0("test");
+
+    t0.start();
+
+    for( int i = 0; i < niter; i ++) {
+        emf.advance( );
+    }
+
+    t0.stop();
+    
+    save_emf();
+
+    std::ostringstream buffer;
+    buffer << niter << " iterations: ";
+
+    t0.report( buffer.str() );
+
+//    save_emf();
+
+    std::cout << ansi::bold
+              << "Done!\n"
+              << ansi::reset;   
+
 }
 
 /**
@@ -225,5 +299,6 @@ int main( int argc, char *argv[] ) {
     // Print information about the environment
     if ( ! silent ) info();    
 
-    test_grid();
+    // test_grid();
+    test_laser();
 }

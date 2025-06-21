@@ -639,6 +639,18 @@ namespace device {
         }
     }
 
+    template< typename T >
+    void memcpy( T * const __restrict__ d_out, T const * const __restrict__ d_in, size_t const size) {
+        
+        auto err = cudaMemcpy( d_out, d_in, size * sizeof(T), cudaMemcpyDeviceToDevice );
+        if ( err != cudaSuccess ) {
+            std::cerr << "(*error*) Unable to copy " << size << " elements of type " << typeid(T).name() << " from device to device.\n";
+            std::cerr << "(*error*) code: " << err << ", reason: " << cudaGetErrorString(err) << "\n";
+            cudaDeviceReset();
+            exit(1);
+        }
+    }
+
     /**
      * @brief Atomic fetch-add operation. Returns the value before the operation.
      * 

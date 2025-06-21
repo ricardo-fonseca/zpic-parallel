@@ -14,7 +14,7 @@
 #include <string>
 
 namespace emf {
-    enum field  { e, b };
+    enum field  { e, b, fe, fet, fb };
 
     namespace bc {
         enum type { none = 0, periodic, pec, pmc };
@@ -41,9 +41,6 @@ class EMF {
 
     /// @brief Device buffer for field energy calculations
     double * d_energy;
-
-
-    fft::plan * fft_backward;
 
     /**
      * @brief Move simulation window if needed
@@ -72,6 +69,8 @@ class EMF {
     basic_grid3<std::complex<float>> * fEt;
     /// @brief Fourier transform of Magnetic field
     basic_grid3<std::complex<float>> * fB;
+
+    fft::plan * fft_backward;
 
     /**
      * @brief Construct a new EMF object

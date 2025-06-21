@@ -54,17 +54,19 @@ void lon_x(
     fft::complex64 * const __restrict__ data, 
     uint2 dims, float2 dk ) {
     
-    const int j = blockIdx.x;
-    const float ky = ((j < dims.y/2) ? j : (j - dims.y) ) * dk.y;
+    const int iy = blockIdx.x;
+    const float ky = ((iy < dims.y/2) ? iy : (iy - int(dims.y)) ) * dk.y;
 
-    fft::complex64 * const __restrict__ fld_x = & data[ j * dims.x +                   0 ];
-    fft::complex64 * const __restrict__ fld_y = & data[ j * dims.x +     dims.x * dims.y ];
-    
-    // fft::complex64 * const __restrict__ fld_z = & data[ j * dims.x + 2 * dims.x * dims.y ];
+    fft::complex64 * const __restrict__ fld_x = & data[               0 ];
+    fft::complex64 * const __restrict__ fld_y = & data[ dims.x * dims.y ];
+    // fft::complex64 * const __restrict__ fld_z = & data[ 2 * dims.x * dims.y ];
 
-    for( int i = block_thread_rank(); i < dims.x; i += block_num_threads() ) {
-        const float kx = i * dk.x;
-        fld_x[i] = - ky * fld_y[i] / kx;
+    const int stride = dims.x;
+    for( auto ix = block_thread_rank(); ix < dims.x; ix += block_num_threads() ) {
+        auto idx = iy * stride + ix;
+
+        const float kx = ix * dk.x;
+        fld_x[idx] = ( ix > 0 ) ? - ky * fld_y[idx] / kx : 0.f;
     }
 }
 
@@ -112,6 +114,51 @@ int Laser::Pulse::validate() {
 
     return 0;
 }
+
+/**
+ * @brief Adds a new laser pulse onto an EMF object
+ * 
+ * @param emf   EMF object
+ * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ */
+int Laser::Pulse::add( EMF & emf ) {
+
+    vec3grid<float3> tmp_E( emf.E -> ntiles, emf.E-> nx, emf.E -> gc );
+    vec3grid<float3> tmp_B( emf.B -> ntiles, emf.B-> nx, emf.B -> gc );
+
+    // Get laser fields
+    int ierr = launch( tmp_E, tmp_B, emf.box );
+
+    // Add laser to simulation
+    if ( ! ierr ) {
+
+        // Add to k-space fields
+        fft::plan fft( emf.E -> global_nx, fft::r2c, 3 );
+        basic_grid3<std::complex<float>> fft_tmp( fft.output_dims() );
+        const float2 dk = fft::dk( emf.box );
+
+        Filter::Lowpass filter( make_float2( 0.5, 0.5 ) );
+
+        // transform tmp_E and add to fEt
+        fft.transform( tmp_E, fft_tmp );
+        lon_x( fft_tmp, dk );
+        filter.apply( fft_tmp );
+        emf.fEt -> add( fft_tmp );
+
+        emf.fft_backward -> transform( fft_tmp, tmp_E );
+        emf.E -> add( tmp_E );
+
+        // transform tmp_B and add to fB 
+        fft.transform( tmp_B, fft_tmp );
+        lon_x( fft_tmp, dk );
+        filter.apply( fft_tmp );
+        emf.fB  -> add( fft_tmp );
+
+        emf.fft_backward -> transform( fft_tmp, tmp_B );
+        emf.B -> add( tmp_B );
+    }
+    return ierr;
+};
 
 
 namespace kernel {
@@ -273,23 +320,20 @@ void gaussian(
         const auto iy = idx / nx.x; 
 
         const float z   = ( ix0 + ix ) * dx.x;
-        const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
-
         const float r   = (iy0 + iy ) * dx.y - beam.axis;
-        const float r_2 = (iy0 + iy + 0.5 ) * dx.y - beam.axis;
 
-        const float lenv   = amp * lon_env( beam, z );
-        const float lenv_2 = amp * lon_env( beam, z_2 );
+        const float fld    = amp * lon_env( beam, z ) * 
+                             gauss_phase( beam.omega0, beam.W0, z - beam.focus, r );
 
         tile_E[ ix + iy * ystride ] = make_float3(
             0,
-            +lenv * gauss_phase( beam.omega0, beam.W0, z - beam.focus, r_2 ) * beam.cos_pol,
-            +lenv * gauss_phase( beam.omega0, beam.W0, z - beam.focus, r   ) * beam.sin_pol
+            + fld * beam.cos_pol,
+            + fld * beam.sin_pol
         );
         tile_B[ ix + iy * ystride ] = make_float3(
             0,
-            -lenv_2 * gauss_phase( beam.omega0, beam.W0, z_2 - beam.focus, r   ) * beam.sin_pol,
-            +lenv_2 * gauss_phase( beam.omega0, beam.W0, z_2 - beam.focus, r_2 ) * beam.cos_pol
+            - fld * beam.sin_pol,
+            + fld * beam.cos_pol
         );
     }
 }
@@ -333,9 +377,6 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
         dx
     );
 
-    E.copy_to_gc( );
-    B.copy_to_gc( );
-
     return 0;
 }
 
@@ -345,9 +386,7 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
  */
 int Laser::Gaussian::lon_x( basic_grid3<std::complex<float>> & fld, const float2 dk ) {
 
-    dim3 block(64);
-    dim3 grid(fld.dims.y);
-    kernel::lon_x <<< grid, block >>> ( 
+    kernel::lon_x <<< fld.dims.y, 64 >>> ( 
         reinterpret_cast< fft::complex64 * > (fld.d_buffer),
         fld.dims, dk );
 

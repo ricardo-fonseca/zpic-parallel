@@ -175,7 +175,7 @@ void Current::advance() {
     // Process_bc();
 
     // Calculate fJ
-    fft_forward -> transform( *J, reinterpret_cast< fft::complex64 *>( fJ -> d_buffer ) );
+    fft_forward -> transform( *J, *fJ );
 
     // Apply filtering
     filter -> apply( *fJ );

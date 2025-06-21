@@ -47,13 +47,16 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     B -> name = "Magnetic field";
 
     // Create FFT plan
-    uint2 dims{ nx.x * ntiles.x, nx.y * ntiles.y };
-    fft_backward = new fft::plan( dims, fft::type::c2r );
+    fft_backward = new fft::plan( E -> global_nx, fft::type::c2r, 3 );
 
-    auto fdims = fft_backward -> output_dims();
+    auto fdims = fft_backward -> input_dims();
     fE  = new basic_grid3< std::complex<float> >( fdims );
     fEt = new basic_grid3< std::complex<float> >( fdims );
     fB  = new basic_grid3< std::complex<float> >( fdims );
+
+    fE  -> name = "F(E)";
+    fEt -> name = "F(Et)";
+    fB  -> name = "F(B)";
 
     // Zero fields
     E -> zero();
@@ -89,21 +92,22 @@ __global__
  * @param dk    k-space cell size
  * @param dt    Time step
  */
-void advance_psatd( fft::complex64 * const __restrict__ fEt, 
-                    fft::complex64 * const __restrict__ fB,
-                    uint2 const dims, float2 const dk, float const dt )
+void advance_psatd_nocurr( 
+    fft::complex64 * const __restrict__ fEt, 
+    fft::complex64 * const __restrict__ fB,
+    uint2 const dims, float2 const dk, float const dt )
 {
 
     fft::complex64 * const __restrict__ fEtx = & fEt[                   0 ];
     fft::complex64 * const __restrict__ fEty = & fEt[     dims.x * dims.y ];
     fft::complex64 * const __restrict__ fEtz = & fEt[ 2 * dims.x * dims.y ];
 
-    fft::complex64 * const __restrict__ fBx = & fB[                   0 ];
-    fft::complex64 * const __restrict__ fBy = & fB[     dims.x * dims.y ];
-    fft::complex64 * const __restrict__ fBz = & fB[ 2 * dims.x * dims.y ];
+    fft::complex64 * const __restrict__ fBx  = & fB[                   0 ];
+    fft::complex64 * const __restrict__ fBy  = & fB[     dims.x * dims.y ];
+    fft::complex64 * const __restrict__ fBz  = & fB[ 2 * dims.x * dims.y ];
 
     const int iy   = blockIdx.x;  // Line
-    const float ky = ((iy < dims.y/2) ? iy : (iy - int(dims.y)) ) * dk.y;
+    const float ky = ((iy < int(dims.y/2)) ? iy : (iy - int(dims.y)) ) * dk.y;
 
     const int stride = dims.x;
     for( auto ix = block_thread_rank(); ix < dims.x; ix += block_num_threads() ) {
@@ -111,7 +115,7 @@ void advance_psatd( fft::complex64 * const __restrict__ fEt,
 
         const float kx = ix * dk.x;
         const float k2 = kx*kx + ky*ky;
-        const float k  = sqrt( k2 );
+        const float k  = sqrtf( k2 );
 
         // PSATD Field advance equations
         const float C   = cosf( k * dt );
@@ -191,8 +195,8 @@ void advance_psatd( fft::complex64 * const __restrict__ fEt,
         const fft::complex64 fJtz = fJz[idx];
 
         // PSATD Field advance equations
-        const float C   = cosf( k * dt );
-        const float S_k = ( k > 0 ) ? sinf( k * dt ) / k : dt;
+        const float C   = cos( k * dt );
+        const float S_k = ( k > 0 ) ? sin( k * dt ) / k : dt;
         const fft::complex64 I1mC_k2( 0, ( k2 > 0 )? (1.0f - C) / k2 : 0 );
 
         fft::complex64 Ex = fEtx[idx];
@@ -272,14 +276,14 @@ void update_fE( fft::complex64 * const __restrict__ d_fE,
 void EMF::advance() {
 
     // Advance transverse fields
-    kernel::advance_psatd <<< fEt -> dims.y, 256 >>> ( 
+    kernel::advance_psatd_nocurr <<< fEt -> dims.y, 256 >>> ( 
         reinterpret_cast<fft::complex64 *>( fEt -> d_buffer ), 
         reinterpret_cast<fft::complex64 *>( fB -> d_buffer ), 
         fEt -> dims, fft::dk( box ), dt );
 
     // Transform to real fields
-    fft_backward -> transform( reinterpret_cast<fft::complex64 *>(fEt -> d_buffer), *E );
-    fft_backward -> transform( reinterpret_cast<fft::complex64 *>(fB  -> d_buffer), *B );
+    fft_backward -> transform( *fEt, *E );
+    fft_backward -> transform( *fB, *B );
 
     // Update guard cell values
     E -> copy_to_gc();
@@ -314,8 +318,8 @@ void EMF::advance( Current & current, Charge & charge ) {
     );
 
     // Transform to real fields
-    fft_backward -> transform( reinterpret_cast<fft::complex64 *>( fE -> d_buffer ), *E );
-    fft_backward -> transform( reinterpret_cast<fft::complex64 *>( fB -> d_buffer ), *B );
+    fft_backward -> transform( *fE, *E );
+    fft_backward -> transform( *fB, *B );
 
     // Update guard cell values
     E -> copy_to_gc();
@@ -336,7 +340,8 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
 
-    vec3grid<float3> * f;
+    vec3grid<float3> * f = nullptr;
+    basic_grid3<std::complex<float>> * cf = nullptr;
 
     switch (field ) {
         case emf::e :
@@ -348,6 +353,21 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             f = B;
             vfname = "B";
             vflabel = "B_";
+            break;
+        case emf::fe :
+            cf = fE;
+            vfname = "fE";
+            vflabel = "\\mathcal{F} E_";
+            break;
+        case emf::fet :
+            cf = fEt;
+            vfname = "fEt";
+            vflabel = "\\mathcal{F} E^\\perp_";
+            break;
+        case emf::fb :
+            cf = fB;
+            vfname = "fB";
+            vflabel = "\\mathcal{F} B_";
             break;
         default:
             ABORT("Invalid field type selected, aborting");
@@ -370,41 +390,68 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             ABORT("Invalid field component (fc) selected, aborting");
     }
 
-    zdf::grid_axis axis[2];
-    axis[0] = (zdf::grid_axis) {
-        .name = (char *) "x",
-        .min = 0.0,
-        .max = box.x,
-        .label = (char *) "x",
-        .units = (char *) "c/\\omega_n"
-    };
-
-    axis[1] = (zdf::grid_axis) {
-        .name = (char *) "y",
-        .min = 0.0,
-        .max = box.y,
-        .label = (char *) "y",
-        .units = (char *) "c/\\omega_n"
-    };
-
-    zdf::grid_info info = {
-        .name = (char *) vfname.c_str(),
-        .ndims = 2,
-        .label = (char *) vflabel.c_str(),
-        .units = (char *) "m_e c \\omega_n e^{-1}",
-        .axis = axis
-    };
-
-    info.count[0] = E -> global_nx.x;
-    info.count[1] = E -> global_nx.y;
-
     zdf::iteration iteration = {
         .n = iter,
         .t = iter * dt,
         .time_units = (char *) "1/\\omega_n"
     };
 
-    f -> save( fc, info, iteration, "EMF" );
+
+    zdf::grid_info info = {
+        .name = (char *) vfname.c_str(),
+        .ndims = 2,
+        .label = (char *) vflabel.c_str(),
+        .units = (char *) "m_e c \\omega_n e^{-1}"
+    };
+
+    zdf::grid_axis axis[2];
+
+    if ( field == emf::e || field == emf::b ) {
+        axis[0] = (zdf::grid_axis) {
+            .name = (char *) "x",
+            .min = 0.0,
+            .max = box.x,
+            .label = (char *) "x",
+            .units = (char *) "c/\\omega_n"
+        };
+
+        axis[1] = (zdf::grid_axis) {
+            .name = (char *) "y",
+            .min = 0.0,
+            .max = box.y,
+            .label = (char *) "y",
+            .units = (char *) "c/\\omega_n"
+        };
+
+        info.axis = axis;
+        info.count[0] = E -> global_nx.x;
+        info.count[1] = E -> global_nx.y;
+
+        f -> save( fc, info, iteration, "EMF" );
+
+    } else {
+        float2 dk = fft::dk( box );
+
+        axis[0] = (zdf::grid_axis) {
+            .name = (char *) "kx",
+            .min = 0.0,
+            .max = (fEt -> dims.x - 1) * dk.x,
+            .label = (char *) "k_x"
+        };
+
+        axis[1] = (zdf::grid_axis) {
+            .name = (char *) "ky",
+            .min =  - dk.y * ( fEt -> dims.y / 2 ),
+            .max =    dk.y * ( fEt -> dims.y / 2 - 1 ),
+            .label = (char *) "k_y"
+        };
+
+        info.axis = axis;
+        info.count[0] = fEt -> dims.x;
+        info.count[1] = fEt -> dims.y;
+
+        cf -> save( fc, info, iteration, "EMF" );
+    }
 }
 
 namespace kernel {

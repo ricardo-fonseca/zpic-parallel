@@ -161,7 +161,7 @@ void Charge::advance() {
     if ( neutral ) rho -> add( *neutral );
     
     // Calculate frho
-    fft_forward -> transform( *rho, reinterpret_cast< fft::complex64 * > ( frho->d_buffer ) );
+    fft_forward -> transform( *rho, *frho );
 
     // Filter charge
     filter -> apply( *frho );

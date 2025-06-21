@@ -3,8 +3,12 @@
 
 #include "gpu.h"
 #include "cufft.h"
+
 #include "grid.h"
 #include "vec3grid.h"
+
+#include "basic_grid.h"
+#include "basic_grid3.h"
 
 #include "complex.h"
 
@@ -62,20 +66,20 @@ class plan {
             case fft::type::c2r: 
                 tmp_type = CUFFT_C2R; break;
             case fft::type::c2c: 
-                tmp_type = CUFFT_R2C; break;
+                tmp_type = CUFFT_C2C; break;
             default:
                 std::cerr << "Invalid fft type, aborting\n";
                 device::exit(1);
         }
-        
+
         // cuFFT defines this in the opposite order
         int fft_dims[] = { (int) dims.y, (int) dims.x };
-
-        cufftResult ierr = cufftPlanMany( & fft_plan, 2, fft_dims, 
+        cufftResult ierr = cufftPlanMany( 
+                            & fft_plan, 2, fft_dims, 
                             nullptr, 1, 0, // *inembed, istride, idist
                             nullptr, 1, 0, // *onembed, ostride, odist
                             tmp_type, batch );
-            
+
         if ( CUFFT_SUCCESS != ierr ) {
             std::cerr << "Unable to create FFT plan, cufftPlanMany() failed with code " << ierr << '\n';
             std::cerr << "aborting...\n";
@@ -134,7 +138,7 @@ class plan {
      * @param real      (in) Tiled grid real data
      * @param complex   (out) Contiguous complex data
      */
-    void transform( grid<float>& real, fft::complex64 * const __restrict__ complex ) {
+    void transform( grid<float>& real, basic_grid< std::complex<float> > & complex ) {
         if ( fft::type::r2c != fft_type ) {
             std::cerr << "FFT was not configured for real to complex tranform, aborting\n";
             device::exit(1);
@@ -146,10 +150,13 @@ class plan {
         }
 
         // Temporary array
-        float * tmp = device::malloc<float>( dims.x * dims.y );
-        real.gather( tmp );
-        cufftExecR2C( fft_plan, tmp, complex );
-        device::free( tmp );
+        basic_grid<float> tmp( dims );
+        real.gather( tmp.d_buffer );
+
+        cufftExecR2C( fft_plan, 
+            reinterpret_cast< cufftReal * > ( tmp.d_buffer ),
+            reinterpret_cast< cufftComplex * > ( complex.d_buffer )
+        );
     }
 
     /**
@@ -160,7 +167,7 @@ class plan {
      * @param real      (in) Tiled vec3grid real data
      * @param complex   (out) Contiguous complex data
      */
-    void transform( vec3grid<float3>& real, fft::complex64 * const __restrict__ complex ) {
+    void transform( vec3grid<float3>& real, basic_grid3< std::complex<float> > & complex ) {
         if ( fft::type::r2c != fft_type ) {
             std::cerr << "FFT was not configured for real to complex tranform, aborting\n";
             device::exit(1);
@@ -172,10 +179,14 @@ class plan {
         }
 
         // Temporary array
-        auto * tmp = device::malloc<float>( dims.x * dims.y * 3 );
-        real.gather( tmp );
-        cufftExecR2C( fft_plan, tmp, complex );
-        device::free( tmp );
+        basic_grid3< float > tmp( dims );
+        
+        real.gather( tmp.d_buffer );
+
+        cufftExecR2C( fft_plan, 
+            reinterpret_cast< cufftReal * > ( tmp.d_buffer ), 
+            reinterpret_cast< cufftComplex * > ( complex.d_buffer )
+        );
     }
 
     /**
@@ -186,7 +197,7 @@ class plan {
      * @param complex   (in) Contiguous complex data
      * @param real      (out) Tiled grid real data
      */
-    void transform( fft::complex64 * const __restrict__ complex, grid<float>& real ) {
+    void transform( basic_grid< std::complex<float> > & complex, grid<float>& real ) {
         if ( fft::type::c2r != fft_type ) {
             std::cerr << "FFT was not configured for complex to real tranform, aborting\n";
             device::exit(1);
@@ -198,10 +209,17 @@ class plan {
         }
 
         // Temporary array
-        float * tmp = device::malloc<float>( dims.x * dims.y );
-        cufftExecC2R( fft_plan, complex, tmp );
-        real.scatter( tmp, norm() );
-        device::free( tmp );
+        basic_grid< float > rtmp( dims );
+        basic_grid< std::complex<float> > ctmp( complex.dims );
+
+        // Copy original data to temporary buffer
+        device::memcpy( ctmp.d_buffer, complex.d_buffer, complex.buffer_size() );
+
+        cufftExecC2R( fft_plan, 
+            reinterpret_cast< cufftComplex * > ( complex.d_buffer ),
+            reinterpret_cast< cufftReal * > ( rtmp.d_buffer )
+        );
+        real.scatter( rtmp.d_buffer, norm() );
     }
 
     /**
@@ -212,7 +230,13 @@ class plan {
      * @param complex   (in) Contiguous complex data
      * @param real      (out) Tiled grid real data
      */
-    void transform( fft::complex64 * const __restrict__ complex, vec3grid<float3>& real ) {
+    void transform( basic_grid3< std::complex<float> > & complex, vec3grid<float3>& real ) {
+        
+        // From
+        // https://docs.nvidia.com/cuda/cufft/index.html#data-layout
+        // (...)
+        // "Out-of-place complex-to-real FFT will always overwrite input buffer."
+
         if ( fft::type::c2r != fft_type ) {
             std::cerr << "FFT was not configured for complex to real tranform, aborting\n";
             device::exit(1);
@@ -223,49 +247,20 @@ class plan {
             device::exit(1);
         }
 
-        // Temporary array
-        float * tmp = device::malloc<float>( dims.x * dims.y * 3 );
-        cufftExecC2R( fft_plan, complex, tmp );
-        real.scatter( tmp, norm() );
-        device::free( tmp );
+        // Temporary arrays
+        basic_grid3< std::complex<float> > ctmp( complex.dims );
+        basic_grid3< float > rtmp( dims );
+
+        // Copy original data to temporary buffer
+        device::memcpy( ctmp.d_buffer, complex.d_buffer, complex.buffer_size() );
+    
+        cufftExecC2R( fft_plan, 
+            reinterpret_cast< cufftComplex * > ( ctmp.d_buffer ), 
+            reinterpret_cast< cufftReal * >    ( rtmp.d_buffer ) );
+
+        real.scatter( rtmp.d_buffer, norm() );
     }
 
-    /**
-     * @brief Perform a real to complex transform from grid<float> data
-     *  
-     * @param real      (in) Tiled grid real data
-     * @param complex   (out) Contiguous complex data
-     * @param d_tmp     (out) Temporary real data in device memory. Must be >= ndims.x * ndims.y
-     */
-    void transform( grid<float>& real, 
-                    fft::complex64 * const __restrict__ complex, 
-                    float * const __restrict__ d_tmp ) {
-        if ( fft::type::r2c != fft_type ) {
-            std::cerr << "FFT was not configured for real to complex tranform, aborting\n";
-            device::exit(1);
-        }
-        real.gather( d_tmp );
-        cufftExecR2C( fft_plan, d_tmp, complex );
-    }
-
-    /**
-     * @brief Perform a complex to real transform to grid<float> data
-     * 
-     * @param complex   (in) Contiguous complex data
-     * @param real      (out) Tiled grid real data
-     * @param d_tmp     (out) Temporary real data in device memory. Must be >= ndims.x * ndims.y
-     */
-    void transform( fft::complex64 * const __restrict__ complex, 
-                    grid<float>& real, 
-                    float * const __restrict__ d_tmp ) {
-        if ( fft::type::c2r != fft_type ) {
-            std::cerr << "FFT was not configured for complex to real tranform, aborting\n";
-            device::exit(1);
-        }
-
-        cufftExecC2R( fft_plan, complex, d_tmp );
-        real.scatter( d_tmp );
-    }
 
     /**
      * @brief Perform a complex to complex transform

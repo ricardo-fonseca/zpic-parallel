@@ -93,37 +93,7 @@ class Pulse {
      * @param emf   EMF object
      * @return      Returns 0 on success, -1 on error (invalid laser parameters)
      */
-    int add( EMF & emf ) {
-
-        std::cerr << "Not implemented yet\n";
-        device::exit(1);
-
-        vec3grid<float3> tmp_E( emf.E -> ntiles, emf.E-> nx, emf.E -> gc );
-        vec3grid<float3> tmp_B( emf.B -> ntiles, emf.B-> nx, emf.B -> gc );
-
-        // Get laser fields
-        int ierr = launch( tmp_E, tmp_B, emf.box );
-
-        // Add laser to simulation
-        if ( ! ierr ) {
-            // prepare forward transform
-            // fft::plan fft( dims, fft::r2c );
-            // basic_grid3<std::complex<float>> fft_tmp( fft.output_dims() );
-            // float2 dk = fft_tmp.dk( box );
-
-            // transform tmp_E and add to fEt
-            // fft.transform( tmp_E, fft_tmp.d_buffer );
-            // lon_x( fft_tmp, dk );
-            // fEt.add( fft_tmp );
-
-            // transform tmp_B and add to fB 
-            // fft.transform( tmp_B, fft_tmp.d_buffer );
-            // lon_x( fft_tmp, dk )
-            // fB.add( fft_tmp );
-        }
-
-        return ierr;
-    };
+    int add( EMF & emf );
 };
 
 /**
