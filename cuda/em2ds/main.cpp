@@ -11,6 +11,7 @@
 #include "basic_grid.h"
 
 #include "fft.h"
+#include "simulation.h"
 
 namespace kernel {
 
@@ -217,12 +218,123 @@ void test_laser( ) {
 
     t0.report( buffer.str() );
 
-//    save_emf();
-
     std::cout << ansi::bold
               << "Done!\n"
               << ansi::reset;   
 
+}
+
+void test_mov( ) {
+
+    std::cout << "Starting " << __func__ << "...\n";
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint2 ppc{ 8, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( Density::Sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
+    electrons.set_udist( UDistribution::Cold( float3{ -1, -2, -3 } ) );
+
+    electrons.initialize( box, ntiles, nx, dt, 0 );
+
+    electrons.save();
+    electrons.save_charge();
+    electrons.save_phasespace(
+        phasespace::x, float2{0, 12.8}, 128,
+        phasespace::y, float2{0, 12.8}, 128
+    );
+
+    int niter = 200;
+    for( auto i = 0; i < niter; i ++ ) {
+        electrons.advance();
+    }
+
+    electrons.save_charge();
+    electrons.save();
+
+    std::cout << __func__ << " complete.\n";
+}
+
+
+void test_weibel( ) {
+
+    std::cout << ansi::bold
+              << "Running " << __func__ << "()..."
+              << ansi::reset << std::endl;
+
+    uint2 ntiles{ 16, 16 };
+    uint2 nx{ 32, 32 };
+    
+    float2 box = 0.1f * make_float2( ntiles.x * nx.x, ntiles.y * nx.y );
+    float dt = 0.07;
+
+    Simulation sim( ntiles, nx, box, dt );
+
+    uint2 ppc{ 8, 8 };
+
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, 0.6 }
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, -0.6 }
+        )
+    );
+
+    sim.add_species( positrons );
+
+    // Lambda function for diagnostic output
+    auto diag = [ & ]( ) {
+        sim.emf.save(emf::b, fcomp::x);
+        sim.emf.save(emf::b, fcomp::y);
+        sim.emf.save(emf::b, fcomp::z);
+
+        sim.current.save(fcomp::x);
+        sim.current.save(fcomp::y);
+        sim.current.save(fcomp::z);
+
+        sim.charge.save();
+
+        electrons.save_charge();
+        positrons.save_charge();
+
+        sim.energy_info();
+    };
+
+    Timer timer; timer.start();
+
+    while ( sim.get_t() <= 35.0 ) {
+        //if ( sim.get_iter() % 10 == 0 )
+        //    std::cout << "t = " << sim.get_t() << '\n';
+        sim.advance();
+    }
+    timer.stop();
+
+    diag();
+
+    std::cout << ansi::bold
+              << "Done!\n"
+              << ansi::reset;
+
+    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
+
+    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
+              << ", Performance: " << perf << " GPart/s\n";
 }
 
 /**
@@ -300,5 +412,8 @@ int main( int argc, char *argv[] ) {
     if ( ! silent ) info();    
 
     // test_grid();
-    test_laser();
+    // test_laser();
+    
+    // test_mov();
+    test_weibel();
 }

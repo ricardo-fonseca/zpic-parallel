@@ -348,7 +348,7 @@ void Species::advance( EMF const &emf, Current &current, Charge & charge ) {
     move( current.J, charge.rho );
 
     // Process physical boundary conditions
-    process_bc();
+    // process_bc();
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
@@ -383,7 +383,7 @@ void dep_current( float3 * const __restrict__ J, const int ystride, int2 ix0, fl
     );
 
     int2 ix  = make_int2( ix0.x + deltai.x, ix0.y + deltai.y );
-    float2 x = make_float2( x0.x - deltai.x, ix0.y - deltai.y );
+    float2 x = make_float2( x0.x - deltai.x, x0.y - deltai.y );
 
     const float S0x = 0.5f - x.x;
     const float S1x = 0.5f + x.x;
@@ -397,21 +397,21 @@ void dep_current( float3 * const __restrict__ J, const int ystride, int2 ix0, fl
 
     int idx = ix.y * ystride + ix.x;
 
-    J[ idx               ].x  += S0y * S0x * jx;
-    J[ idx               ].y  += S0y * S0x * jy;
-    J[ idx               ].z  += S0y * S0x * jz;
+    block::atomic_fetch_add( & J[ idx               ].x, S0y * S0x * jx );
+    block::atomic_fetch_add( & J[ idx               ].y, S0y * S0x * jy );
+    block::atomic_fetch_add( & J[ idx               ].z, S0y * S0x * jz );
 
-    J[ idx + 1           ].x  += S0y * S1x * jx;
-    J[ idx + 1           ].y  += S0y * S1x * jy;
-    J[ idx + 1           ].z  += S0y * S1x * jz;
+    block::atomic_fetch_add( & J[ idx + 1           ].x, S0y * S1x * jx );
+    block::atomic_fetch_add( & J[ idx + 1           ].y, S0y * S1x * jy );
+    block::atomic_fetch_add( & J[ idx + 1           ].z, S0y * S1x * jz );
 
-    J[ idx + ystride     ].x  += S1y * S0x * jx;
-    J[ idx + ystride     ].y  += S1y * S0x * jy;
-    J[ idx + ystride     ].z  += S1y * S0x * jz;
+    block::atomic_fetch_add( & J[ idx + ystride     ].x, S1y * S0x * jx );
+    block::atomic_fetch_add( & J[ idx + ystride     ].y, S1y * S0x * jy );
+    block::atomic_fetch_add( & J[ idx + ystride     ].z, S1y * S0x * jz );
 
-    J[ idx + ystride + 1 ].x  += S1y * S1x * jx;
-    J[ idx + ystride + 1 ].y  += S1y * S1x * jy;
-    J[ idx + ystride + 1 ].z  += S1y * S1x * jz;
+    block::atomic_fetch_add( & J[ idx + ystride + 1 ].x, S1y * S1x * jx );
+    block::atomic_fetch_add( & J[ idx + ystride + 1 ].y, S1y * S1x * jy );
+    block::atomic_fetch_add( & J[ idx + ystride + 1 ].z, S1y * S1x * jz );
 }
 
 __device__
@@ -426,10 +426,10 @@ void dep_charge( float * const __restrict__ rho, const int ystride, int2 ix, flo
 
     int idx = ix.y * ystride + ix.x;
 
-    rho[ idx               ]  += S0y * S0x * q;
-    rho[ idx + 1           ]  += S0y * S1x * q;
-    rho[ idx + ystride     ]  += S1y * S0x * q;
-    rho[ idx + ystride + 1 ]  += S1y * S1x * q;
+    block::atomic_fetch_add( & rho[ idx               ], S0y * S0x * q );
+    block::atomic_fetch_add( & rho[ idx + 1           ], S0y * S1x * q );
+    block::atomic_fetch_add( & rho[ idx + ystride     ], S1y * S0x * q );
+    block::atomic_fetch_add( & rho[ idx + ystride + 1 ], S1y * S1x * q );
 }
 
 __global__
@@ -575,7 +575,7 @@ void Species::move( vec3grid<float3> * J, grid<float> * rho )
 
     int tile_blocks = opt_min_blocks / (particles -> ntiles.x * particles -> ntiles.y);
     if ( tile_blocks < 1 ) tile_blocks = 1;
-    
+
     dim3 grid( particles -> ntiles.x, particles -> ntiles.y, tile_blocks );
 
     size_t shm_size = J -> tile_vol * ( sizeof(float) + sizeof(float3) );
@@ -1011,6 +1011,15 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
 
 namespace kernel {
 __global__
+/**
+ * @brief Kernel for charge density deposition
+ * 
+ * @param part              Particle data
+ * @param q                 Particle charge
+ * @param charge_buffer     Charge buffer
+ * @param charge_offset     Offset to cell 0,0 in charge tile
+ * @param ext_nx            External tile size (includes guard cells)
+ */
 void deposit_charge(
     ParticleData const part, const float q,
     float * const __restrict__ charge_buffer,
@@ -1068,7 +1077,7 @@ void deposit_charge(
  */
 void Species::deposit_charge( grid<float> &charge ) const {
 
-    dim3 grid( charge.ntiles.x, charge.ntiles.y );
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
     auto block = 64;
     size_t shm_size = charge.tile_vol * sizeof(float);
 
@@ -1237,7 +1246,7 @@ void Species::save_charge() const {
     std::string path = "CHARGE/";
     path += name;
     
-    charge.save( info, iter_info, path.c_str() );
+    charge.save( info, iter_info, path );
 }
 
 namespace kernel {
@@ -1732,10 +1741,10 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     // Inject initial distribution
 
     // Count particles to inject and store in particles -> offset
-    np_inject( particles -> g_range(), particles -> offset );
+    np_inject( particles -> g_range(), np_inj );
 
     // Do an exclusive scan to get the required offsets
-    device::exscan_add( particles -> offset, ntiles.x * ntiles.y );
+    device::exscan_add( particles -> offset, np_inj, ntiles.x * ntiles.y );
 
     // Inject the particles
     inject( particles -> g_range() );

@@ -913,7 +913,7 @@ class grid {
         info.count[0] = ntiles.x * nx.x;
         info.count[1] = ntiles.y * nx.y;
 
-        const std::size_t bsize = nx.x * nx.y;
+        const std::size_t bsize = ntiles.x * nx.x * ntiles.y * nx.y;
 
         // Allocate buffers on host and device to gather data
         T * h_data = host::malloc<T>( bsize );

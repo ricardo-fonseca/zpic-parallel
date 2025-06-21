@@ -189,15 +189,15 @@ void advance_psatd( fft::complex64 * const __restrict__ fEt,
         const float k  = sqrt( k2 );
 
         // Calculate transverse current
-        const fft::complex64 kdJ_k2 = (kx * fJx[idx] + ky * fJy[idx])/k2;
-        const fft::complex64 fJtx = fJx[idx] - kx * kdJ_k2;
-        const fft::complex64 fJty = fJy[idx] - ky * kdJ_k2;
+        const fft::complex64 kdJ  = (kx * fJx[idx] + ky * fJy[idx]);
+        const fft::complex64 fJtx = (k2 > 0) ? fJx[idx] - kx * kdJ / k2 : 0;
+        const fft::complex64 fJty = (k2 > 0) ? fJy[idx] - ky * kdJ / k2 : 0; 
         const fft::complex64 fJtz = fJz[idx];
 
         // PSATD Field advance equations
         const float C   = cos( k * dt );
         const float S_k = ( k > 0 ) ? sin( k * dt ) / k : dt;
-        const fft::complex64 I1mC_k2( 0, ( k2 > 0 )? (1.0f - C) / k2 : 0 );
+        const fft::complex64 I1mC_k2 = ( k2 > 0 )? fft::I * (1.0f - C) / k2 : 0;
 
         fft::complex64 Ex = fEtx[idx];
         fft::complex64 Ey = fEty[idx];
@@ -227,9 +227,10 @@ void advance_psatd( fft::complex64 * const __restrict__ fEt,
 
 __global__
 /**
- * @brief Update longitudinal Electric field from charge density
+ * @brief Update Electric field from charge density
  * 
- * @param fEl   Fourier transform of longitudinal component of E-field
+ * @param fE    Fourier transform of E-field (full)
+ * @param fEt   Fourier transform of E-field (transverse)
  * @param frho  Fourier transform of charge density
  * @param dims  Global grid dimensions
  * @param dk    k-space cell size
@@ -310,7 +311,7 @@ void EMF::advance( Current & current, Charge & charge ) {
     );
 
     // Update total E-field
-    kernel::update_fE<<< fE -> dims.y, 256 >>> ( 
+    kernel::update_fE<<< fEt -> dims.y, 256 >>> ( 
         reinterpret_cast<fft::complex64 *>( fE -> d_buffer ),
         reinterpret_cast<fft::complex64 *>( fEt -> d_buffer ),
         reinterpret_cast<fft::complex64 *>( charge.frho -> d_buffer ),

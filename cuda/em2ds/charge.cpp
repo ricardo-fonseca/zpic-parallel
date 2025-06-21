@@ -149,8 +149,7 @@ void Charge::advance() {
 
     // Add up current deposited on guard cells
     rho ->  add_from_gc( );
-    
-    // rho ->  copy_to_gc( ); // not needed
+    // rho ->  copy_to_gc( );
 
     // Do additional bc calculations if needed
     // process_bc();

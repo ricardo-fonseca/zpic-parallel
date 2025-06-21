@@ -204,8 +204,6 @@ class basic_grid3{
         int const grid = (size -1) / block + 1;
 
         basic_grid3_kernel::add <<< grid, block >>> ( d_buffer, rhs.d_buffer, size );
-
-        deviceCheck();
     };
 
 };
@@ -229,8 +227,6 @@ inline void basic_grid3<std::complex<float>>::add( const basic_grid3<std::comple
         reinterpret_cast< fft::complex64 * > ( d_buffer ), 
         reinterpret_cast< fft::complex64 * > ( rhs.d_buffer ), 
         size );
-
-    deviceCheck();
 };
 
 

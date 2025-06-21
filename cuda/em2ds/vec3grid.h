@@ -368,7 +368,6 @@ class vec3grid : public grid< V >
         vec3_grid_kernel::gather<S,V> <<< grid, block, shm_size >>> (
                 d_out, d_buffer, offset,
                 ntiles, nx, ext_nx );     
-        deviceCheck();
 
         return 3 * global_nx.x * global_nx.y;
     }
@@ -434,7 +433,6 @@ class vec3grid : public grid< V >
             d_buffer, offset,
             ntiles, nx, ext_nx,
             d_in );
-        deviceCheck();
 
         return global_nx.x * global_nx.y * 3;
     }
@@ -458,7 +456,6 @@ class vec3grid : public grid< V >
             d_buffer, offset,
             ntiles, nx, ext_nx,
             d_in, scale );
-        deviceCheck();
 
         return global_nx.x * global_nx.y * 3;
     }

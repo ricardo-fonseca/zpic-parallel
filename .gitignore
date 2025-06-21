@@ -47,5 +47,8 @@ test/
 EMF/
 PARTICLES/
 CHARGE/
+CURRENT/
 mpi/zpic
 openmp/zpic
+cuda/em2d/zpic
+cuda/em2ds/zpic

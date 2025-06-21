@@ -300,8 +300,8 @@ void step(
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
 
     // Store number of particles before injection
-    __shared__ int np_local;
-    np_local = part.np[ tile_id ];
+    __shared__ int np_tile;
+    np_tile = part.np[ tile_id ];
 
     block_sync();
 
@@ -319,10 +319,10 @@ void step(
         ( rj0 < nx.y ) && ( rj1 >= 0 )) {
 
         // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
+        if ( ri0 < 0 ) ri0 = 0;
+        if ( rj0 < 0 ) rj0 = 0;
+        if ( ri1 >= nx.x ) ri1 = nx.x-1;
+        if ( rj1 >= nx.y ) rj1 = nx.y-1;
 
         int const row = (ri1-ri0+1);
         int const vol = (rj1-rj0+1) * row;
@@ -351,14 +351,14 @@ void step(
                     );
 
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
 
                     int inj = t > step;
                     int off = block::exscan_add( inj );
 
                     if ( inj ) {
-                        const int k = np_local + off;
+                        const int k = np_tile + off;
                         ix[ k ] = cell;
                         x[ k ]  = pos;
                         u[ k ]  = make_float3( 0, 0, 0 );
@@ -366,7 +366,7 @@ void step(
 
                     inj = warp::reduce_add( inj );
                     if ( warp::thread_rank() == 0 ) {
-                        block::atomic_fetch_add( &np_local, inj );
+                        block::atomic_fetch_add( &np_tile, inj );
                     }
                     block_sync();
                 }
@@ -374,7 +374,7 @@ void step(
         }
 
         if ( block_thread_rank() == 0 ) {
-            part.np[ tile_id ] = np_local;
+            part.np[ tile_id ] = np_tile;
         }
     }
 }
@@ -423,14 +423,14 @@ void step_np(
 {
     // Tile ID
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
-    const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
+    const int  tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    __shared__ int np_local;
-    np_local = 0;
+    __shared__ int np_tile; np_tile = 0;
     block_sync();
 
     // Find injection range in tile coordinates
     const int2 nx = make_int2( part.nx.x, part.nx.y );
+
     int ri0 = range.x.lower - tile_idx.x * nx.x;
     int ri1 = range.x.upper - tile_idx.x * nx.x;
 
@@ -470,8 +470,8 @@ void step_np(
                         dpcy * ( i1 + 0.5 ) - 0.5
                     );
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     
                     int inj = t > step;
                     inj_np += inj;
@@ -482,13 +482,13 @@ void step_np(
 
     inj_np = warp::reduce_add( inj_np );
     if ( warp::thread_rank() == 0 ) {
-        block::atomic_fetch_add( &np_local, inj_np );
+        block::atomic_fetch_add( &np_tile, inj_np );
     } 
 
     block_sync();
 
     if ( block_thread_rank() == 0 ) {
-        np[ tile_id ] = np_local;
+        np[ tile_id ] = np_tile;
     }
 }
 
@@ -528,8 +528,7 @@ void slab(
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
 
     // Store number of particles before injection
-    __shared__ int np_local;
-    np_local = part.np[ tile_id ];
+    __shared__ int np_tile; np_tile = part.np[ tile_id ];
 
     block_sync();
 
@@ -579,15 +578,15 @@ void slab(
                     );
 
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     
                     int inj = (t >= start) && (t<finish );
 
                     int off = block::exscan_add( inj );
                     
                     if (inj) {
-                        const int k = np_local + off;
+                        const int k = np_tile + off;
                         ix[ k ] = cell;
                         x[ k ] = pos;
                         u[ k ] = make_float3( 0, 0, 0 );
@@ -595,7 +594,7 @@ void slab(
 
                     inj = warp::reduce_add( inj );
                     if ( warp::thread_rank() == 0 ) {
-                        block::atomic_fetch_add( &np_local, inj );
+                        block::atomic_fetch_add( &np_tile, inj );
                     }
                     block_sync();
                 }
@@ -603,7 +602,7 @@ void slab(
         }
 
         if ( block_thread_rank() == 0 ) {
-            part.np[ tile_id ] = np_local;
+            part.np[ tile_id ] = np_tile;
         }
     }
 }
@@ -647,8 +646,7 @@ void slab_np(
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
 
     // Store number of particles before injection
-    __shared__ int np_local;
-    np_local = 0;
+    __shared__ int np_tile; np_tile = 0;
     block_sync();
 
     // Find injection range in tile coordinates
@@ -692,8 +690,8 @@ void slab_np(
                         dpcy * ( i1 + 0.5 ) - 0.5
                     );
                     float t;
-                    if ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
-                    if ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
+                    if constexpr ( dir == coord::x ) t = (shiftx + cell.x) + (pos.x + 0.5);
+                    if constexpr ( dir == coord::y ) t = (shifty + cell.y) + (pos.y + 0.5);
                     
                     int inj = (t >= start) && (t<finish );
                     inj_np += inj;
@@ -704,13 +702,13 @@ void slab_np(
 
     inj_np = warp::reduce_add( inj_np );
     if ( warp::thread_rank() == 0 ) {
-        block::atomic_fetch_add( &np_local, inj_np );
+        block::atomic_fetch_add( &np_tile, inj_np );
     } 
 
     block_sync();
 
     if ( block_thread_rank() == 0 ) {
-        np[ tile_id ] = np_local;
+        np[ tile_id ] = np_tile;
     }
 }
 
@@ -720,7 +718,6 @@ void Density::Slab::np_inject( Particles & particles,
     uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
 {
-
     dim3 grid( particles.ntiles.x, particles.ntiles.y );
     dim3 block( 1024 );
 
@@ -758,7 +755,7 @@ void sphere(
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
 
     // Store number of particles before injection
-    __shared__ int np_local; np_local = part.np[ tile_id ];
+    __shared__ int np_tile; np_tile = part.np[ tile_id ];
 
     block_sync();
 
@@ -814,7 +811,7 @@ void sphere(
                     int off = block::exscan_add( inj );
 
                     if ( inj ) {
-                        const int k = np_local + off;
+                        const int k = np_tile + off;
                         ix[ k ] = cell;
                         x[ k ] = pos;
                         u[ k ] = make_float3( 0, 0, 0 );
@@ -822,7 +819,7 @@ void sphere(
                     
                     inj = warp::reduce_add( inj );
                     if ( warp::thread_rank() == 0 ) {
-                        block::atomic_fetch_add( &np_local, inj );
+                        block::atomic_fetch_add( &np_tile, inj );
                     }
                     block_sync();
                 }
@@ -830,7 +827,7 @@ void sphere(
         }
 
         if ( block_thread_rank() == 0 ) {
-            part.np[ tile_id ] = np_local;
+            part.np[ tile_id ] = np_tile;
         }
     }
 }
@@ -865,7 +862,7 @@ void sphere_np(
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    __shared__ int np_local; np_local = 0;
+    __shared__ int np_tile; np_tile = 0;
     block_sync();
 
     // Find injection range in tile coordinates
@@ -913,7 +910,7 @@ void sphere_np(
                     float gx = ((shiftx + cell.x) + (pos.x+0.5)) * dx.x;
                     float gy = ((shifty + cell.y) + (pos.y+0.5)) * dx.y;
                     
-                    int inj = (gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y) < r2;
+                    int inj = ((gx - center.x)*(gx - center.x) + (gy - center.y)*(gy - center.y)) < r2;
                     inj_np += inj;
                 }
             }
@@ -922,13 +919,13 @@ void sphere_np(
 
     inj_np = warp::reduce_add( inj_np );
     if ( warp::thread_rank() == 0 ) {
-        block::atomic_fetch_add( &np_local, inj_np );
+        block::atomic_fetch_add( &np_tile, inj_np );
     } 
 
     block_sync();
 
     if ( block_thread_rank() == 0 ) {
-        np[ tile_id ] = np_local;
+        np[ tile_id ] = np_tile;
     }
 }
 

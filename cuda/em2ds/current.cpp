@@ -169,7 +169,7 @@ void Current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc( );
-    // J -> copy_to_gc( ); // not needed
+    // J -> copy_to_gc( );
 
     // Do additional bc calculations if needed
     // Process_bc();

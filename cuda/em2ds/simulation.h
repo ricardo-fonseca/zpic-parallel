@@ -26,7 +26,7 @@ class Simulation {
 
     EMF emf;
     Current current;
-    Current charge;
+    Charge charge;
     std::vector <Species*> species;
 
     /**
