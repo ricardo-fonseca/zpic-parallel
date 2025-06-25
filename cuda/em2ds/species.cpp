@@ -372,7 +372,7 @@ __device__
  * @param dx        Particle motion normalized to cell size
  * @param q         Particle charge
  */
-void dep_current( float3 * const __restrict__ J, const int ystride,
+inline void dep_current( float3 * const __restrict__ J, const int ystride,
     int2 ix0, float2 x0, float3 u, float rg, float2 dx, float q ) {
 
     // Find position time centered with velocity
@@ -416,7 +416,7 @@ void dep_current( float3 * const __restrict__ J, const int ystride,
 }
 
 __device__
-void dep_charge( float * const __restrict__ rho, const int ystride, int2 ix, float2 x, float q )
+inline void dep_charge( float * const __restrict__ rho, const int ystride, int2 ix, float2 x, float q )
 {
 
     const float S0x = 0.5f - x.x;
@@ -446,15 +446,14 @@ void __launch_bounds__(opt_move_block) move_deposit(
     const auto ntiles = part.ntiles;
 
     extern __shared__ char block_shm[];
-    float  * __restrict__ rho_local = reinterpret_cast< float * > ( & block_shm[0] );
+    float  * __restrict__ rho_local = reinterpret_cast< float * >  ( & block_shm[0] );
     float3 * __restrict__ J_local   = reinterpret_cast< float3 * > ( & block_shm[ tile_vol * sizeof(float) ] );
 
     // Zero local current/charge buffers
-    for( auto i = block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
+    for( auto i = block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
         J_local[i] = make_float3( 0, 0, 0 );
-
-    for( auto i = block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
         rho_local[i] = 0;
+    }
 
     block_sync();
 
@@ -540,9 +539,7 @@ void __launch_bounds__(opt_move_block) move_deposit(
     } else {
         for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
             d_current[tile_off + i] += J_local[i];
-
             d_charge[tile_off + i] += rho_local[i];
-
         }
     }
 

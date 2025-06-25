@@ -43,7 +43,7 @@ void gather_fcomp(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    const uint2  global_nx = { ntiles.x * nx.x, ntiles.y * nx.y };
+    const uint2  dims = { ntiles.x * nx.x, ntiles.y * nx.y };
 
     auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
 
@@ -54,7 +54,7 @@ void gather_fcomp(
         auto const gix = tile_idx.x * nx.x + ix;
         auto const giy = tile_idx.y * nx.y + iy;
 
-        auto const out_idx = giy * global_nx.x + gix;
+        auto const out_idx = giy * dims.x + gix;
 
         if constexpr ( fc == fcomp::x ) d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].x;
         if constexpr ( fc == fcomp::y ) d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].y;
@@ -86,7 +86,7 @@ void scatter_fcomp(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    const uint2  global_nx = { ntiles.x * nx.x, ntiles.y * nx.y };
+    const uint2  dims = { ntiles.x * nx.x, ntiles.y * nx.y };
 
     auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
 
@@ -97,7 +97,7 @@ void scatter_fcomp(
         auto const gix = tile_idx.x * nx.x + ix;
         auto const giy = tile_idx.y * nx.y + iy;
 
-        auto const out_idx = giy * global_nx.x + gix;
+        auto const out_idx = giy * dims.x + gix;
 
         if constexpr ( fc == fcomp::x ) tile_data[ iy * ext_nx.x + ix ].x = d_in[ out_idx ];
         if constexpr ( fc == fcomp::y ) tile_data[ iy * ext_nx.x + ix ].y = d_in[ out_idx ];
@@ -130,11 +130,11 @@ void gather(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    const uint2  global_nx = { ntiles.x * nx.x, ntiles.y * nx.y };
+    const uint2  dims = { ntiles.x * nx.x, ntiles.y * nx.y };
 
     S * const __restrict__ out_x = & d_out[                             0 ];
-    S * const __restrict__ out_y = & d_out[     global_nx.x * global_nx.y ];
-    S * const __restrict__ out_z = & d_out[ 2 * global_nx.x * global_nx.y ];
+    S * const __restrict__ out_y = & d_out[     dims.x * dims.y ];
+    S * const __restrict__ out_z = & d_out[ 2 * dims.x * dims.y ];
 
     // Copy tile data into shared memory
     V * __restrict__ local = block::shared_mem<V>();
@@ -148,7 +148,7 @@ void gather(
         auto const gix = tile_idx.x * nx.x + ix;
         auto const giy = tile_idx.y * nx.y + iy;
 
-        auto const out_idx = giy * global_nx.x + gix;
+        auto const out_idx = giy * dims.x + gix;
         auto const idx     = iy * ext_nx.x + ix + offset;
 
         out_x[ out_idx ] = local[ idx ].x;
@@ -184,11 +184,11 @@ void scatter(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    const uint2  global_nx = { ntiles.x * nx.x, ntiles.y * nx.y };
+    const uint2  dims = { ntiles.x * nx.x, ntiles.y * nx.y };
 
     S * __restrict__ in_x = & d_in[                 0 ];
-    S * __restrict__ in_y = & d_in[     global_nx.x * global_nx.y ];
-    S * __restrict__ in_z = & d_in[ 2 * global_nx.x * global_nx.y ];
+    S * __restrict__ in_y = & d_in[     dims.x * dims.y ];
+    S * __restrict__ in_z = & d_in[ 2 * dims.x * dims.y ];
 
     auto * shm = block::shared_mem<V>();
     V * __restrict__ local = & shm[0];
@@ -200,7 +200,7 @@ void scatter(
         auto const gix = tile_idx.x * nx.x + ix;
         auto const giy = tile_idx.y * nx.y + iy;
 
-        auto const in_idx = giy * global_nx.x + gix;
+        auto const in_idx = giy * dims.x + gix;
 
         local[ iy * ext_nx.x + ix + offset ].x = in_x[ in_idx ] ;
         local[ iy * ext_nx.x + ix + offset ].y = in_y[ in_idx ] ;
@@ -223,11 +223,11 @@ void scatter_scale(
     const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
     const size_t tile_off = tile_id * tile_vol;
 
-    const uint2  global_nx = { ntiles.x * nx.x, ntiles.y * nx.y };
+    const uint2  dims = { ntiles.x * nx.x, ntiles.y * nx.y };
 
     S const * const __restrict__ in_x = & d_in[                             0 ];
-    S const * const __restrict__ in_y = & d_in[     global_nx.x * global_nx.y ];
-    S const * const __restrict__ in_z = & d_in[ 2 * global_nx.x * global_nx.y ];
+    S const * const __restrict__ in_y = & d_in[     dims.x * dims.y ];
+    S const * const __restrict__ in_z = & d_in[ 2 * dims.x * dims.y ];
 
     auto * shm = block::shared_mem<V>();
     V * __restrict__ local = & shm[0];
@@ -240,7 +240,7 @@ void scatter_scale(
         auto const giy = tile_idx.y * nx.y + iy;
 
         auto const idx    = iy * ext_nx.x + ix + offset;
-        auto const in_idx = giy * global_nx.x + gix;
+        auto const in_idx = giy * dims.x + gix;
 
         local[ idx ].x = scale * in_x[ in_idx ] ;
         local[ idx ].y = scale * in_y[ in_idx ] ;
@@ -291,24 +291,23 @@ class vec3grid : public grid< V >
     
     public:
 
-    using grid<V> :: d_buffer;
-    using grid<V> :: nx;
+    using grid< V > :: d_buffer;
+    using grid< V > :: ntiles;
+    using grid< V > :: nx;
+    using grid< V > :: dims;
+    using grid< V > :: gc;
+    using grid< V > :: ext_nx;
+    using grid< V > :: offset;
+    using grid< V > :: tile_vol;
+    using grid< V > :: name;
+    using grid< V > :: periodic;
 
-    using grid<V> :: gc;
+    using grid< V > :: grid;
+    using grid< V > :: operator=;
 
-    using grid<V> :: ntiles;
-    using grid<V> :: global_nx;
-    using grid<V> :: ext_nx;
-
-    using grid<V> :: offset;
-
-    using grid<V> :: tile_vol;
-    using grid<V> :: name;
-
-    using grid<V> :: grid;
-    using grid<V> :: operator=;
-
-    using grid<V> :: gather;
+    using grid< V > :: gather;
+    using grid< V > :: copy_to_gc_x;
+    using grid< V > :: copy_to_gc_y;
 
     /**
      * @brief Gather specific field component values from all tiles into a 
@@ -345,7 +344,7 @@ class vec3grid : public grid< V >
             ABORT( "vec3grid::gather() - Invalid fc");
         }        
 
-        return global_nx.x * global_nx.y;
+        return dims.x * dims.y;
     }
 
     /**
@@ -369,7 +368,7 @@ class vec3grid : public grid< V >
                 d_out, d_buffer, offset,
                 ntiles, nx, ext_nx );     
 
-        return 3 * global_nx.x * global_nx.y;
+        return 3 * dims.x * dims.y;
     }
 
     /**
@@ -408,7 +407,7 @@ class vec3grid : public grid< V >
             ABORT( "vec3grid::scatter() - Invalid fc");
         }        
 
-        return global_nx.x * global_nx.y;
+        return dims.x * dims.y;
     }
 
     /**
@@ -434,7 +433,7 @@ class vec3grid : public grid< V >
             ntiles, nx, ext_nx,
             d_in );
 
-        return global_nx.x * global_nx.y * 3;
+        return dims.x * dims.y * 3;
     }
 
     /**
@@ -457,7 +456,7 @@ class vec3grid : public grid< V >
             ntiles, nx, ext_nx,
             d_in, scale );
 
-        return global_nx.x * global_nx.y * 3;
+        return dims.x * dims.y * 3;
     }
 
     /**
@@ -474,10 +473,10 @@ class vec3grid : public grid< V >
 
         // Fill in grid dimensions
         info.ndims = 2;
-        info.count[0] = global_nx.x;
-        info.count[1] = global_nx.y;
+        info.count[0] = dims.x;
+        info.count[1] = dims.y;
 
-        const std::size_t bsize = global_nx.x * global_nx.y;
+        const std::size_t bsize = dims.x * dims.y;
 
         S * d_data = device::malloc<S>( bsize );
         S * h_data = host::malloc<S>( bsize );
@@ -502,7 +501,7 @@ class vec3grid : public grid< V >
      */
     void save( const enum fcomp::cart fc, std::string filename ) {
 
-        const std::size_t bsize = global_nx.x * global_nx.y;
+        const std::size_t bsize = dims.x * dims.y;
 
         S * d_data = device::malloc<S>( bsize );
         S * h_data = host::malloc<S>( bsize );
@@ -511,7 +510,7 @@ class vec3grid : public grid< V >
 
         device::memcpy_tohost( h_data, d_data, bsize );
 
-        uint64_t grid_dims[] = {global_nx.x, global_nx.y};
+        uint64_t grid_dims[] = {dims.x, dims.y};
 
         std::string fcomp_name[] = {"x","y","z"};
         std::string name_fc = name + "-" + fcomp_name[fc];

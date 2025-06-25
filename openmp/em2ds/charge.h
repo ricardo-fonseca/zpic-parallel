@@ -70,10 +70,8 @@ class Charge {
         rho -> name = "Charge";
 
         uint2 dims{ nx.x * ntiles.x, nx.y * ntiles.y };
-        auto fdims = fft::fdims( dims );
-        frho = new basic_grid< std::complex<float> >( fdims );
-
-        fft_forward = new fft::plan( *rho, *frho );
+        fft_forward = new fft::plan( dims, fft::type::r2c );
+        frho = new basic_grid< std::complex<float> >( fft::fdims( dims ) );
 
         // Zero initial charge
         // This is only relevant for diagnostics, current should always zeroed before deposition

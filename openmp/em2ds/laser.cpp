@@ -130,34 +130,28 @@ int Laser::Pulse::add( EMF & emf ) {
     if ( ! ierr ) {
 
         // Add to k-space fields
-        basic_grid3<std::complex<float>> fft_tmp( fft :: fdims( tmp_E.dims ) );
-        
-        fft::plan forward_E( tmp_E, fft_tmp );
-        fft::plan forward_B( tmp_B, fft_tmp );
-
-        fft::plan backward_E( fft_tmp, tmp_E );
-        fft::plan backward_B( fft_tmp, tmp_B );
-
+        fft::plan dft_forward( tmp_E.dims, fft::r2c_v3 );
+        basic_grid3<std::complex<float>> fft_tmp( fft::fdims( tmp_E.dims ) );
         const float2 dk = fft::dk( emf.box );
 
         Filter::Lowpass filter( make_float2( 0.5, 0.5 ) );
 
         // transform tmp_E and add to fEt
-        forward_E.transform( tmp_E, fft_tmp );
+        dft_forward.transform( tmp_E, fft_tmp );
         lon_x( fft_tmp, dk );
         filter.apply( fft_tmp );
         emf.fEt -> add( fft_tmp );
 
-        backward_E.transform( fft_tmp, tmp_E );
+        emf.fft_backward -> transform( fft_tmp, tmp_E );
         emf.E -> add( tmp_E );
 
         // transform tmp_B and add to fB 
-        forward_B.transform( tmp_B, fft_tmp );
+        dft_forward.transform( tmp_B, fft_tmp );
         lon_x( fft_tmp, dk );
         filter.apply( fft_tmp );
         emf.fB  -> add( fft_tmp );
 
-        backward_B.transform( fft_tmp, tmp_B );
+        emf.fft_backward -> transform( fft_tmp, tmp_B );
         emf.B -> add( tmp_B );
     }
 
@@ -183,11 +177,9 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
         sin_pol = std::sin( polarization );
     }
 
-    uint2 global_nx = E.dims;
-
     float2 dx = make_float2(
-        box.x / global_nx.x,
-        box.y / global_nx.y
+        box.x / E.dims.x,
+        box.y / E.dims.y
     );
 
     // Grid tile parameters
@@ -303,11 +295,9 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
         sin_pol = std::sin( polarization );
     }
 
-    uint2 global_nx = E.dims;
-
     float2 dx = make_float2(
-        box.x / global_nx.x,
-        box.y / global_nx.y
+        box.x / E.dims.x,
+        box.y / E.dims.y
     );
 
     // Grid tile parameters

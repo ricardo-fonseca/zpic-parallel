@@ -89,15 +89,7 @@ class grid {
         periodic( make_int2( 1, 1 ) )
     {
         // Validate parameters
-        if ( ntiles.x == 0 || ntiles.y == 0 ) {
-            std::cerr << "Invalid number of tiles " << ntiles << '\n';
-            std::exit(1);
-        }
-
-        if ( nx.x == 0 || nx.y == 0 ) {
-            std::cerr << "Invalid tiles size" << nx << '\n';
-            std::exit(1);
-        }
+        validate_parameters();
 
         // Allocate main data buffer
         d_buffer = memory::malloc<T>( buffer_size() );

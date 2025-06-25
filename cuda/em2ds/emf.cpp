@@ -47,9 +47,9 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     B -> name = "Magnetic field";
 
     // Create FFT plan
-    fft_backward = new fft::plan( E -> global_nx, fft::type::c2r, 3 );
+    fft_backward = new fft::plan( E -> dims, fft::type::c2r_v3 );
 
-    auto fdims = fft_backward -> input_dims();
+    auto fdims = fft::fdims( E -> dims );
     fE  = new basic_grid3< std::complex<float> >( fdims );
     fEt = new basic_grid3< std::complex<float> >( fdims );
     fB  = new basic_grid3< std::complex<float> >( fdims );
@@ -425,8 +425,8 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         };
 
         info.axis = axis;
-        info.count[0] = E -> global_nx.x;
-        info.count[1] = E -> global_nx.y;
+        info.count[0] = E -> dims.x;
+        info.count[1] = E -> dims.y;
 
         f -> save( fc, info, iteration, "EMF" );
 

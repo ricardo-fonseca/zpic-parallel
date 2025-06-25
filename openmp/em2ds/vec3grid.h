@@ -44,6 +44,7 @@ class vec3grid : public grid< V >
     using S = typename vec3_scalar<V>::type;
 
     public:
+
     using grid< V > :: d_buffer;
     using grid< V > :: ntiles;
     using grid< V > :: nx;

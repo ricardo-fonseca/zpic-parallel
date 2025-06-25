@@ -203,8 +203,8 @@ void Charge::save( ) {
     	.axis = axis
     };
 
-    info.count[0] = rho ->  global_nx.x;
-    info.count[1] = rho ->  global_nx.y;
+    info.count[0] = rho ->  dims.x;
+    info.count[1] = rho ->  dims.y;
 
     zdf::iteration iteration = {
     	.n = iter,

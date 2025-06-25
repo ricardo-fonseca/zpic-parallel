@@ -75,10 +75,9 @@ class Current {
         J -> name = "Current";
 
         uint2 dims{ nx.x * ntiles.x, nx.y * ntiles.y };
-        fft_forward = new fft::plan( dims, fft::type::r2c, 3 );
+        fft_forward = new fft::plan( dims, fft::type::r2c_v3 );
 
-        auto fdims = fft_forward -> output_dims();
-        fJ = new basic_grid3< std::complex<float> >( fdims );
+        fJ = new basic_grid3< std::complex<float> >( fft::fdims( dims ) );
 
         // Zero initial charge
         // This is only relevant for diagnostics, current is always zeroed before deposition

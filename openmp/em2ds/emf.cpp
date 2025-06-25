@@ -39,13 +39,12 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     B -> name = "Magnetic field";
 
     auto fdims = fft::fdims( E -> dims );
-
     fE  = new basic_grid3< std::complex<float> >( fdims );
     fEt = new basic_grid3< std::complex<float> >( fdims );
     fB  = new basic_grid3< std::complex<float> >( fdims );
 
     // Create FFT plan
-    fft_backward = new fft::plan( *fE, *E );
+    fft_backward = new fft::plan( E -> dims, fft::c2r_v3 );
 
     fE  -> name = "F(E)";
     fEt -> name = "F(Et)";

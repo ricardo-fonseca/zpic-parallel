@@ -106,8 +106,8 @@ void test_grid( void ) {
     std::cout << "Saving charge to disk..." << '\n';
     charge.save("charge.zdf");
 
-    fft::plan plan_r2c( charge, fpotential );
-    fft::plan plan_c2r( fpotential, charge );
+    fft::plan plan_r2c( in_dims, fft::r2c );
+    fft::plan plan_c2r( in_dims, fft::c2r );
 
     std::cout << "plan_r2c: " << plan_r2c << '\n';
     std::cout << "plan_c2r: " << plan_c2r << '\n';

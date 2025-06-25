@@ -107,7 +107,7 @@ void test_grid( void ) {
     fft::plan plan_r2c( in_dims, fft::type::r2c );
     fft::plan plan_c2r( in_dims, fft::type::c2r );
     
-    uint2 out_dims = plan_r2c.output_dims();
+    uint2 out_dims = fft::fdims( in_dims );
     basic_grid<std::complex<float>> fpotential( out_dims );
 
     plan_r2c.transform( charge, fpotential );

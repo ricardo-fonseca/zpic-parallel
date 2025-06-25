@@ -475,35 +475,35 @@ class grid {
 
     public:
 
-    /// @brief Data buffer   
+    /// @brief Data buffer
     T * d_buffer;
-
-    /// @brief Tile grid size
-    const uint2 nx;
-    
-    /// @brief Tile guard cells
-    const bnd<unsigned int> gc;
-
-    /// @brief Tile grize including guard cells
-    const uint2 ext_nx;
- 
-    /// Offset in cells between lower tile corner and position (0,0)
-    const unsigned int offset;
-
-    /// @brief Tile volume (may be larger than product of cells for alignment)
-    const unsigned int tile_vol;
-
-    /// @brief Object name
-    std::string name;
-
-    /// @brief Consider global boundaries periodic
-    int2 periodic;
 
     /// @brief Local number of tiles
     const uint2 ntiles;
 
-    /// @brief Global grid size
-    const uint2 global_nx;
+    /// @brief Tile grid size
+    const uint2 nx;
+
+    /// @brief Local grid size
+    const uint2 dims;
+
+    /// @brief Tile guard cells
+    const bnd<unsigned int> gc;
+    
+    /// @brief Tile grize including guard cells
+    const uint2 ext_nx;
+
+    /// @brief Local offset in cells between lower tile corner and position (0,0)
+    const unsigned int offset;
+
+    /// @brief Tile volume (may be larger than product of cells for alignment)
+    std::size_t tile_vol;
+
+    /// @brief Object name
+    std::string name;
+
+    /// @brief Consider grid boundaries periodic
+    int2 periodic;
 
     /**
      * @brief Construct a new grid object
@@ -512,60 +512,26 @@ class grid {
      * @param nx                Individual tile size
      * @param gc                Number of guard cells
      */
-    grid( uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc ):
+    grid( uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc = 0 ):
         d_buffer( nullptr ), 
         ntiles( ntiles ),
         nx( nx ),
+        dims( ntiles * nx ),
         gc(gc),
-        periodic( { 1, 1 } ),
-        global_nx( { ntiles.x * nx.x, ntiles.y * nx.y } ),
         ext_nx( make_uint2( gc.x.lower + nx.x + gc.x.upper,
                             gc.y.lower + nx.y + gc.y.upper )),
         offset( gc.y.lower * ext_nx.x + gc.x.lower ),
         tile_vol( roundup4( ext_nx.x * ext_nx.y ) ),
-        name( "grid" )
+        name( "grid" ),
+        periodic( make_int2( 1, 1 ) )
     {
 
-        // Validate parameters
-        validate_parameters();
-
-        // Allocate main data buffer on device memory
-        d_buffer = device::malloc<T>( buffer_size() );
-    };   
-
-    /**
-     * @brief Construct a new grid object
-     * 
-     * @note: The number of guard cells is set to 0
-     * 
-     * @param ntiles            Number of tiles
-     * @param nx                Individual tile size
-     */
-    grid( uint2 const ntiles, uint2 const nx ):
-        d_buffer( nullptr ),
-        ntiles( ntiles ),
-        nx( nx ),
-        gc( 0 ),
-        periodic( { 1, 1 } ),
-        global_nx( { ntiles.x * nx.x, ntiles.y * nx.y } ),
-        ext_nx( make_uint2( nx.x, nx.y )),
-        offset( 0 ),
-        tile_vol( roundup4( nx.x * nx.y )),
-        name( "grid" )
-    {
         // Validate parameters
         validate_parameters();
 
         // Allocate main data buffer on device memory
         d_buffer = device::malloc<T>( buffer_size() );
     };
-
-    /**
-     * @brief Get the number of tiles
-     * 
-     * @return int2 
-     */
-    uint2 get_ntiles() { return ntiles; };
 
     /**
      * @brief grid destructor
@@ -690,7 +656,7 @@ class grid {
         // Update guard cell values
         copy_to_gc();
 
-        return global_nx.x * global_nx.y;
+        return dims.x * dims.y;
     }
 
     /**
@@ -713,7 +679,7 @@ class grid {
         // Update guard cell values
         copy_to_gc();
 
-        return global_nx.x * global_nx.y;
+        return dims.x * dims.y;
     }
 
     /**
