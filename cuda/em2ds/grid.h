@@ -693,6 +693,13 @@ class grid {
         return global_nx.x * global_nx.y;
     }
 
+    /**
+     * @brief 
+     * 
+     * @param d_in 
+     * @param scale 
+     * @return unsigned int 
+     */
     unsigned int scatter( T const * const __restrict__ d_in, T const scale ) {
 
         dim3 block( 64 );

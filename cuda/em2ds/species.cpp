@@ -372,7 +372,8 @@ __device__
  * @param dx        Particle motion normalized to cell size
  * @param q         Particle charge
  */
-void dep_current( float3 * const __restrict__ J, const int ystride, int2 ix0, float2 x0, float3 u, float rg, float2 dx, float q ) {
+void dep_current( float3 * const __restrict__ J, const int ystride,
+    int2 ix0, float2 x0, float3 u, float rg, float2 dx, float q ) {
 
     // Find position time centered with velocity
     float2 x1 = make_float2( x0.x + 0.5f * dx.x, x0.y + 0.5f * dx.y );
