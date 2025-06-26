@@ -47,7 +47,7 @@ class Lowpass : public Digital {
             const int kx  = ix;
             const int ky  = abs( ((iy < int(fld.dims.y)/2) ? iy : (iy - int(fld.dims.y)) ) );
 
-            if ( ky > kcy && kx > kcx ) data[ idx ] = 0;
+            if ( ky > kcy || kx > kcx ) data[ idx ] = 0;
         }
     };
     
@@ -67,7 +67,7 @@ class Lowpass : public Digital {
             const int kx  = ix;
             const int ky  = abs( ((iy < int(fld.dims.y)/2) ? iy : (iy - int(fld.dims.y)) ) );
 
-            if ( ky > kcy && kx > kcx ) {
+            if ( ky > kcy || kx > kcx ) {
                 data_x[ idx ] = 0;
                 data_y[ idx ] = 0;
                 data_z[ idx ] = 0;
