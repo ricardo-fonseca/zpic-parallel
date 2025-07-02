@@ -75,31 +75,33 @@ const unsigned size_zdf_double  = 8;    ///< size of zdf_double
 /**
  * IDs of ZDF records
  */
-#define ZDF_INT32_ID     	0x00010000  ///< Int32 record ID
-#define ZDF_DOUBLE_ID    	0x00020000  ///< Double record ID
-#define ZDF_STRING_ID    	0x00030000  ///< String record ID
+#define ZDF_INT32_ID        0x00010000  ///< Int32 record ID
+#define ZDF_DOUBLE_ID       0x00020000  ///< Double record ID
+#define ZDF_STRING_ID       0x00030000  ///< String record ID
 
 #define ZDF_DATASET_ID      0x00100002  ///< Dataset record ID
 #define ZDF_CDSET_START_ID  0x00110000  ///< Chunked dataset start record ID
 #define ZDF_CDSET_CHUNK_ID  0x00120000  ///< Chunked dataset data chunk record ID
-#define ZDF_CDSET_END_ID	0x00130000  ///< Chunked dataset end record ID
+#define ZDF_CDSET_END_ID    0x00130000  ///< Chunked dataset end record ID
 
-#define ZDF_ITERATION_ID 	0x00200001  ///< Iteration record ID
-#define ZDF_GRID_INFO_ID 	0x00210001  ///< Grid information record ID
-#define ZDF_PART_INFO_ID 	0x00220002  ///< Particle set information record ID
-#define ZDF_TRACK_INFO_ID 	0x00230001  ///< Particle tracks information record ID
+#define ZDF_ITERATION_ID     0x00200001  ///< Iteration record ID
+#define ZDF_GRID_INFO_ID     0x00210001  ///< Grid information record ID
+#define ZDF_PART_INFO_ID     0x00220002  ///< Particle set information record ID
+#define ZDF_TRACK_INFO_ID    0x00230001  ///< Particle tracks information record ID
 
 /* -----------------------------------------------------------------------------------------------
   recursively create path if required
 -------------------------------------------------------------------------------------------------- */
 
 /**
- * Recursively creates a path if required
+ * @brief Recursively creates a path if required
  * @param  path path to create
  * @return      returns 0 on success, otherwise returns the value returned by mkdir
  */
 int create_path( const char path[] )
 {
+    if ( path[0] == '\0' ) return 0;
+    
     char uppath[256], *p;
     int ierr = 0;
 
@@ -149,7 +151,10 @@ size_t zdf_sizeof( enum zdf_data_type data_type ) {
         case zdf_int64:
         case zdf_uint64:
         case zdf_float64:
+        case zdf_complex64:
             return(8);
+        case zdf_complex128:
+            return(16);
     }
     return(0);
 }
@@ -672,10 +677,10 @@ size_t zdf_vector32_write( t_zdf_file* zdf,  void const * const data, size_t len
  * @param  len  Number of vector elements
  * @return      Returns number of bytes written on success, 0 on error
  */
-size_t zdf_vector64_write( t_zdf_file* zdf,  void const * const data, size_t len ) {
+size_t zdf_vector2x64_write( t_zdf_file* zdf,  void const * const data, size_t len ) {
     uint64_t buffer[ENDIAN_CONV_BUF_SIZE];
 
-    for( size_t offset = 0; offset < len; offset += ENDIAN_CONV_BUF_SIZE ) {
+    for( size_t offset = 0; offset < 2 * len; offset += ENDIAN_CONV_BUF_SIZE ) {
 
         // Number of values in chunk
         size_t chunk_len = (offset + ENDIAN_CONV_BUF_SIZE < len ) ? ENDIAN_CONV_BUF_SIZE : len - offset;
@@ -688,9 +693,8 @@ size_t zdf_vector64_write( t_zdf_file* zdf,  void const * const data, size_t len
             return(0);
     }
 
-    return( len * sizeof(uint64_t) );
+    return( 2 * len * sizeof(uint64_t) );
 }
-
 
 #else
 
@@ -699,8 +703,8 @@ size_t zdf_vector64_write( t_zdf_file* zdf,  void const * const data, size_t len
 #endif
 
 /**
- * Write arbitraty 8bit type vector to file. Adds padding at the end of the vector if
- * necessary to maitain alignment.
+ * @brief Write arbitraty 8bit type vector to file. Adds padding at the end of the vector if
+ *        necessary to maintain alignment.
  * @param  zdf ZDF file descriptor
  * @param  u   Pointer to 8 bit data
  * @param  len Number of vector elements
@@ -749,6 +753,14 @@ size_t zdf_vector_write( t_zdf_file* zdf, const void * data, enum zdf_data_type 
         case zdf_uint64:
         case zdf_float64:
             return ( zdf_vector64_write( zdf, data, len ) );
+
+        // Complex types are stored as float pairs (real,img)
+        case zdf_complex64:
+            return ( zdf_vector32_write( zdf, data, 2*len ) );
+
+        case zdf_complex128:
+            return ( zdf_vector64_write( zdf, data, 2*len ) );
+
         default:
             fprintf(stderr,"(*error*) zdf_vector_write: Unsupported datatype.\n");
      }
@@ -846,7 +858,7 @@ typedef struct ZDF_Record{
 size_t zdf_record_write( t_zdf_file* zdf, const t_zdf_record* rec ){
 
   if ( ! zdf_uint32_write( zdf, rec -> id_version ) ) return(0);
-  size_t len;	if ( ! (len=zdf_string_write( zdf, rec -> name )) ) return(0);
+  size_t len;    if ( ! (len=zdf_string_write( zdf, rec -> name )) ) return(0);
     if ( ! zdf_uint64_write( zdf, rec -> length )     ) return(0);
 
      return( sizeof(uint32_t) + len + sizeof(uint64_t) );
@@ -976,12 +988,15 @@ size_t zdf_add_iteration( t_zdf_file* zdf, const t_zdf_iteration* iter ){
                      size_zdf_string( iter -> time_units )
     };
 
+    // Default name
+    if ( ! rec.name ) rec.name = (char *) "Iteration";
+
     size_t ok, len;
 
     len = ( ok = zdf_record_write( zdf, &rec) );      if ( !ok ) return(0);
-     len += ( ok = zdf_int32_write( zdf, iter ->n ) ); if ( !ok ) return(0);
+    len += ( ok = zdf_int32_write( zdf, iter ->n ) ); if ( !ok ) return(0);
     len += ( ok = zdf_double_write( zdf, iter->t ) ); if ( !ok ) return(0);
-     len += ( ok = zdf_string_write( zdf, iter->time_units ) ); if ( !ok ) return(0);
+    len += ( ok = zdf_string_write( zdf, iter->time_units ) ); if ( !ok ) return(0);
 
      return(len);
 }
@@ -997,8 +1012,8 @@ size_t size_zdf_grid_info(const t_zdf_grid_info* grid) {
     size = size_zdf_uint32 + grid -> ndims * size_zdf_uint64 +
             size_zdf_string(grid->label) +  size_zdf_string(grid->units);
 
-       // Includes axis information
-       size += size_zdf_int32;
+    // Includes axis information
+    size += size_zdf_int32;
     if ( grid -> axis ) {
 
         for(unsigned i=0; i<grid -> ndims; i++)
@@ -1061,9 +1076,9 @@ size_t zdf_add_grid_info( t_zdf_file* zdf, const t_zdf_grid_info* grid ){
  * @return      Metadata group size in bytes
  */
 size_t size_zdf_part_info(const t_zdf_part_info* part) {
-    size_t size = size_zdf_string(part->label) +	// label
-            size_zdf_uint64 + 						// np
-            size_zdf_uint32; 						// nquants
+    size_t size = size_zdf_string(part->label) +    // label
+            size_zdf_uint64 +                       // np
+            size_zdf_uint32;                        // nquants
 
     for( unsigned i = 0; i < part -> nquants; i++) {
         size += size_zdf_string( part -> quants[i] ) +
@@ -1092,8 +1107,8 @@ size_t zdf_add_part_info( t_zdf_file* zdf, const t_zdf_part_info* part ){
 
     if ( !( reclen = zdf_record_write( zdf, &rec ) ) ) return(0);
     if ( !zdf_string_write( zdf, part -> label )     ) return(0);
-     if ( !zdf_uint64_write( zdf, part -> np )        ) return(0);
-     if ( !zdf_uint32_write( zdf, part -> nquants )   ) return(0);
+    if ( !zdf_uint64_write( zdf, part -> np )        ) return(0);
+    if ( !zdf_uint32_write( zdf, part -> nquants )   ) return(0);
 
     for( unsigned i=0; i < part -> nquants; i++) {
         if ( !zdf_string_write( zdf, part -> quants[i] ) ) return(0);
@@ -1114,7 +1129,7 @@ size_t zdf_add_part_info( t_zdf_file* zdf, const t_zdf_part_info* part ){
  * @return        Metadata group size in bytes
  */
 size_t size_zdf_track_info(const t_zdf_track_info* tracks) {
-    size_t size = size_zdf_string(tracks->label) +	// label
+    size_t size = size_zdf_string(tracks->label) +    // label
             4 * size_zdf_uint32; // ntracks, ndump, niter, nquants
 
     for( unsigned i = 0; i < tracks -> nquants; i++) {
@@ -1415,7 +1430,7 @@ size_t zdf_end_cdset( t_zdf_file* zdf, t_zdf_dataset* dataset ){
 size_t zdf_open_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset ) {
 
     // Set file position after the magic number
-    if ( fseek( zdf -> fp, 4, SEEK_SET ) ) return(0);
+    if ( fseek( zdf -> fp, 4, SEEK_SET ) ) return(-1);
 
     // Locate the requested dataset
     // If the dataset is not found there will be an EOF error signaled
@@ -1447,7 +1462,7 @@ size_t zdf_open_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset ) {
 
     if ( !found ) {
         fprintf(stderr,"(*error*) Unable to find dataset %s\n", dataset -> name);
-        return(0);
+        return(-1);
     }
 
     // re-position the file pointer at the end of the file
@@ -1507,7 +1522,6 @@ int zdf_open_grid_file( t_zdf_file *zdf, const t_zdf_grid_info *info,
 
     // Build filename
     sprintf( filename, "%s/%s-%06u.zdf", path, info->name, (unsigned) iteration -> n );
-    // printf("Saving filename %s\n", filename );
 
     // Create ZDF file
     if ( !zdf_open_file( zdf, filename, ZDF_CREATE ) ) {
@@ -1529,7 +1543,8 @@ int zdf_open_grid_file( t_zdf_file *zdf, const t_zdf_grid_info *info,
 
 
 /**
- * Saves a ZDF grid file
+ * @brief Saves a ZDF grid file
+ * 
  * @param  data       Pointer to grid data
  * @param  data_type  ZDF Data type of grid data
  * @param  info       Grid information
@@ -1579,7 +1594,6 @@ int zdf_open_part_file( t_zdf_file *zdf, t_zdf_part_info *info,
 
     // Build filename
     sprintf( filename, "%s/%s-%s-%06u.zdf", path, "particles", info->name, (unsigned) iteration -> n );
-    //printf("Saving filename %s\n", filename );
 
     // Create ZDF file
     if ( !zdf_open_file( zdf, filename, ZDF_CREATE ) ) {
@@ -1664,75 +1678,6 @@ int main (int argc, const char * argv[]) {
 
     return 0;
 }
-
-
-#if 0
-int main (int argc, const char * argv[]) {
-
-    const unsigned NX = 128;
-    float buf[NX];
-
-    for(unsigned i = 0; i < NX; i++) {
-        float x = 8 * (M_PI/NX) * (i+1);
-        buf[i] = sin(x)/x;
-    }
-
-    t_zdf_grid_axis axis[1];
-    axis[0] = (t_zdf_grid_axis) {
-        .min = -1.0,
-        .max =  1.0,
-        .label = "axis label",
-        .units = "axis units"
-    };
-
-    t_zdf_grid_info info = {
-        .ndims = 1,
-        .label = "data label",
-        .units = "data units",
-        .axis = axis
-    };
-
-    info.count[0] = NX;
-
-    t_zdf_iteration iter = {
-        .n = 123,
-        .t = 12.3,
-        .time_units = "time units"
-    };
-
-    // Open file
-    t_zdf_file file;
-    zdf_open_grid_file( &file, &info, &iter, "chunk_test" );
-
-    // Write chunked dataset header
-    t_zdf_dataset dset = {
-        .data_type = zdf_float32,
-        .ndims = 1
-    };
-    dset.count[0] = 128;
-    zdf_start_cdset( &file, "DATA", &dset );
-
-    // Write chunks
-    t_zdf_chunk chunk;
-    chunk.count[0] = 16;
-    chunk.start[0] = 0;
-    chunk.stride[0] = 1;
-    for( int i = 0; i < 8; i ++) {
-        chunk.data = &buf[i*16];
-        zdf_write_cdset( &file, &dset, &chunk );
-        chunk.start[0] += 16;
-    }
-
-    // End dataset (optional)
-    zdf_end_cdset( &file, &dset );
-
-    // Close file
-    zdf_close_file( &file );
-
-    return 0;
-}
-
-#endif
 
 #endif
 

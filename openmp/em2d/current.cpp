@@ -300,8 +300,8 @@ void Current::save( fcomp::cart const jc ) {
     	.axis = axis
     };
 
-    info.count[0] = J -> gnx.x;
-    info.count[1] = J -> gnx.y;
+    info.count[0] = J -> dims.x;
+    info.count[1] = J -> dims.y;
 
     zdf::iteration iteration = {
     	.n = iter,

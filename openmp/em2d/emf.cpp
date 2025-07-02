@@ -647,8 +647,8 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         .axis = axis
     };
 
-    info.count[0] = E -> gnx.x;
-    info.count[1] = E -> gnx.y;
+    info.count[0] = E -> dims.x;
+    info.count[1] = E -> dims.y;
 
 
     zdf::iteration iteration = {

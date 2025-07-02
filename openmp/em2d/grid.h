@@ -31,7 +31,7 @@ class grid {
     int2 periodic;
 
     /// Global grid size
-    const uint2 gnx;
+    const uint2 dims;
     
     /// Tile grize including guard cells
     const uint2 ext_nx;
@@ -58,7 +58,7 @@ class grid {
         nx( nx ),
         gc(gc),
         periodic( make_int2( 1, 1 ) ),
-        gnx( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y )),
+        dims( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y )),
         ext_nx( make_uint2( gc.x.lower +  nx.x + gc.x.upper,
                             gc.y.lower +  nx.y + gc.y.upper )),
         offset( gc.y.lower * ext_nx.x + gc.x.lower ),
@@ -82,7 +82,7 @@ class grid {
         nx( nx ),
         gc( 0 ),
         periodic( make_int2( 1, 1 ) ),
-        gnx( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y )),
+        dims( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y )),
         ext_nx( make_uint2( nx.x, nx.y )),
         offset( 0 ),
         tile_vol( roundup4( nx.x * nx.y )),
@@ -198,7 +198,7 @@ class grid {
                         auto const gix = tile_idx.x * nx.x + ix;
                         auto const giy = tile_idx.y * nx.y + iy;
 
-                        auto const out_idx = giy * gnx.x + gix;
+                        auto const out_idx = giy * dims.x + gix;
 
                         out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ];
                     }
@@ -206,7 +206,7 @@ class grid {
             }
         }
 
-        return gnx.x * gnx.y;
+        return dims.x * dims.y;
     }
 
 #ifdef _OPENMP
@@ -831,8 +831,8 @@ class grid {
 
         // Fill in grid dimensions
         info.ndims = 2;
-        info.count[0] = ntiles.x * nx.x;
-        info.count[1] = ntiles.y * nx.y;
+        info.count[0] = dims.x;
+        info.count[1] = dims.y;
 
         // Allocate buffer on host to gather data
         T * h_data = memory::malloc<T>( info.count[0] * info.count[1] );
@@ -842,6 +842,27 @@ class grid {
 
         memory::free( h_data );
     };
+
+    /**
+     * @brief Save grid values to disk
+     * 
+     * @param filename      Output file name
+     */
+    void save( std::string filename ) {
+        // Allocate buffer on host to gather data
+        T * h_data = memory::malloc<T>( dims.x * dims.y );
+
+        // Gather data on contiguous grid
+        gather( h_data );
+
+        uint64_t gdims[] = { dims.x, dims.y };
+
+        // Save data
+        zdf::save_grid( h_data, 2, gdims, name, filename );
+
+        // Free temporary buffer
+        memory::free( h_data );
+    }
 
 };
 
