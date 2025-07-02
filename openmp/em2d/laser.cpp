@@ -19,7 +19,7 @@
  */
 void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
 
-    const int2 ntiles = make_int2( E.ntiles.x, E.ntiles.y );
+    const int2 ntiles   = make_int2( E.ntiles.x, E.ntiles.y );
     const auto tile_vol = E.tile_vol;
     const auto nx       = E.nx;
     const auto offset   = E.offset;
@@ -48,14 +48,14 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
             float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
             float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
-            for( unsigned iy = 0; iy < nx.y; iy++ ) {
+            for( int iy = 0; iy < nx.y; iy++ ) {
                 double tmpDivEx = divEx[ iy ];
                 double tmpDivBx = divBx[ iy ];
 
                 for( int ix = nx.x - 1; ix >= 0; ix-- ) {
 
                     tmpDivEx += dx_dy * (tile_E[ix+1 + iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    tile_E[ ix + iy * ystride].x = tmpDivEx;
+                    tile_E[ ix + iy * ystride ].x = tmpDivEx;
                     
                     tmpDivBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix + iy*ystride].y);
                     tile_B[ ix + iy * ystride ].x = tmpDivBx;
@@ -237,7 +237,7 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
         sin_pol = std::sin( polarization );
     }
 
-    uint2 g_nx = E.gnx;
+    uint2 g_nx = E.dims;
 
     float2 dx = make_float2(
         box.x / g_nx.x,
@@ -360,8 +360,6 @@ inline float gauss_phase( const float omega0, const float W0, const float z, con
  */
 int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 const box ) {
 
-    // std::cout << "Launching gaussian pulse...\n";
-
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
@@ -369,7 +367,7 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
         sin_pol = std::sin( polarization );
     }
 
-    uint2 g_nx = E.gnx;
+    uint2 g_nx = E.dims;
 
     float2 dx = make_float2(
         box.x / g_nx.x,
@@ -438,8 +436,6 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
     }
 
     div_corr_x( E, B, dx );
-
-    // std::cout << "Gaussian pulse launched\n";
 
     return 0;
 }

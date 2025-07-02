@@ -82,7 +82,7 @@ class Pulse {
      * @param emf   EMF object
      * @return      Returns 0 on success, -1 on error (invalid laser parameters)
      */
-    int add( EMF & emf ) {
+    virtual int add( EMF & emf ) {
         vec3grid<float3> tmp_E( emf.E -> ntiles, emf.E-> nx, emf.E -> gc );
         vec3grid<float3> tmp_B( emf.E -> ntiles, emf.B-> nx, emf.B -> gc );
 
@@ -107,6 +107,7 @@ class PlaneWave : public Pulse {
     int validate() { return Pulse::validate(); };
     int launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box );
 
+    int add( EMF & emf ) { return Pulse::add(emf); }
 };
 
 class Gaussian : public Pulse {
@@ -121,6 +122,8 @@ class Gaussian : public Pulse {
 
     int validate();
     int launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box );
+
+    int add( EMF & emf ) { return Pulse::add(emf); }
 };
 
 }
