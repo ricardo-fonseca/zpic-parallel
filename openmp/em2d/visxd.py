@@ -97,10 +97,20 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
         print("(*error*) file {} is not a 2D grid file".format(filename))
         return
 
-    range = [
-        [info.grid.axis[0].min, info.grid.axis[0].max],
-        [info.grid.axis[1].min, info.grid.axis[1].max]
-    ]
+    if ( data.dtype == np.complex64 or data.dtype == np.complex128  ):
+        print("(*error*) file {} - unsupported complex datatype".format(filename))
+        return
+
+    if ( not info.grid.axis ):
+        range = [
+            [ 0, info.grid.nx[0] ],
+            [ 0, info.grid.nx[1] ]
+        ]
+    else:
+        range = [
+            [info.grid.axis[0].min, info.grid.axis[0].max],
+            [info.grid.axis[1].min, info.grid.axis[1].max]
+        ]
 
     # Linearly scale data if requested
     if ( scale ):
@@ -121,20 +131,189 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
             extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
             aspect = 'auto', cmap=cmap )
 
-    zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
+    if ( info.grid.label and info.grid.units ):
+        zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
+        plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+    elif ( info.grid.label ):
+        plt.colorbar().set_label(r'$\sf{' + info.grid.label.replace(" ","\\;") + r'}$')
+    else:
+        plt.colorbar()
 
-    plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+    if ( info.grid.axis ):
+        if ( info.grid.axis[0].units ):
+            xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
+        else:
+            xlabel = info.grid.axis[0].label
 
-    xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
-    ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
+        if ( info.grid.axis[1].units ):
+            ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
+        else:
+            ylabel = info.grid.axis[1].label
 
-    plt.xlabel(r'$\sf{' + xlabel + r'}$')
-    plt.ylabel(r'$\sf{' + ylabel + r'}$')
+        plt.xlabel(r'$\sf{' + xlabel + r'}$')
+        plt.ylabel(r'$\sf{' + ylabel + r'}$')
 
-    plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
-        info.grid.label.replace(" ","\\;"),
-        info.iteration.t,
-        info.iteration.tunits))
+    if ( info.iteration ):
+        if ( info.iteration.tunits ):
+            plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
+                info.grid.label.replace(" ","\\;"),
+                info.iteration.t,
+                info.iteration.tunits))
+        else:
+            plt.title("$\\sf {} $\nt = ${:g}$".format(
+                info.grid.label.replace(" ","\\;"),
+                info.iteration.t ))
+    else:
+        if ( info.grid.label ):
+            plt.title("$\\sf {}".format( info.grid.label))
+        else:
+            plt.title( info.grid.name )
+
+    if ( xlim ):
+        plt.xlim(xlim)
+    if ( ylim ):
+        plt.ylim(ylim)
+
+    plt.grid(grid)
+
+    plt.show()
+
+def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, grid = False, cmap = None, norm = None,
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    """Generates a colormap plot from a 2D complex grid zdf file
+
+    Args:
+        filename (str):
+            Name of ZDF file to open
+        part (str, optional):
+            Part of the complex number to plot. Must be one of 'real' (real part),
+            'imag' (imaginary part), 'mag' (magnitude), or 'angle' (angle of the
+             complex argument). Defaults to 'real'. 
+        xlim (tuple, optional):
+            Lower and upper limits of x axis. Defaults to the x limits of the
+            grid data.
+        ylim (tuple, optional):
+            Lower and upper limits of y axis. Defaults to the y limits of the
+            grid data.
+        grid (bool, optional):
+            Display a grid on top of colormap. Defaults to False.
+        cmap (str, optional):
+            Name of the colormap to use. Defaults to the matplotlib imshow() 
+            colormap.
+        vsim (bool, optional):
+            Setup a symmetric value scale [ -max(|val|), max(|val|) ]. Defaults to setting
+            the value scale to [ min, max ]
+        vmin (number, optional):
+            Minimum value for the color scale. Defaults to setting the value to min(val)
+        vmax (number, optional):
+            Maximum value for the color scale. Defaults to setting the value to max(val)
+        scale (tuple, optional):
+            Linearly scale values i.e. data = scale[0] * data + scale[1]
+        shift (tuple, optional):
+            Shifts data spatially
+    """
+
+    if ( not os.path.exists(filename) ):
+        # raise FileNotFoundError( filename ) 
+        print("(*error*) file {} not found.".format(filename), file = sys.stderr )
+        return
+
+    (data, info) = zdf.read(filename)
+
+    # Check data
+    if ( info.type != "grid" ):
+        print("(*error*) file {} is not a grid file".format(filename))
+        return
+    
+    if ( info.grid.ndims != 2 ):
+        print("(*error*) file {} is not a 2D grid file".format(filename))
+        return
+
+    if ( data.dtype != np.complex64 and data.dtype != np.complex128  ):
+        print("(*error*) file {} is not a 2D complex grid file".format(filename))
+        return
+
+    # Axis information
+    if ( not info.grid.axis ):
+        range = [
+            [ 0, info.grid.nx[0] ],
+            [ 0, info.grid.nx[1] ]
+        ]
+    else:
+        range = [
+            [info.grid.axis[0].min, info.grid.axis[0].max],
+            [info.grid.axis[1].min, info.grid.axis[1].max]
+        ]
+
+    # Get complex number part
+    if ( part == 'real' ):
+        data = np.real( data )
+    elif ( part == 'imag' ):
+        data = np.imag( data )
+    elif ( part == 'abs'):
+        data = np.abs( data )
+    elif ( part == 'angle' ):
+        data = np.angle( data )
+    else:
+        print("(*error*) Invalid part option, must be one of 'real', 'imag', 'abs' or 'angle'")
+        return
+
+    # Linearly scale data if requested
+    if ( scale ):
+        data = data * scale[0] + scale[1]
+    
+    if ( shift ):
+        data = np.roll( data, shift, axis=(1,0) )
+
+    if ( vsim ):
+        amax = np.amax( np.abs(data) )
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = -amax, vmax = +amax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
+    else:
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = vmin, vmax = vmax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
+
+    if ( info.grid.label and info.grid.units ):
+        zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
+        plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
+    elif ( info.grid.label ):
+        plt.colorbar().set_label(r'$\sf{' + info.grid.label.replace(" ","\\;") + r'}$')
+    else:
+        plt.colorbar()
+
+    if ( info.grid.axis ):
+        if ( info.grid.axis[0].units ):
+            xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
+        else:
+            xlabel = info.grid.axis[0].label
+
+        if ( info.grid.axis[1].units ):
+            ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
+        else:
+            ylabel = info.grid.axis[1].label
+
+        plt.xlabel(r'$\sf{' + xlabel + r'}$')
+        plt.ylabel(r'$\sf{' + ylabel + r'}$')
+
+    if ( info.iteration ):
+        if ( info.iteration.tunits ):
+            plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
+                info.grid.label.replace(" ","\\;"),
+                info.iteration.t,
+                info.iteration.tunits))
+        else:
+            plt.title("$\\sf {} $\nt = ${:g}$".format(
+                info.grid.label.replace(" ","\\;"),
+                info.iteration.t ))
+    else:
+        if ( info.grid.label ):
+            plt.title("$\\sf {}".format( info.grid.label))
+        else:
+            plt.title( info.grid.name )
 
     if ( xlim ):
         plt.xlim(xlim)
