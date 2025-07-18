@@ -16,8 +16,7 @@
 template < part::quant quant >
 void gather_quant( 
     ParticleData part,
-    float * const __restrict__ d_data,
-    int * const __restrict__ d_off )
+    float * const __restrict__ d_data )
 {
     const uint2 tile_nx = part.nx;
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
@@ -28,22 +27,21 @@ void gather_quant(
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
 
-        const auto offset = part.offset[tid];
-        const auto np     = part.np[tid];
-        const auto data_offset = d_off[tid];
+        const auto tile_off = part.offset[tid];
+        const auto tile_np  = part.np[tid];
 
-        int2   const * __restrict__ const ix = &part.ix[ offset ];
-        float2 const * __restrict__ const x  = &part.x[ offset ];
-        float3 const * __restrict__ const u  = &part.u[ offset ];
+        int2   const * __restrict__ const ix = &part.ix[ tile_off ];
+        float2 const * __restrict__ const x  = &part.x [ tile_off ];
+        float3 const * __restrict__ const u  = &part.u [ tile_off ];
         
-        for( int idx = 0; idx < np; idx ++ ) {
+        for( int idx = 0; idx < tile_np; idx ++ ) {
             float val;
             if constexpr ( quant == part::x )  val = (tx * tile_nx.x + ix[idx].x) + (0.5f + x[idx].x);
             if constexpr ( quant == part::y )  val = (ty * tile_nx.y + ix[idx].y) + (0.5f + x[idx].y);
             if constexpr ( quant == part::ux ) val = u[idx].x;
             if constexpr ( quant == part::uy ) val = u[idx].y;
             if constexpr ( quant == part::uz ) val = u[idx].z;
-            d_data[ data_offset + idx ] = val;
+            d_data[ tile_off + idx ] = val;
         }
     }
 };
@@ -54,27 +52,25 @@ void gather_quant(
  * @param quant         Quantity to gather
  * @param d_data        Output data buffer, assumed to have size >= np
  */
-void Particles::gather( part::quant quant, float * const d_data, int * d_off )
+void Particles::gather( part::quant quant, float * const d_data )
 {
-    // If d_off was not supplied use the same offset as particle data
-    if ( d_off == nullptr ) d_off = offset;
-    
+   
     // Gather data on device
     switch (quant) {
     case part::x : 
-        gather_quant<part::x>( *this, d_data, d_off );
+        gather_quant<part::x>( *this, d_data );
         break;
     case part::y:
-        gather_quant<part::y>( *this, d_data, d_off );
+        gather_quant<part::y>( *this, d_data );
         break;
     case part::ux:
-        gather_quant<part::ux>( *this, d_data, d_off );
+        gather_quant<part::ux>( *this, d_data );
         break;
     case part::uy:
-        gather_quant<part::uy>( *this, d_data, d_off );
+        gather_quant<part::uy>( *this, d_data );
         break;
     case part::uz:
-        gather_quant<part::uz>( *this, d_data, d_off );
+        gather_quant<part::uz>( *this, d_data );
         break;
     }
 }
@@ -93,8 +89,7 @@ template < part::quant quant >
 void gather_quant( 
     ParticleData part,
     const float2 scale, 
-    float * const __restrict__ d_data,
-    int * const __restrict__ d_off )
+    float * const __restrict__ d_data )
 {
     const uint2 tile_nx = part.nx;
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
@@ -131,25 +126,25 @@ void gather_quant(
  * @param d_data    Output data buffer, assumed to have size >= np
  * @param scale     Scale factor for data
  */
-void Particles::gather( part::quant quant, const float2 scale, float * const __restrict__ d_data, int * const __restrict__ d_off )
+void Particles::gather( part::quant quant, float * const __restrict__ d_data, const float2 scale )
 {
     
     // Gather data on device
     switch (quant) {
     case part::x : 
-        gather_quant<part::x> ( *this, scale, d_data, d_off );
+        gather_quant<part::x> ( *this, scale, d_data );
         break; 
     case part::y: 
-        gather_quant<part::y> ( *this, scale, d_data, d_off );
+        gather_quant<part::y> ( *this, scale, d_data );
         break; 
     case part::ux: 
-        gather_quant<part::ux>( *this, scale, d_data, d_off );
+        gather_quant<part::ux>( *this, scale, d_data );
         break; 
     case part::uy: 
-        gather_quant<part::uy>( *this, scale, d_data, d_off );
+        gather_quant<part::uy>( *this, scale, d_data );
         break; 
     case part::uz: 
-        gather_quant<part::uz>( *this, scale, d_data, d_off );
+        gather_quant<part::uz>( *this, scale, d_data );
         break;
     }
 }
@@ -164,16 +159,8 @@ void Particles::gather( part::quant quant, const float2 scale, float * const __r
  */
 void Particles::save( zdf::part_info &metadata, zdf::iteration &iter, std::string path ) {
 
-    // The particle buffer may not be compact, get offsets in output buffer
-    int *out_offset = memory::malloc<int>( ntiles.x * ntiles.y );
-
-    uint32_t out_np = 0;
-    for( unsigned i = 0; i < ntiles.x * ntiles.y; i++) {
-        out_offset[i] = out_np;
-        out_np += np[i];
-    }
-
-    metadata.np = out_np;
+    uint32_t np = np_total();
+    metadata.np = np;
 
     // Open file
     zdf::file part_file;
@@ -182,33 +169,32 @@ void Particles::save( zdf::part_info &metadata, zdf::iteration &iter, std::strin
     // Gather and save each quantity
     float *data = nullptr;
 
-    if( out_np > 0 ) {
-        data = memory::malloc<float>( out_np );
+    if( np > 0 ) {
+        data = memory::malloc<float>( np );
     }
 
-    gather( part::quant::x, data, out_offset );
-    zdf::add_quant_part_file( part_file, "x", data, out_np );
+    gather( part::quant::x, data );
+    zdf::add_quant_part_file( part_file, "x", data, np );
 
-    gather( part::quant::y, data, out_offset );
-    zdf::add_quant_part_file( part_file, "y", data, out_np );
+    gather( part::quant::y, data );
+    zdf::add_quant_part_file( part_file, "y", data, np );
 
-    gather( part::quant::ux, data, out_offset );
-    zdf::add_quant_part_file( part_file, "ux", data, out_np );
+    gather( part::quant::ux, data );
+    zdf::add_quant_part_file( part_file, "ux", data, np );
 
-    gather( part::quant::uy, data, out_offset );
-    zdf::add_quant_part_file( part_file, "uy", data, out_np );
+    gather( part::quant::uy, data );
+    zdf::add_quant_part_file( part_file, "uy", data, np );
 
-    gather( part::quant::uz, data, out_offset );
-    zdf::add_quant_part_file( part_file, "uz", data, out_np );
+    gather( part::quant::uz, data );
+    zdf::add_quant_part_file( part_file, "uz", data, np );
 
     // Close the file
     zdf::close_file( part_file );
 
     // Cleanup
-    if ( out_np > 0 ) {
+    if ( np > 0 ) {
         memory::free( data );
     }
-    memory::free( out_offset );
 }
 
 /**

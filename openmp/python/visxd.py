@@ -729,3 +729,79 @@ def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = Non
             norm = colors.CenteredNorm()
         print("Plotting {} out of plane field for iteration {}.".format(fld,iter))
         grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = norm, shift = shift )
+
+
+def plot1d( x, y, marker = '.', ms = 1, alpha = 1, c = None,
+    xlim = None, ylim = None, grid = True,
+    title = None, xtitle = None, ytitle = None,
+    show = True ):
+
+    plt.plot( x, y, marker, ms = ms, alpha = alpha, c = c )
+
+    if ( xtitle is not None ):
+        plt.xlabel( xtitle )
+    
+    if ( ytitle is not None ):
+        plt.ylabel( ytitle )
+
+    if ( title is not None ):
+        plt.title( title )
+    
+    if ( xlim is not None ):
+        plt.xlim( xlim )
+
+    if ( ylim is not None ):
+        plt.ylim( ylim )
+
+    plt.grid(grid)
+    
+    if ( show ):
+        plt.show()    
+
+
+def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None,
+    title = None, xtitle = None, ytitle = None, vtitle = None,
+    show = True ):
+
+    if ( range is None ):
+        range = [
+            [0,data.shape[0]],
+            [0,data.shape[1]]
+        ]
+
+    if ( vsim ):
+        amax = np.amax( np.abs(data) )
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = -amax, vmax = +amax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
+    else:
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = vmin, vmax = vmax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )    
+
+    if ( vtitle is None ):
+        plt.colorbar()
+    else:
+        plt.colorbar().set_label( vtitle )
+
+    if ( xtitle is not None ):
+        plt.xlabel( xtitle )
+    
+    if ( ytitle is not None ):
+        plt.ylabel( ytitle )
+
+    if ( title is not None ):
+        plt.title( title )
+    
+    if ( xlim is not None ):
+        plt.xlim( xlim )
+
+    if ( ylim is not None ):
+        plt.ylim( ylim )
+
+    plt.grid(grid)
+    if ( show ):
+        plt.show()

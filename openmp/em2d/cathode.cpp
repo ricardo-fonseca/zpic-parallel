@@ -55,7 +55,7 @@ Cathode::Cathode( std::string const name, float const m_q, uint2 const ppc, edge
  * @param id_       Species unique id
  */
 void Cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
-    float const dt_, int const id_ ) {
+    double const dt_, int const id_ ) {
 
     // Cathode velocity (always > 0)
     vel = (ufl / std::sqrt( ops::fma( ufl , ufl , 1.0f ) ));
@@ -116,10 +116,10 @@ void Cathode::inject() {
     
     if ( iter == 0 && start < 0 ) {
 
-        uint2 g_nx = particles -> gnx;
+        uint2 dims = particles -> dims;
         bnd<unsigned int> range;
-        range.x = { .lower = 0, .upper = g_nx.x - 1 };
-        range.y = { .lower = 0, .upper = g_nx.y - 1 };
+        range.x = { .lower = 0, .upper = dims.x - 1 };
+        range.y = { .lower = 0, .upper = dims.y - 1 };
 
         Species::inject( range );
     }

@@ -32,7 +32,7 @@ namespace phasespace {
             name = "uy"; label = "u_y"; units = "c";
             break;
         case uz :
-            name = "uz"; label = "u_y"; units = "c";
+            name = "uz"; label = "u_z"; units = "c";
             break;
         }
     }
@@ -173,16 +173,16 @@ public:
     Species( std::string const name, float const m_q, uint2 const ppc );
 
     /**
-     * @brief Initialize data structures
+     * @brief Initialize data structures and inject initial particle distribution
      * 
-     * @param box       Simulation global box size
+     * @param box       Global simulation box size
      * @param ntiles    Number of tiles
-     * @param nx        Title grid dimension
-     * @param dt        
-     * @param id 
+     * @param nx        Individutal tile grid size
+     * @param dt        Time step
+     * @param id        Species unique identifier
      */
     virtual void initialize( float2 const box, uint2 const ntiles, uint2 const nx,
-        float const dt, int const id_ );
+        double const dt, int const id );
 
     /**
      * @brief Destroy the Species object
@@ -254,13 +254,6 @@ public:
 
         // Store new values
         bc = new_bc;
-
-/*
-        std::string bc_name[] = {"open", "periodic", "reflecting"};
-        std::cout << "(*info*) Species " << name << " boundary conditions\n";
-        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
-*/
 
         // Set periodic flags on tile grids
         if ( particles ) {
@@ -345,7 +338,7 @@ public:
      * @brief Move particles (advance positions) without depositing current
      * 
      */
-    void move( );
+    void move();
 
     /**
      * @brief Free stream particles 1 timestep
@@ -411,6 +404,24 @@ public:
     }
 
     /**
+     * @brief Gets the number of iterations
+     * 
+     * @return auto 
+     */
+    auto get_iter() const {
+        return iter;
+    }
+
+    /**
+     * @brief Gets the time step (dt)
+     * 
+     * @return auto 
+     */
+    auto get_dt() const {
+        return dt;
+    }
+
+    /**
      * @brief Returns the maximum number of particles per tile
      * 
      * @return auto 
@@ -422,7 +433,7 @@ public:
     /**
      * @brief Returns the total number of particles
      * 
-     * @return auto 
+     * @return uint64_t     Local number of particles
      */
     uint64_t np_total() const {
         return particles -> np_total();
@@ -431,8 +442,7 @@ public:
     /**
      * @brief Save particle data to file
      * 
-     * Saves positions and velocities for all particles. Positions are currently
-     * normalized to cell size
+     * @note Saves positions and velocities for all particles in simulation units
      */
     void save() const;
 
@@ -465,6 +475,29 @@ public:
     void save_phasespace ( 
         phasespace::quant quant0, float2 const range0, int const size0,
         phasespace::quant quant1, float2 const range1, int const size1 ) const;
+
+    /**
+     * @brief Gather particle quantity into buffer
+     * 
+     * @note Positions will be in simulation units
+     * 
+     * @param quant     Quantity to gather 
+     * @param d_dat     Output data buffer, assumed to have size >= np 
+     */
+    void gather( part::quant quant, float * const __restrict__ d_data ) {
+        switch (quant) {
+        case part::quant::x : 
+            particles -> gather ( part::quant::x, d_data, make_float2( dx.x, 0 ) );
+            break; 
+        case part::quant::y: 
+            particles -> gather ( part::quant::y, d_data, make_float2( dx.y, 0 ) );
+            break;
+        default:
+            particles -> gather ( quant, d_data );
+            break;
+        }
+
+    }
 
 };
 

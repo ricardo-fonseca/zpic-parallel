@@ -14,7 +14,7 @@
  * 
  */
 namespace part {
-    enum quant { x, y, ux, uy, uz };
+    enum quant  { x = 0, y, ux, uy, uz };
 }
 
 struct ParticleSortData {
@@ -115,8 +115,8 @@ class Particles : public ParticleData {
     /// @brief Sets periodic boundaries (x,y)
     int2 periodic;
 
-    /// Global grid size
-    const uint2 gnx;
+    /// @brief Global grid size
+    const uint2 dims;
 
     /**
      * @brief Construct a new Particles object
@@ -127,7 +127,7 @@ class Particles : public ParticleData {
      */
     Particles( const uint2 ntiles, const uint2 nx, const uint32_t max_part ) :
         ParticleData( ntiles, nx, max_part ),
-        periodic( make_int2(1,1) ), gnx ( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y ) )
+        periodic( make_int2(1,1) ), dims ( make_uint2( ntiles.x * nx.x, ntiles.y * nx.y ) )
     {
         const size_t bsize = ntiles.x * ntiles.y;
         
@@ -256,8 +256,8 @@ class Particles : public ParticleData {
      */
     bnd<uint32_t> g_range() { 
         bnd<uint32_t> range;
-        range.x = { .lower = 0, .upper = gnx.x - 1 };
-        range.y = { .lower = 0, .upper = gnx.y - 1 };
+        range.x = { .lower = 0, .upper = dims.x - 1 };
+        range.y = { .lower = 0, .upper = dims.y - 1 };
 
         return range;
     };
@@ -266,9 +266,9 @@ class Particles : public ParticleData {
      * @brief Gather data from a specific particle quantity
      * 
      * @param quant     Quantity to gather
-     * @param d_data    Output data buffer, assumed to have size >= np
+     * @param data      Output data buffer, assumed to have size >= np
      */
-    void gather( part::quant quant, float * const __restrict__ d_data, int * const d_off  );
+    void gather( part::quant quant, float * const __restrict__ d_data );
 
     /**
      * @brief Gather data from a specific particle quantity, scaling values
@@ -279,7 +279,7 @@ class Particles : public ParticleData {
      * @param d_data    Output data buffer, assumed to have size >= np
      * @param scale     Scale factor for data
      */
-    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data, int * const __restrict__ d_off );
+    void gather( part::quant quant, float * const __restrict__ d_data, const float2 scale );
 
     /**
      * @brief Validates particle data

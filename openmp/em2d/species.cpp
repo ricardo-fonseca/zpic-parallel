@@ -20,7 +20,9 @@ constexpr int local_align = 64;
  * @return float    Reciprocal Lorentz gamma factor
  */
 inline float rgamma( const float3 u ) {
-    return 1.0f/std::sqrt( ops::fma( u.z, u.z, ops::fma( u.y, u.y, ops::fma( u.x, u.x, 1.0f ) ) ) );
+    return 1.0f/std::sqrt( ops::fma( u.z, u.z, 
+                           ops::fma( u.y, u.y, 
+                           ops::fma( u.x, u.x, 1.0f ) ) ) );
 }
 
 /**
@@ -339,6 +341,7 @@ inline void split2d(
     int2 & v2_ix, float2 & v2_x0, float2 & v2_x1, float & v2_qvz,
     int2 & cross
 ) {
+    
     deltai = make_int2(
         ((x1.x >= 0.5f) - (x1.x < -0.5f)),
         ((x1.y >= 0.5f) - (x1.y < -0.5f))
@@ -1032,7 +1035,6 @@ void move_deposit_shift_kernel(
     float2 const dt_dx, float const q, float2 const qnx, int2 const shift ) 
 {
     const uint2 ntiles  = part.ntiles;
-
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     alignas(local_align) float3 _move_deposit_buffer[ tile_size ];
@@ -1046,7 +1048,7 @@ void move_deposit_shift_kernel(
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J = _move_deposit_buffer + current_offset;
+    float3 * J = & _move_deposit_buffer[ current_offset ];
     const int ystride = ext_nx.x;
 
     const int part_offset    = part.offset[ tid ];
@@ -1089,8 +1091,7 @@ void move_deposit_shift_kernel(
         };
 
         // Check for cell crossings and split trajectory
-        vint2 deltai;
-        vmask2 cross;
+        vint2 deltai; vmask2 cross;
 
         vint2 v0_ix; vfloat2 v0_x0, v0_x1; vfloat v0_qvz;
         vint2 v1_ix; vfloat2 v1_x0, v1_x1; vfloat v1_qvz;
@@ -1210,7 +1211,7 @@ inline void vinterpolate_fld(
     vint i = ix.x;
     vint j = ix.y;
 
-    const vfloat c_1_2 = vec_float( 0.5 );
+    const vfloat c_1_2 = vec_float( 0.5f );
 
     const vfloat s0x = vec_sub( c_1_2, x.x );
     const vfloat s1x = vec_add( c_1_2, x.x );
@@ -1403,7 +1404,6 @@ void move_deposit_kernel(
     float2 const dt_dx, float const q, float2 const qnx ) 
 {
     const uint2 ntiles  = part.ntiles;
-
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     // This is usually in block shared memeory
@@ -1456,11 +1456,14 @@ void move_deposit_kernel(
         int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
         int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
 
-        split2d( ix0, x0, x1, delta, qvz, deltai,
+        split2d( 
+            ix0, x0, x1, delta, qvz, 
+            deltai,
             v0_ix, v0_x0, v0_x1, v0_qvz,
             v1_ix, v1_x0, v1_x1, v1_qvz,
             v2_ix, v2_x0, v2_x1, v2_qvz,
-            cross );
+            cross
+        );
         
         // Deposit current
                                   dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
@@ -1521,7 +1524,7 @@ void move_deposit_shift_kernel(
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J = _move_deposit_buffer + current_offset;
+    float3 * J = & _move_deposit_buffer[ current_offset ];
     const int ystride = ext_nx.x;
 
     const int part_offset     = part.offset[ tid ];
@@ -1716,16 +1719,16 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
 
 
 /**
- * @brief Initialize data structures and inject particles
+ * @brief Initialize data structures and inject initial particle distribution
  * 
- * @param box_      Simulation global box size
+ * @param box_      Global simulation box size
  * @param ntiles    Number of tiles
- * @param nx        Grid size per tile
+ * @param nx        Individutal tile grid size
  * @param dt_       Time step
- * @param id_       Species unique id
+ * @param id_       Species unique identifier
  */
 void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
-    float const dt_, int const id_ ) {
+    double const dt_, int const id_ ) {
     
     // Store simulation box size
     box = box_;
@@ -1739,14 +1742,14 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     // Set charge normalization factor
     q = copysign( density->n0 , m_q ) / (ppc.x * ppc.y);
     
-    float2 gnx = make_float2( nx.x * ntiles.x, nx.y * ntiles.y );
+    float2 dims = make_float2( nx.x * ntiles.x, nx.y * ntiles.y );
 
     // Set cell size
-    dx.x = box.x / (gnx.x);
-    dx.y = box.y / (gnx.y);
+    dx.x = box.x / (dims.x);
+    dx.y = box.y / (dims.y);
 
     // Reference number maximum number of particles
-    unsigned int max_part = 1.2 * gnx.x * gnx.y * ppc.x * ppc.y;
+    unsigned int max_part = 1.2 * dims.x * dims.y * ppc.x * ppc.y;
 
     particles = new Particles( ntiles, nx, max_part );
     particles->periodic.x = ( bc.x.lower == species::bc::periodic );
@@ -1832,6 +1835,7 @@ void Species::inject( bnd<unsigned int> range ) {
  */
 void Species::np_inject( bnd<unsigned int> range, int * np ) {
 
+    /// @brief position of lower corner of local grid in simulation units
     float2 ref = make_float2( moving_window.motion(), 0 );
 
     density -> np_inject( *particles, ppc, dx, ref, range, np );
@@ -1987,23 +1991,22 @@ void Species::process_bc() {
 /**
  * @brief Free stream particles 1 iteration
  * 
- * No acceleration or current deposition is performed. Used for debug purposes.
+ * @note No acceleration or current deposition is performed. Used for debug purposes.
  * 
  */
 void Species::advance( ) {
 
     // Advance positions
     move( );
-    
+
     // Process physical boundary conditions
     process_bc();
-
-    // Increase internal iteration number
-    iter++;
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
 
+    // Increase internal iteration number
+    iter++;
 }
 
 /**
@@ -2091,7 +2094,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
         process_bc();
 
         // Find range where new particles need to be injected
-        uint2 g_nx = particles -> gnx;
+        uint2 g_nx = particles -> dims;
         bnd<unsigned int> range;
         range.x = { .lower = g_nx.x - 1, .upper = g_nx.x - 1 };
         range.y = { .lower = 0, .upper = g_nx.y - 1 };
@@ -2122,8 +2125,6 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
     // Increase internal iteration number
     iter++;
-
-
 }
 
 
@@ -2153,7 +2154,7 @@ void Species::move( vec3grid<float3> * J )
         move_deposit_kernel(
             tile_idx, *particles,
             J -> d_buffer, J -> offset, J -> ext_nx, dt_dx, q, qnx
-            );
+        );
     }
 
     // This avoids the reduction overhead
@@ -2415,17 +2416,19 @@ void Species::deposit_charge( grid<float> &charge ) const {
  */
 void Species::save() const {
 
-    const char * quants[] = {
+    const std::string path = "PARTICLES";
+
+    const std::string quants[] = {
         "x","y",
         "ux","uy","uz"
     };
 
-    const char * qlabels[] = {
+    const std::string qlabels[] = {
         "x","y",
         "u_x","u_y","u_z"
     };
 
-    const char * qunits[] = {
+    const std::string qunits[] = {
         "c/\\omega_n", "c/\\omega_n",
         "c","c","c"
     };
@@ -2446,7 +2449,54 @@ void Species::save() const {
         .qunits = (char **) qunits,
     };
 
-    particles -> save( info, iter_info, "PARTICLES" );
+    uint32_t np = particles -> np_total();
+    info.np = np;
+
+    // Open file
+    zdf::file part_file;
+    zdf::open_part_file( part_file, info, iter_info, "PARTICLES/" + name );
+
+    // Gather and save each quantity
+    float *data = nullptr;
+
+    if( np > 0 ) {
+        data = memory::malloc<float>( np );
+    }
+
+    if ( np > 0 ) {
+        float2 scale = make_float2( dx.x, 0 );
+        particles -> gather( part::quant::x, data, scale );
+    }
+    zdf::add_quant_part_file( part_file, "x", data, np );
+
+    if ( np > 0 ) {
+        float2 scale = make_float2( dx.y, 0 );
+        particles -> gather( part::quant::y, data, scale );
+    }
+    zdf::add_quant_part_file( part_file, "y", data, np );
+
+    if ( np > 0 ) {
+        particles -> gather( part::quant::ux, data );
+    }
+    zdf::add_quant_part_file( part_file, "ux", data, np );
+
+    if ( np > 0 ) {
+        particles -> gather( part::quant::uy, data );
+    }
+    zdf::add_quant_part_file( part_file, "uy", data, np );
+
+    if ( np > 0 ) {
+        particles -> gather( part::quant::uz, data );
+    }
+    zdf::add_quant_part_file( part_file, "uz", data, np );
+
+    // Close the file
+    zdf::close_file( part_file );
+
+    // Cleanup
+    if ( np > 0 ) {
+        memory::free( data );
+    }    
 }
 
 /**
@@ -2509,13 +2559,13 @@ void Species::save_charge() const {
     std::string path = "CHARGE/";
     path += name;
     
-    charge.save( info, iter_info, path.c_str() );
+    charge.save( info, iter_info, path );
 }
 
 /**
  * @brief kernel for depositing 1d phasespace
  * 
- * @tparam q        Phasespace quantity
+ * @tparam quant    Phasespace quantity
  * @param d_data    Output data
  * @param range     Phasespace value range
  * @param size      Phasespace grid size
@@ -2526,7 +2576,7 @@ void Species::save_charge() const {
  * @param d_x       Particle data (pos)
  * @param d_u       Particle data (generalized momenta)
  */
-template < phasespace::quant q >
+template < phasespace::quant quant >
 void dep_pha1_kernel(
     uint2 const tile_idx,
     float * const __restrict__ d_data, float2 const range, int const size,
@@ -2534,7 +2584,7 @@ void dep_pha1_kernel(
     ParticleData const part )
 {
     const uint2 ntiles  = part.ntiles;
-    uint2 const tile_nx = part.nx;
+    const uint2 tile_nx = part.nx;
 
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
@@ -2546,21 +2596,22 @@ void dep_pha1_kernel(
 
     float const pha_rdx = size / (range.y - range.x);
 
+    const int shiftx = tile_idx.x * tile_nx.x;
+    const int shifty = tile_idx.y * tile_nx.y;
+
     for( int i = 0; i < np; i++ ) {
         float d;
-        switch( q ) {
-        case( phasespace:: x ): d = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ): d = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d = u[i].x; break;
-        case( phasespace:: uy ): d = u[i].y; break;
-        case( phasespace:: uz ): d = u[i].z; break;
-        }
+        if constexpr ( quant == phasespace:: x  ) d = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant == phasespace:: y  ) d = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant == phasespace:: ux ) d = u[i].x;
+        if constexpr ( quant == phasespace:: uy ) d = u[i].y;
+        if constexpr ( quant == phasespace:: uz ) d = u[i].z;
 
         float n =  (d - range.x ) * pha_rdx - 0.5f;
         int   k = int( n + 1 ) - 1;
         float w = n - k;
 
-        // When using multi-threading these need to atomic accross tiles
+        // When using multi-threading these need to be atomic accross tiles
         if ((k   >= 0) && (k   < size-1)) d_data[k  ] += (1-w) * norm;
         if ((k+1 >= 0) && (k+1 < size-1)) d_data[k+1] +=    w  * norm;
     }
@@ -2756,38 +2807,41 @@ void dep_pha2_kernel(
     float const pha_rdx0 = size0 / (range0.y - range0.x);
     float const pha_rdx1 = size1 / (range1.y - range1.x);
 
+    const int shiftx = tile_idx.x * tile_nx.x;
+    const int shifty = tile_idx.y * tile_nx.y;
+
     for( int i = 0; i < np; i++ ) {
         float d0;
-        switch( quant0 ) {
-        case( phasespace:: x ):  d0 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ):  d0 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d0 = u[i].x; break;
-        case( phasespace:: uy ): d0 = u[i].y; break;
-        case( phasespace:: uz ): d0 = u[i].z; break;
-        }
+        if constexpr ( quant0 == phasespace:: x )  d0 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant0 == phasespace:: y )  d0 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant0 == phasespace:: ux ) d0 = u[i].x;
+        if constexpr ( quant0 == phasespace:: uy ) d0 = u[i].y;
+        if constexpr ( quant0 == phasespace:: uz ) d0 = u[i].z;
 
         float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
         int   k0 = int( n0 + 1 ) - 1;
         float w0 = n0 - k0;
 
         float d1;
-        switch( quant1 ) {
-        //case( phasespace:: x ):  d1 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ):  d1 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d1 = u[i].x; break;
-        case( phasespace:: uy ): d1 = u[i].y; break;
-        case( phasespace:: uz ): d1 = u[i].z; break;
-        }
+        // if constexpr ( quant1 == phasespace:: x )  d1 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant1 == phasespace:: y )  d1 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant1 == phasespace:: ux ) d1 = u[i].x;
+        if constexpr ( quant1 == phasespace:: uy ) d1 = u[i].y;
+        if constexpr ( quant1 == phasespace:: uz ) d1 = u[i].z;
 
         float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
         int   k1 = int( n1 + 1 ) - 1;
         float w1 = n1 - k1;
 
         // When using multi-threading these need to atomic accross tiles
-        if ((k0   >= 0) && (k0   < size0-1) && (k1   >= 0) && (k1   < size1-1)) d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
-        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1   >= 0) && (k1   < size1-1)) d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
-        if ((k0   >= 0) && (k0   < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1)) d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
-        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1)) d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
+        if ((k0   >= 0) && (k0   < size0-1) && (k1   >= 0) && (k1   < size1-1))
+            d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
+        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1   >= 0) && (k1   < size1-1))
+            d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
+        if ((k0   >= 0) && (k0   < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
+            d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
+        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
+            d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
     }
 }
 

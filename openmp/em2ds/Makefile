@@ -3,10 +3,10 @@
 # 
 
 #--------------------- GCC Compilers --------------------
-CC = gcc
+CC = gcc-15
 CFLAGS = -O3 -march=native
 
-CXX = g++
+CXX = g++-15
 CXXFLAGS = -O3 -march=native
 
 # OpenMP support
@@ -36,21 +36,21 @@ CXXFLAGS += -fopenmp
 
 # Add FFTW library (single precision)
 
-# CXXFLAGS += -I/opt/homebrew/include
-# LDFLAGS = -L/opt/homebrew/lib -lfftw3f_omp -lfftw3f
+CXXFLAGS += -I/opt/homebrew/include
+LDFLAGS = -L/opt/homebrew/lib -lfftw3f_omp -lfftw3f
 
-LDFLAGS = -lfftw3f_omp -lfftw3f -lm
+# LDFLAGS = -lfftw3f_omp -lfftw3f -lm
 
 # --------------------------------------------------------------------------- #
 
 # Enable AVX2 extensions with FMA support
-CXXFLAGS += -DUSE_AVX2 -mavx2 -mfma
+# CXXFLAGS += -DUSE_AVX2 -mavx2 -mfma
 
 # Enable AVX512f extensions
 # CXXFLAGS += -DUSE_AVX512 -mavx512f
 
 # Enable ARM Neon extensions
-# CXXFLAGS += -DUSE_NEON
+CXXFLAGS += -DUSE_NEON
 
 # Enable ARM SVE extensions (512 bits)
 # CXXFLAGS += -DUSE_SVE -msve-vector-bits=512

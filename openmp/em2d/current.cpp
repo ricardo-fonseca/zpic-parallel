@@ -12,9 +12,9 @@
  * @param dt        Time step
  */
 Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
-    float const dt ) : box(box), 
+    double const dt ) : 
     dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
-    dt(dt)
+    dt(dt), box(box)
 {
 
     // Guard cells (1 below, 2 above)

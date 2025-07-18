@@ -16,14 +16,11 @@ namespace current {
 
 class Current {
 
-    /// @brief Simulation box size
-    float2 box;
-
     /// @brief cell size
     float2 dx;
     
     /// @brief time step
-    float dt;
+    double dt;
 
     /// @brief Moving window information
     MovingWindow moving_window;
@@ -45,18 +42,45 @@ class Current {
     /// @brief Current density
     vec3grid<float3> * J;
 
+    /// @brief Simulation box size
+    const float2 box;
+
     /// @brief Filtering parameters
     Filter::Digital *filter;
 
-    Current( uint2 const ntiles, uint2 const nx, float2 const box, float const dt );
+    Current( uint2 const ntiles, uint2 const nx, float2 const box, double const dt );
     
     ~Current() {
         delete (J);
         delete (filter);
     }
 
+    /**
+     * @brief Get the iteration number
+     * 
+     * @return auto 
+     */
+    auto get_iter() { return iter; }
+
+    /**
+     * @brief Get the time step (dt) value
+     * 
+     * @return auto 
+     */
+    auto get_dt() { return dt; }
+
+    /**
+     * @brief Get the boundary condition type
+     * 
+     * @return current::bc_type 
+     */
     current::bc_type get_bc( ) { return bc; }
 
+    /**
+     * @brief Set the boundary condition type
+     * 
+     * @param new_bc 
+     */
     void set_bc( current::bc_type new_bc ) {
 
         // Validate parameters

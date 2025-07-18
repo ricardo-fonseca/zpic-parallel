@@ -21,7 +21,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
 
     const int2 ntiles   = make_int2( E.ntiles.x, E.ntiles.y );
     const auto tile_vol = E.tile_vol;
-    const auto nx       = E.nx;
+    const int2  nx      = make_int2( E.nx.x, E.nx.y );
     const auto offset   = E.offset;
     const int ystride   = E.ext_nx.x; // Make sure ystride is signed because iy may be < 0
 
@@ -33,7 +33,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
         double divEx[ nx.y ];
         double divBx[ nx.y ];
 
-        for( unsigned iy = 0; iy < nx.y; iy++ ) {
+        for( int iy = 0; iy < nx.y; iy++ ) {
             divEx[ iy ] = divBx[ iy ] = 0;
         }
         

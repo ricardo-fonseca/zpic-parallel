@@ -17,9 +17,7 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     double const dt ) : 
     dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
     dt( dt ), box(box)
-{
-//    std::cout << "Creating EMF object..." << '\n';
-    
+{   
     // Verify Courant condition
     float cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
     if ( dt >= cour ){

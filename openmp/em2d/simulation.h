@@ -22,7 +22,7 @@ class Simulation {
     const uint2 ntiles;
     const uint2 nx;
     const float2 box;
-    const float dt;
+    const double dt;
 
     EMF emf;
     Current current;
@@ -36,7 +36,7 @@ class Simulation {
      * @param box       Simulation box size
      * @param dt        Time step
      */
-    Simulation( uint2 const ntiles, uint2 const nx, float2 const box, float dt ):
+    Simulation( uint2 const ntiles, uint2 const nx, float2 const box, double dt ):
         iter(0), ntiles( ntiles ), nx( nx ), box( box ), dt( dt ), 
         emf( ntiles, nx, box, dt ),
         current( ntiles, nx, box, dt ) {
@@ -93,10 +93,6 @@ class Simulation {
         current.zero();
 
         // Advance all species
-        // for (int i = 0; i < species.size(); i++) {
-        //     species[i] -> advance( *emf, *current );
-        // }
-
         for ( auto & sp : species ) {
             sp -> advance( emf, current );
         }
@@ -120,10 +116,6 @@ class Simulation {
         current.zero();
 
         // Advance all species
-        // for (int i = 0; i < species.size(); i++) {
-        //     species[i] -> advance_mov_window( emf, current );
-        // }
-
         for ( auto & sp : species ) {
             sp -> advance_mov_window( emf, current );
         }

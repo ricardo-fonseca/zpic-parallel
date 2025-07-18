@@ -6,6 +6,8 @@
 #
 from libc.stdint cimport uint32_t, uint64_t
 from libcpp.string cimport string
+from libcpp.vector cimport vector
+
 
 ###############################################################################
 # Utilities
@@ -124,6 +126,24 @@ cdef extern from "../em2d/vec3grid.h":
 
         void save( int, string )
 
+###############################################################################
+# Current class
+#
+
+cdef extern from "../em2d/current.h":
+    cdef cppclass Current:
+        vec3grid[float3] * J
+        float2 box
+
+        Current( uint2 ntiles, uint2 nx, float2 box, double dt )
+
+        int get_iter()
+        double get_dt()
+
+        void advance()
+        void zero()
+        void save( int )
+
 
 ###############################################################################
 # EMF class
@@ -138,10 +158,11 @@ cdef extern from "../em2d/emf.h":
         EMF( uint2, uint2, float2, double )
 
         int get_iter()
+        double get_dt()
         int set_moving_window()
         
         void advance()
-        # void advance( Current )
+        void advance( Current )
         void save( int, int )
 
 
@@ -172,7 +193,7 @@ cdef extern from "../em2d/laser.h" namespace "Laser":
 
     cdef cppclass PlaneWave(Pulse):
         PlaneWave()
-        int add( EMF & )
+        int add_plane "add"( EMF & )
 
     cdef cppclass Gaussian(Pulse):
         float W0
@@ -181,3 +202,115 @@ cdef extern from "../em2d/laser.h" namespace "Laser":
 
         Gaussian()
         int add_gaussian "add"( EMF & )
+
+
+###############################################################################
+# Particles
+#
+
+cdef extern from "../em2d/particles.h":
+    cdef cppclass Particles:
+        uint2 ntiles
+        uint2 nx
+        int * np
+        int * offset
+
+        int2 *ix
+        float2 *x
+        float3 *u
+
+        uint32_t max_part
+
+        int2 periodic
+        uint2 dims
+
+        Particles( uint2 ntiles, uint2 nx, uint32_t max_part )
+
+
+###############################################################################
+# 
+#
+
+cdef extern from "../em2d/udist.h" namespace "UDistribution":
+    cdef cppclass Type:
+        pass
+
+    cdef cppclass None(Type):
+        pass
+
+    cdef cppclass Cold(Type):
+        float3 ufl
+        Cold( float3 ufl )
+
+    cdef cppclass Thermal(Type):
+        float3 uth
+        float3 ufl
+        Thermal( float3 uth, float3 ufl )
+
+    cdef cppclass ThermalCorr(Type):
+        float3 uth
+        float3 ufl
+        int npmin
+        ThermalCorr( float3 uth, float3 ufl, int npmin )
+
+
+###############################################################################
+# Species
+#
+
+cdef extern from "../em2d/species.h":
+    cdef cppclass Species:
+        string name
+        float m_q
+        int push_type
+
+        Species( string name, float m_q, uint2 ppc )
+
+        void initialize( float2 box, uint2 ntiles, uint2 nx, double dt, int id )
+        void set_udist( Type & new_udist )
+
+        void advance( EMF & emf, Current & current )
+
+        void deposit_charge( grid[float] & charge )
+
+        void save()
+        void save_charge()
+        void save_phasespace( int quant, float2 range, int size )
+        void save_phasespace( int quant0, float2 range0, int size0,
+                              int quant1, float2 range1, int size1 )
+        
+        void gather( int quant, float * data )
+        uint64_t np_total() 
+        int get_iter()
+        float get_dt()
+
+
+
+###############################################################################
+# Simulation
+#
+
+cdef extern from "../em2d/simulation.h":
+    cdef cppclass Simulation:
+        uint2 ntiles
+        uint2 nx
+        float2 box
+        double dt
+
+        EMF emf
+        Current current
+        vector[Species] species
+
+        Simulation( uint2 ntiles, uint2 nx, float2 box, double dt )
+
+        void add_species( Species & sp )
+
+        Species * get_species( string name )
+
+        void advance()
+
+        unsigned int get_iter()
+        double get_t()
+
+        void energy_info()
+

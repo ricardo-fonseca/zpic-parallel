@@ -43,7 +43,7 @@ public:
         edge::pos wall, float ufl );
 
     void initialize( float2 const box, uint2 const ntiles, uint2 const nx,
-        float const dt, int const id_ ) override;
+        double const dt, int const id_ ) override;
     
     ~Cathode();
 
