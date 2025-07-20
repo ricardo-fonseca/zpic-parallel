@@ -170,39 +170,7 @@ cdef extern from "../em2d/emf.h":
 # Laser pulse classes
 #
 
-cdef extern from "../em2d/laser.h" namespace "Laser":
-    cdef cppclass Pulse:
-        float start
-        float fwhm
-        float rise
-        float flat
-        float fall
-        float a0
-        float omega0
-        float polarization
-
-        float cos_pol
-        float sin_pol
-
-        unsigned int filter
-
-        int validate()
-        
-        Pulse()
-        int add( EMF & )
-
-    cdef cppclass PlaneWave(Pulse):
-        PlaneWave()
-        int add_plane "add"( EMF & )
-
-    cdef cppclass Gaussian(Pulse):
-        float W0
-        float focus
-        float axis
-
-        Gaussian()
-        int add_gaussian "add"( EMF & )
-
+cimport laser
 
 ###############################################################################
 # Particles
@@ -229,30 +197,16 @@ cdef extern from "../em2d/particles.h":
 
 ###############################################################################
 # 
-#
+# UDistribution
 
-cdef extern from "../em2d/udist.h" namespace "UDistribution":
-    cdef cppclass Type:
-        pass
+cimport udist
 
-    cdef cppclass None(Type):
-        pass
 
-    cdef cppclass Cold(Type):
-        float3 ufl
-        Cold( float3 ufl )
+###############################################################################
+# 
+# Density
 
-    cdef cppclass Thermal(Type):
-        float3 uth
-        float3 ufl
-        Thermal( float3 uth, float3 ufl )
-
-    cdef cppclass ThermalCorr(Type):
-        float3 uth
-        float3 ufl
-        int npmin
-        ThermalCorr( float3 uth, float3 ufl, int npmin )
-
+cimport density
 
 ###############################################################################
 # Species
@@ -267,7 +221,8 @@ cdef extern from "../em2d/species.h":
         Species( string name, float m_q, uint2 ppc )
 
         void initialize( float2 box, uint2 ntiles, uint2 nx, double dt, int id )
-        void set_udist( Type & new_udist )
+        void set_udist( udist.Type & new_udist )
+        void set_density( density.Profile & new_density )
 
         void advance( EMF & emf, Current & current )
 
@@ -302,12 +257,13 @@ cdef extern from "../em2d/simulation.h":
         vector[Species] species
 
         Simulation( uint2 ntiles, uint2 nx, float2 box, double dt )
-
+        void set_moving_window() 
         void add_species( Species & sp )
 
         Species * get_species( string name )
 
         void advance()
+        void advance_mov_window()
 
         unsigned int get_iter()
         double get_t()

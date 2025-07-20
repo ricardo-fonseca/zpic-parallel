@@ -5,6 +5,66 @@ import numpy as np
 import visxd
 
 ###############################################################################
+# ZPIC utilities
+#
+cimport zpic
+
+class zpic:
+    def sys_info():
+        """sys_info()
+        Prints system information (OpenMP / SIMD support)
+        """
+        zpic.sys_info()
+
+    def courant( list dx = None, list dims = None, list ntiles = None, list nx = None, list box = None ):
+        """courant( dx, dims, ntiles, nx, box )
+
+        Returns the Courant-Friedrichs-Lewy limit for time step
+
+        Parameters
+        ----------
+        dx : { float, float }
+            Simulation cell size (x,y), defaults to None. If specified no other
+            parameters are required
+        dims : { int, int }
+            Simulation grid size (x,y), defaults to None. If dims and dx are None
+            user must use both ntiles and nx parameters
+        ntiles : { int, int }
+            Number of simulation tiles (x,y). Not needed if dims or dx was specified
+        nx : { int, int }
+            Individual tile grid size. Not needed if dims or dx  was specified
+        box : float
+            Simulation box size in simulation units. Not needed if dx was specified
+        """
+
+        cdef float2 dx_
+        cdef uint2 dims_
+        cdef uint2 ntiles_
+        cdef uint2 nx_
+        cdef float2 box_
+
+        if ( dx is not None ):
+            dx_.x = dx[0]
+            dx_.y = dx[1]
+            return zpic.courant( dx_ )
+        else:
+            box_.x = box[0]
+            box_.y = box[1]
+
+            if ( ntiles is None ):
+                dims_.x = dims[0]
+                dims_.y = dims[1]
+                return zpic.courant( dims_, box_ )
+            else:
+                ntiles_.x = ntiles[0]
+                ntiles_.y = ntiles[1]
+
+                nx_.x = nx[0]
+                nx_.y = nx[1]
+                
+                return zpic.courant( ntiles_, nx_, box_ )
+
+###############################################################################
 # Grid
 #
 
@@ -837,9 +897,6 @@ cdef class pyEMF:
 # Lasers
 #
 
-from em2d cimport PlaneWave as cppPlaneWave
-from em2d cimport Gaussian as cppGaussian
-
 cdef class pyPlaneWave:
     """pyPlaneWave( start = 0, fwhm = 0, rise = 0, flat = 0, fall = 0,
                     a0 = 0, omega0 = 0, polarization = 0,
@@ -871,14 +928,14 @@ cdef class pyPlaneWave:
     sin_pol : float
         Sine of the polarization angle
     """
-    cdef cppPlaneWave * obj
+    cdef laser.PlaneWave * obj
 
     def __cinit__( self, *, float start = 0.0, float fwhm = 0.0,
                    float rise = 0.0, float flat = 0.0, float fall = 0.0,
                    float a0 = 0.0, float omega0 = 0.0, float polarization = 0.0,
                    float cos_pol = 0.0, float sin_pol = 0.0 ):
 
-        self.obj = new cppPlaneWave()
+        self.obj = new laser.PlaneWave()
 
         self.obj.start = start
         self.obj.fwhm = fwhm
@@ -944,7 +1001,7 @@ cdef class pyGaussian:
     axis : float
         Propagation axis position (y)
     """
-    cdef cppGaussian * obj
+    cdef laser.Gaussian * obj
 
     def __cinit__( self, *, float start = 0.0, float fwhm = 0.0,
                    float rise = 0.0, float flat = 0.0, float fall = 0.0,
@@ -952,7 +1009,7 @@ cdef class pyGaussian:
                    float cos_pol = 0.0, float sin_pol = 0.0,
                    float W0 = 0, float focus = 0, float axis = 0 ):
 
-        self.obj = new cppGaussian()
+        self.obj = new laser.Gaussian()
 
         self.obj.start = start
         self.obj.fwhm = fwhm
@@ -995,20 +1052,17 @@ cimport part
 # Udist
 #
 
-from em2d cimport None as cppNone
-from em2d cimport Cold as cppCold
-from em2d cimport Thermal as cppThermal
-from em2d cimport ThermalCorr as cppThermalCorr
+cimport udist
 
 cdef class pyNone:
     """pyNone()
 
     Class representing a frozen (0 fluid, 0 temperature) momentum distribution
     """
-    cdef cppNone * obj
+    cdef udist.None * obj
 
     def __cinit__(self ):
-        self.obj = new cppNone( )
+        self.obj = new udist.None( )
 
     def __dealloc__(self):
         del self.obj
@@ -1023,7 +1077,7 @@ cdef class pyCold:
     ufl : { float, float, float }
         Fluid momentum
     """
-    cdef cppCold * obj
+    cdef udist.Cold * obj
 
     def __cinit__( self, list ufl ):
 
@@ -1032,7 +1086,7 @@ cdef class pyCold:
         _ufl.y = ufl[1]
         _ufl.z = ufl[2]
 
-        self.obj = new cppCold( _ufl )
+        self.obj = new udist.Cold( _ufl )
 
     def __dealloc__(self):
         del self.obj
@@ -1050,7 +1104,7 @@ cdef class pyThermal:
         Fluid momentum
     """
 
-    cdef cppThermal * obj
+    cdef udist.Thermal * obj
 
     def __cinit__( self, list uth, list ufl ):
 
@@ -1064,7 +1118,7 @@ cdef class pyThermal:
         _ufl.y = ufl[1]
         _ufl.z = ufl[2]
 
-        self.obj = new cppThermal( _uth, _ufl )
+        self.obj = new udist.Thermal( _uth, _ufl )
 
     def __dealloc__(self):
         del self.obj
@@ -1085,7 +1139,7 @@ cdef class pyThermalCorr:
         Minimum number of particles in a cell to apply momentum correction
     """
 
-    cdef cppThermalCorr * obj
+    cdef udist.ThermalCorr * obj
 
     def __cinit__( self, list uth, list ufl, int npmin = 2 ):
 
@@ -1099,10 +1153,137 @@ cdef class pyThermalCorr:
         _ufl.y = ufl[1]
         _ufl.z = ufl[2]
 
-        self.obj = new cppThermalCorr( _uth, _ufl, npmin )
+        self.obj = new udist.ThermalCorr( _uth, _ufl, npmin )
 
     def __dealloc__(self):
         del self.obj
+
+###############################################################################
+# 
+# Density
+
+cimport coord
+cimport density
+
+cdef class density_None:
+    """density_None()
+
+    Class representing a 0 density profile
+    """
+    cdef density.None * obj
+
+    def __cinit__(self ):
+        self.obj = new density.None( )
+
+    def __dealloc__(self):
+        del self.obj
+
+cdef class density_Uniform:
+    """density_Uniform( n0 )
+
+    Class representing a uniform density profile
+
+    Parameters
+    ----------
+    n0 : float
+        Density value
+    """
+    cdef density.Uniform * obj
+
+    def __cinit__(self, float n0 ):
+        self.obj = new density.Uniform( n0 )
+
+    def __dealloc__(self):
+        del self.obj
+    
+    @property
+    def n0( self ):
+        """Density value"""
+        return self.obj.n0
+
+cdef class density_Step:
+    """density_Step( dir, n0, pos )
+
+    Class representing a step density profile
+
+    Parameters
+    ----------
+    dir : string
+        Step direction, must be one of 'x' or 'y'
+    n0 : float
+        Density value
+    pos : float
+        Step position in simulation units
+    """
+    cdef density.Step * obj
+
+    def __cinit__(self, dir, float n0, float pos ):
+        cdef coord.cart dir_ = {'x':coord.cart.x, 'y':coord.cart.y }[dir]
+        self.obj = new density.Step( dir_, n0, pos )
+
+    def __dealloc__(self):
+        del self.obj
+    
+    @property
+    def n0( self ):
+        """Density value"""
+        return self.obj.n0
+
+    @property
+    def pos( self ):
+        """Edge position"""
+        return self.obj.pos
+
+    @property
+    def dir( self ):
+        """Step direction"""
+        return {0:'x',1:'y'}[ self.obj.dir ]
+
+cdef class density_Slab:
+    """density_Slab( dir, n0, begin, end )
+
+    Class representing a slab density profile
+
+
+    Parameters
+    ----------
+    dir : string
+        Step direction, must be one of 'x' or 'y'
+    n0 : float
+        Density value
+    begin : float
+        Position of the beggining of the slab in simulation units
+    end : float
+        Position of the end of the slab in simulation units
+    """
+    cdef density.Slab * obj
+
+    def __cinit__(self, dir, float n0, float begin, float end ):
+        cdef coord.cart dir_ = {'x':coord.cart.x, 'y':coord.cart.y }[dir]
+        self.obj = new density.Slab( dir_, n0, begin, end )
+
+    def __dealloc__(self):
+        del self.obj
+    
+    @property
+    def n0( self ):
+        """Density value"""
+        return self.obj.n0
+
+    @property
+    def dir( self ):
+        """Step direction"""
+        return {0:'x',1:'y'}[ self.obj.dir ]
+
+    @property
+    def begin( self ):
+        """Slab begin position"""
+        return self.obj.begin
+
+    @property
+    def end( self ):
+        """Slab end position"""
+        return self.obj.end
 
 ###############################################################################
 # Species
@@ -1226,6 +1407,9 @@ cdef class pySpecies:
             self.obj.set_udist( (<pyThermalCorr> udist).obj[0] )
         else:
             raise Exception( "Invalid udist object")
+    
+    def set_density( self, density ):
+        print("it's coming...")
 
     def save( self ):
         """save()
@@ -1330,8 +1514,9 @@ cdef class pySimulation:
         Simulation time step in simulation units
     species : pySpecies or list of pySpecies
         Species or list of Species to be added to the simulation. Defaults to None,
-        meaning no species are to be added at this time. Species may be added later
-        using the add() method
+        meaning no species will be used.
+    moving_window : boolean
+        Use a moving window for the simulation, defaults to False
     """
     cdef cppSimulation * obj
     """Pointer to corresponding cppSimulation object"""
@@ -1339,8 +1524,11 @@ cdef class pySimulation:
     """View of the simulation EMF object"""
     cdef pyCurrent current
     """View of the simulation Current object"""
+    cdef bint mov_window
+    """Simulation uses a moving window"""
 
-    def __cinit__(self, list ntiles, list nx, list box, double dt, *, species = None ):
+    def __cinit__(self, list ntiles, list nx, list box, double dt, *, 
+        species = None, moving_window = False ):
 
         cdef uint2 _ntiles
         _ntiles.x = ntiles[0]
@@ -1367,6 +1555,10 @@ cdef class pySimulation:
         elif ( isinstance( species, (list,tuple) ) ):
             for s in species:
                 self.obj.add_species( (<pySpecies> s).obj[0] )
+        
+        self.mov_window = moving_window
+        if ( self.mov_window ):
+            self.obj.set_moving_window()
 
     def __dealloc__(self):
         del self.obj
@@ -1406,21 +1598,21 @@ cdef class pySimulation:
         """View of the simulation current density"""
         return self.current
     
-    def add( self, src ):
-        """add( src )
-
-        Add object to simulation
-
-        Parameters
-        ----------
-        src : object
-            Object to add to the simulation. Currently only pySpecies objects
-            are supported
-        """
-        if ( isinstance( src, pySpecies )):
-            self.obj.add_species( (<pySpecies> src).obj[0] )
-        else:
-            raise Exception("Invalid src object type")
+#    def add( self, src ):
+#        """add( src )
+#
+#        Add object to simulation
+#
+#        Parameters
+#        ----------
+#        src : object
+#            Object to add to the simulation. Currently only pySpecies objects
+#            are supported
+#        """
+#        if ( isinstance( src, pySpecies )):
+#            self.obj.add_species( (<pySpecies> src).obj[0] )
+#        else:
+#            raise Exception("Invalid src object type")
     
     def advance( self ):
         """advance()
@@ -1431,7 +1623,10 @@ cdef class pySimulation:
         3. Update current edge values and guard cells
         4. Advance EM fields using the newly deposited current
         """
-        self.obj.advance()
+        if ( self.mov_window ):
+            self.obj.advance_mov_window()
+        else:
+            self.obj.advance()
 
     def energy_info( self ):
         """energe_info()
