@@ -33,10 +33,10 @@ namespace Density {
 
         public:
 
-        None( float const n0) : Profile( n0 ) { };
+        None( ) : Profile( 0.f ) { };
 
         None * clone() const override {
-            return new None( n0 );
+            return new None( );
         };
         void inject( Particles & part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override {
             // no injection

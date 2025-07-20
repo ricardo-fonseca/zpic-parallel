@@ -90,7 +90,7 @@ void Cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
         Species::set_density( Density::Slab( coord::x, n0, x0, x1 ) );
         Species::set_udist( UDistribution::Thermal( uth, make_float3( u, 0, 0 ) ) );
     } else {
-        Species::set_density( Density::None( n0 ) );
+        Species::set_density( Density::None( ) );
         // No need to set udist because no particles will be injected
     }
 
