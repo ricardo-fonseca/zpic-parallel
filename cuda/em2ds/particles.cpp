@@ -180,11 +180,11 @@ void gather(
 
     for( int idx = block_thread_rank(); idx < tile_np; idx += block_num_threads() ) {
         float val;
-        if ( quant == part::x )  val = (tile_idx.x * part.nx.x + ix[idx].x) + (0.5f + x[idx].x);
-        if ( quant == part::y )  val = (tile_idx.y * part.nx.y + ix[idx].y) + (0.5f + x[idx].y);
-        if ( quant == part::ux ) val = u[idx].x;
-        if ( quant == part::uy ) val = u[idx].y;
-        if ( quant == part::uz ) val = u[idx].z;
+        if constexpr ( quant == part::x )  val = (tile_idx.x * part.nx.x + ix[idx].x) + (0.5f + x[idx].x);
+        if constexpr ( quant == part::y )  val = (tile_idx.y * part.nx.y + ix[idx].y) + (0.5f + x[idx].y);
+        if constexpr ( quant == part::ux ) val = u[idx].x;
+        if constexpr ( quant == part::uy ) val = u[idx].y;
+        if constexpr ( quant == part::uz ) val = u[idx].z;
         d_data[ tile_off + idx ] = val;
     }
 }

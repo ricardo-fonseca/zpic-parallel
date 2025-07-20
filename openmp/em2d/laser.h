@@ -14,7 +14,7 @@ class Pulse {
     float rise, flat, fall; // Rise, flat and fall time of the laser pulse, in simulation units 
 
     float a0;       // Normalized peak vector potential of the pulse
-    float omega0;   // Laser frequency, normalized to the plasma frequency
+    float omega0;   // Laser frequency, normalized to the simulation frequency
 
     float polarization;
 

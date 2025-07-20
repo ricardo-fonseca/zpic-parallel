@@ -52,3 +52,4 @@ mpi/zpic
 openmp/zpic
 cuda/em2d/zpic
 cuda/em2ds/zpic
+openmp/python/em2d.cpp

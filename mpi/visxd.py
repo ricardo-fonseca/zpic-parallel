@@ -60,7 +60,8 @@ def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     plt.show()
 
 def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None,
+    show = True ):
     """Generates a colormap plot from a 2D grid zdf file
 
     Args:
@@ -172,7 +173,8 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.grid(grid)
 
-    plt.show()
+    if ( show ):
+        plt.show()
 
 def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
     vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
