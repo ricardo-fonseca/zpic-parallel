@@ -24,6 +24,9 @@ typedef Vec8Float VecFloat_s;
 typedef Vec8Int VecInt_s;
 typedef Vec8Mask VecMask_s;
 
+// No initialization requrired
+inline int simd_init() {return 0;}
+
 #define SIMD AVX2
 
 #endif
@@ -48,6 +51,9 @@ typedef __mmask16 vmask;
 typedef Vec16Float VecFloat_s;
 typedef Vec16Int VecInt_s;
 typedef Vec16Mask VecMask_s;
+
+// No initialization requrired
+inline int simd_init() {return 0;}
 
 #define SIMD AVX512
 
@@ -74,6 +80,9 @@ typedef vec_mask32 vmask;
 typedef Vec4Float  VecFloat_s;
 typedef Vec4Int    VecInt_s;
 typedef Vec4Mask   VecMask_s;
+
+// No initialization requrired
+inline int simd_init() {return 0;}
 
 #define SIMD NEON
 
@@ -102,6 +111,9 @@ typedef VecFloat  VecFloat_s;
 typedef VecInt    VecInt_s;
 typedef VecMask   VecMask_s;
 
+// Initialize the SVE vector length
+inline int simd_init() { return prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8); };
+
 #define SIMD SVE
 
 #endif
@@ -115,6 +127,7 @@ typedef VecMask   VecMask_s;
 
 constexpr char vecname[] = "none";
 constexpr int vecwidth = 1;
+inline int simd_init() {return 0;}
 
 #endif
 

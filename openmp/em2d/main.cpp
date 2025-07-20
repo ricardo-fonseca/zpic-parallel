@@ -38,13 +38,6 @@ void info( void ) {
     std::cout << "SIMD support not enabled\n";
 #endif
 
-#ifdef __ARM_FEATURE_SVE_BITS
-#if __ARM_FEATURE_SVE_BITS > 0
-    std::cout << "ARM SVE bits: " << __ARM_FEATURE_SVE_BITS << '\n';
-    prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8);
-#endif
-#endif
-
 #ifdef _OPENMP
 
     std::cout << "OpenMP enabled\n";
@@ -510,6 +503,9 @@ void test_weibel_96( )
 }
 
 int main( void ) {
+
+    // Initialize SIMD support
+    simd_init();
 
     info();
 
