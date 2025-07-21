@@ -58,14 +58,19 @@ class custom_build_ext(build_ext):
 # Module definitions
 
 basepath = '../em2d'
-sources  = ['zdf.c', 'emf.cpp', 'current.cpp', 'laser.cpp',
-			 'particles.cpp', 'species.cpp', 'density.cpp', 'udist.cpp']
+sources  = ['zdf.c', 'emf.cpp', 'current.cpp', 
+			 'particles.cpp', 'udist.cpp', 'density.cpp', 'species.cpp']
+
+# note: udist.cpp and density.cpp must be compiled also for the base module
 
 sources  = [ basepath + '/' + s for s in sources ]
 
-ext = Extension( "em2d", 
-	sources = ["em2d.pyx"] + sources
-)
+ext = [
+    Extension( "em2d.em2d",            sources = ["em2d/em2d.pyx"] + sources ),
+    Extension( "em2d.laser.laser",     sources = ["em2d/laser/laser.pyx", '../em2d/laser.cpp' ] ),
+    Extension( "em2d.udist.udist",     sources = ["em2d/udist/udist.pyx", '../em2d/udist.cpp' ] ),
+    Extension( "em2d.density.density", sources = ["em2d/density/density.pyx", '../em2d/density.cpp' ] )
+]
 
 setup( 
       ext_modules = cythonize( ext ),

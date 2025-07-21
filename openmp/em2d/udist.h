@@ -17,6 +17,7 @@ namespace UDistribution {
     
     class None : public Type {
         public:
+//        None() {};
         None * clone() const override { return new None(); };
         void set( Particles & part, unsigned int seed ) const override ;
     };

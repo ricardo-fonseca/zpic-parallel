@@ -7,7 +7,7 @@ import visxd
 ###############################################################################
 # ZPIC utilities
 #
-cimport zpic
+from em2d cimport zpic
 
 class zpic:
     def sys_info():
@@ -68,7 +68,7 @@ class zpic:
 # Grid
 #
 
-from em2d cimport grid as cppGrid
+from em2d cimport grid
 
 cdef class Grid:
     """Grid( ntiles = None, nx = None, gc = None)
@@ -79,7 +79,7 @@ cdef class Grid:
     ----------
     ntiles : list of integers, optional
         Number of tiles (x,y) in the grid. Defaults to None, meaning the object
-        will be a view of an existing cppGrid.
+        will be a view of an existing grid.grid.
     nx : list of integers, optional
         Tile grid size (x,y)
     gc : list of integers, optional
@@ -89,7 +89,7 @@ cdef class Grid:
     --------
     Grid.associate()
     """
-    cdef cppGrid[ float ] * obj
+    cdef grid.grid[ float ] * obj
     cdef bint is_view
 
     def __cinit__(self, list ntiles = None, list nx = None, list gc = None ):
@@ -110,29 +110,29 @@ cdef class Grid:
             lnx.x = nx[1]
 
             if ( gc is None ):
-                self.obj = new cppGrid[ float ]( lntiles, lnx )
+                self.obj = new grid.grid[ float ]( lntiles, lnx )
             else:
                 lgc.x.lower = gc[0,0]
                 lgc.x.upper = gc[0,1]
                 lgc.y.lower = gc[1,0]
                 lgc.y.upper = gc[1,1]
-                self.obj = new cppGrid[ float ]( lntiles, lnx, lgc )
+                self.obj = new grid.grid[ float ]( lntiles, lnx, lgc )
 
             self.is_view = False
 
-    cdef associate( self, cppGrid[ float ] * src ):
-        """associate( cppGrid[ float ] * src )
+    cdef associate( self, grid.grid[ float ] * src ):
+        """associate( grid.grid[ float ] * src )
         
-        Associate object with an existing cppGrid object. This requires that the object
+        Associate object with an existing grid.grid object. This requires that the object
         was created with ntiles = None
 
         Parameters
         ----------
-        src : cppGrid[ float ] * src
-            Pointer to existing cppGrid object
+        src : grid.grid[ float ] * src
+            Pointer to existing grid.grid object
         """
         if ( not self.is_view ):
-            raise Exception( "Grid object is not of view type, cannot associate existing cppGrid object")
+            raise Exception( "Grid object is not of view type, cannot associate existing grid.grid object")
         self.obj = src  
 
     def __dealloc__(self):
@@ -192,7 +192,7 @@ cdef class Grid:
         gather : numpy.ndarray
             Contiguous grid with all the grid values
         """
-        dst = np.empty( shape = [ self.obj.dims.x, self.obj.dims.y ], dtype = np.float32 )
+        dst = np.empty( shape = [ self.obj.dims.y, self.obj.dims.x ], dtype = np.float32 )
         cdef float [:,:] buffer = dst
         self.obj.gather( & buffer[ 0, 0 ] )
         return dst
@@ -272,8 +272,8 @@ cdef class Grid:
 # Vec3Grid
 #
 
-from em2d cimport vec3grid as cppVec3Grid
-cimport fcomp
+from em2d.vec3grid cimport *
+from em2d cimport fcomp
 
 cdef class Vec3Grid:
     """Vec3Grid( ntiles = None, nx = None, gc = None)
@@ -284,7 +284,7 @@ cdef class Vec3Grid:
     ----------
     ntiles : list of integers, optional
         Number of tiles (x,y) in the grid. Defaults to None, meaning the object
-        will be a view of an existing cppGrid.
+        will be a view of an existing grid.grid.
     nx : list of integers, optional
         Tile grid size (x,y)
     gc : list of integers, optional
@@ -295,8 +295,8 @@ cdef class Vec3Grid:
     Vec3Grid.associate()
     """
 
-    cdef cppVec3Grid[ float3 ] * obj
-    cdef bint is_view
+    # cdef vec3grid.vec3grid[ float3 ] * obj
+    # cdef bint is_view
 
     def __cinit__(self, list ntiles = None, list nx = None, list gc = None ):
 
@@ -315,18 +315,18 @@ cdef class Vec3Grid:
             _nx.y = nx[1]
 
             if ( gc is None ):
-                self.obj = new cppVec3Grid[ float3 ]( _ntiles, _nx )
+                self.obj = new vec3grid.vec3grid[ float3 ]( _ntiles, _nx )
             else:
                 _gc.x.lower = gc[0,0]
                 _gc.x.upper = gc[0,1]
                 _gc.y.lower = gc[1,0]
                 _gc.y.upper = gc[1,1]
 
-                self.obj = new cppVec3Grid[ float3 ]( _ntiles, _nx, _gc )
+                self.obj = new vec3grid.vec3grid[ float3 ]( _ntiles, _nx, _gc )
 
             self.is_view = False
 
-    cdef associate( self, cppVec3Grid[ float3 ] * src ):
+    cdef associate( self, vec3grid.vec3grid[ float3 ] * src ):
         """associate( cppVec3Grid[ float ] * src )
         
         Associate object with an existing cppVec3Grid object. This requires that the object
@@ -405,7 +405,7 @@ cdef class Vec3Grid:
         gather : numpy.ndarray
             Contiguous grid with all the grid values of the selected field component
         """
-        dst = np.empty( shape = [ self.obj.dims.x, self.obj.dims.y ], dtype = np.float32 )
+        dst = np.empty( shape = [ self.obj.dims.y, self.obj.dims.x ], dtype = np.float32 )
         cdef float [:,:] buffer = dst
         tmp = {'x':fcomp.x, 'y':fcomp.y, 'z':fcomp.z}
         cdef fcomp.cart _fc = tmp[ fc ]
@@ -494,10 +494,10 @@ cdef class Vec3Grid:
 # Current
 #
 
-from em2d cimport Current as cppCurrent
+from em2d cimport current
 
-cdef class pyCurrent:
-    """pyCurrent( ntiles = None, nx = None, box = None, dt = 0)
+cdef class Current:
+    """Current( ntiles = None, nx = None, box = None, dt = 0)
 
     Class representing current density
 
@@ -505,7 +505,7 @@ cdef class pyCurrent:
     ----------
     ntiles : list of integers, optional
         Number of tiles (x,y) in the grid. Defaults to None, meaning the object
-        will be a view of an existing cppCurrent object.
+        will be a view of an existing current.Current object.
     nx : list of integers, optional
         Tile grid size (x,y)
     box : list of double, optional
@@ -515,15 +515,15 @@ cdef class pyCurrent:
 
     See Also
     --------
-    pyCurrent.associate()
+    Current.associate()
     """
 
-    cdef cppCurrent * obj
-    """Pointer to corresponding cppCurrent object"""
-    cdef bint is_view
-    """True if object is a view of an existing cppCurrent object"""
-    cdef Vec3Grid J
-    """Vec3Grid holding current density values"""
+    # cdef current.Current * obj
+    # """Pointer to corresponding current.Current object"""
+    # cdef bint is_view
+    # """True if object is a view of an existing current.Current object"""
+    # cdef Vec3Grid J
+    # """Vec3Grid holding current density values"""
 
     def __cinit__(self, list ntiles = None, list nx = None, list box = None, double dt = 0):
 
@@ -543,7 +543,7 @@ cdef class pyCurrent:
             _box.x = box[0]
             _box.y = box[1]
 
-            self.obj = new cppCurrent( _ntiles, _nx, _box, dt )
+            self.obj = new current.Current( _ntiles, _nx, _box, dt )
             self.is_view = False
 
             self.J.associate( self.obj.J )
@@ -551,19 +551,19 @@ cdef class pyCurrent:
             self.obj = NULL
             self.is_view = True              
 
-    cdef associate( self, cppCurrent * src ):
-        """associate( cppCurrent * src )
+    cdef associate( self, current.Current * src ):
+        """associate( current.Current * src )
         
-        Associate object with an existing cppCurrent object. This requires that the object
+        Associate object with an existing current.Current object. This requires that the object
         was created with ntiles = None
 
         Parameters
         ----------
-        src : cppCurrent * src
-            Pointer to existing cppCurrent object
+        src : current.Current * src
+            Pointer to existing current.Current object
         """
         if ( not self.is_view ):
-            raise Exception( "pyCurrent object is not of view type, cannot associate existing cppCurrent object")
+            raise Exception( "Current object is not of view type, cannot associate existing current.Current object")
         self.obj = src
         self.J.associate( self.obj.J )
 
@@ -664,11 +664,10 @@ cdef class pyCurrent:
 # EMF
 #
 
-from em2d cimport EMF as cppEMF
-cimport emf
+from em2d cimport emf
 
-cdef class pyEMF:
-    """pyEMF( ntiles = None, nx = None, box = None, dt = 0)
+cdef class EMF:
+    """EMF( ntiles = None, nx = None, box = None, dt = 0)
 
     Class representing current EM fields
 
@@ -676,7 +675,7 @@ cdef class pyEMF:
     ----------
     ntiles : list of integers, optional
         Number of tiles (x,y) in the grid. Defaults to None, meaning the object
-        will be a view of an existing cppCurrent object.
+        will be a view of an existing current.Current object.
     nx : list of integers, optional
         Tile grid size (x,y)
     box : list of double, optional
@@ -686,16 +685,16 @@ cdef class pyEMF:
 
     See Also
     --------
-    pyEMF.associate()
+    EMF.associate()
     """
-    cdef cppEMF * obj
-    """Pointer to corresponding cppCurrent object"""
-    cdef bint is_view
-    """True if object is a view of an existing cppCurrent object"""
-    cdef Vec3Grid E
-    """Vec3Grid holding E field values"""
-    cdef Vec3Grid B
-    """Vec3Grid holding B field values"""
+    # cdef emf.EMF * obj
+    # """Pointer to corresponding current.Current object"""
+    # cdef bint is_view
+    # """True if object is a view of an existing current.Current object"""
+    # cdef Vec3Grid E
+    # """Vec3Grid holding E field values"""
+    # cdef Vec3Grid B
+    # """Vec3Grid holding B field values"""
 
     def __cinit__(self, list ntiles = None, list nx = None, list box = None, double dt = 0):
 
@@ -716,7 +715,7 @@ cdef class pyEMF:
             _box.x = box[0]
             _box.y = box[1]
 
-            self.obj = new cppEMF( _ntiles, _nx, _box, dt )
+            self.obj = new emf.EMF( _ntiles, _nx, _box, dt )
             self.is_view = False
 
             self.E.associate( self.obj.E )
@@ -725,19 +724,19 @@ cdef class pyEMF:
             self.obj = NULL
             self.is_view = True
 
-    cdef associate( self, cppEMF * src ):
-        """associate( cppEMF * src )
+    cdef associate( self, emf.EMF * src ):
+        """associate( emf.EMF * src )
         
-        Associate object with an existing cppEMF object. This requires that the object
+        Associate object with an existing emf.EMF object. This requires that the object
         was created with ntiles = None
 
         Parameters
         ----------
-        src : cppEMF * src
-            Pointer to existing cppEMF object
+        src : emf.EMF * src
+            Pointer to existing emf.EMF object
         """
         if ( not self.is_view ):
-            raise Exception( "pyEMF object is not of view type, cannot associate existing cppEMF object")
+            raise Exception( "EMF object is not of view type, cannot associate existing emf.EMF object")
         self.obj = src  
         self.E.associate( self.obj.E )
         self.B.associate( self.obj.B )
@@ -804,14 +803,14 @@ cdef class pyEMF:
         """
         self.obj.advance()
     
-    def advance( self, pyCurrent current ):
+    def advance( self, Current current ):
         """advance()
         
         Advance EM object 1 iteration
 
         Parameters
         ----------
-        current : pyCurrent
+        current : Current
             Electric current density
         """
         self.obj.advance( current.obj[0] )
@@ -893,406 +892,27 @@ cdef class pyEMF:
         )
 
 
-###############################################################################
-# Lasers
-#
 
-cdef class pyPlaneWave:
-    """pyPlaneWave( start = 0, fwhm = 0, rise = 0, flat = 0, fall = 0,
-                    a0 = 0, omega0 = 0, polarization = 0,
-                    cos_pol = 0, sin_pol = 0 )
-    
-    Class representing plane wave laser pulse
-
-    Parameters
-    ----------
-    start : float
-        Start position of laser pulse (front)
-    fwhm : float
-        Laser pulse FWHM, overrides rise / flat / fall parameters
-    rise : float
-        Laser pulse rise time
-    flat : float
-        Laser pulse flat time
-    fall : float
-        Laser pulse fall time
-    a0 : float
-        Normalized peak vector potential of the pulse
-    omega0 : float 
-        Laser frequency normalized to simulation frequency
-    polarization : float
-        Polarization angle in radians. Will be ignored unless cos_pol and
-        sin_pol are both 0
-    cos_pol : float
-        Cosine of the polarization angle
-    sin_pol : float
-        Sine of the polarization angle
-    """
-    cdef laser.PlaneWave * obj
-
-    def __cinit__( self, *, float start = 0.0, float fwhm = 0.0,
-                   float rise = 0.0, float flat = 0.0, float fall = 0.0,
-                   float a0 = 0.0, float omega0 = 0.0, float polarization = 0.0,
-                   float cos_pol = 0.0, float sin_pol = 0.0 ):
-
-        self.obj = new laser.PlaneWave()
-
-        self.obj.start = start
-        self.obj.fwhm = fwhm
-        self.obj.rise = rise
-        self.obj.flat = flat
-        self.obj.fall = fall
-        self.obj.a0 = a0
-        self.obj.omega0 = omega0
-        self.obj.polarization = polarization
-        self.obj.cos_pol = cos_pol
-        self.obj.sin_pol = sin_pol
-
-    def __dealloc__(self):
-        del self.obj
-
-    def add( self, pyEMF emf ):
-        """add( emf )
-
-        Adds laser pulse to EMF object
-
-        Parameters
-        ----------
-        emf : pyEMF
-            EM fields object
-        """
-        # Plane Wave
-        self.obj.add( emf.obj[0] )
-
-cdef class pyGaussian:
-    """pyPlaneWave( start = 0, fwhm = 0, rise = 0, flat = 0, fall = 0,
-                    a0 = 0, omega0 = 0, polarization = 0,
-                    cos_pol = 0, sin_pol = 0 )
-    
-    Class representing plane wave laser pulse
-
-    Parameters
-    ----------
-    start : float
-        Start position of laser pulse (front)
-    fwhm : float
-        Laser pulse FWHM, overrides rise / flat / fall parameters
-    rise : float
-        Laser pulse rise time
-    flat : float
-        Laser pulse flat time
-    fall : float
-        Laser pulse fall time
-    a0 : float
-        Normalized peak vector potential of the pulse
-    omega0 : float 
-        Laser frequency normalized to simulation frequency
-    polarization : float
-        Polarization angle in radians. Will be ignored unless cos_pol and
-        sin_pol are both 0
-    cos_pol : float
-        Cosine of the polarization angle
-    sin_pol : float
-        Sine of the polarization angle
-    W0 : float
-        Beam waist
-    focus : float
-        Focal plane position (x)
-    axis : float
-        Propagation axis position (y)
-    """
-    cdef laser.Gaussian * obj
-
-    def __cinit__( self, *, float start = 0.0, float fwhm = 0.0,
-                   float rise = 0.0, float flat = 0.0, float fall = 0.0,
-                   float a0 = 0.0, float omega0 = 0.0, float polarization = 0.0,
-                   float cos_pol = 0.0, float sin_pol = 0.0,
-                   float W0 = 0, float focus = 0, float axis = 0 ):
-
-        self.obj = new laser.Gaussian()
-
-        self.obj.start = start
-        self.obj.fwhm = fwhm
-        self.obj.rise = rise
-        self.obj.flat = flat
-        self.obj.fall = fall
-        self.obj.a0 = a0
-        self.obj.omega0 = omega0
-        self.obj.polarization = polarization
-        self.obj.cos_pol = cos_pol
-        self.obj.sin_pol = sin_pol
-
-        self.obj.W0    = W0
-        self.obj.focus = focus
-        self.obj.axis  = axis
-
-    def __dealloc__(self):
-        del self.obj
-
-    def add( self, pyEMF emf ):
-        """add( emf )
-
-        Adds laser pulse to EMF object
-
-        Parameters
-        ----------
-        emf : pyEMF
-            EM fields object
-        """
-        self.obj.add( emf.obj[0] )
 
 ###############################################################################
 # Particles
 #
 
-from em2d cimport Particles as cppParticles
-cimport part
-
-###############################################################################
-# Udist
-#
-
-cimport udist
-
-cdef class pyNone:
-    """pyNone()
-
-    Class representing a frozen (0 fluid, 0 temperature) momentum distribution
-    """
-    cdef udist.None * obj
-
-    def __cinit__(self ):
-        self.obj = new udist.None( )
-
-    def __dealloc__(self):
-        del self.obj
-
-cdef class pyCold:
-    """pyCold( ufl )
-
-    Class representing a cold (0 temperature) momentum distribution
-
-    Parameters
-    ----------
-    ufl : { float, float, float }
-        Fluid momentum
-    """
-    cdef udist.Cold * obj
-
-    def __cinit__( self, list ufl ):
-
-        cdef float3 _ufl
-        _ufl.x = ufl[0]
-        _ufl.y = ufl[1]
-        _ufl.z = ufl[2]
-
-        self.obj = new udist.Cold( _ufl )
-
-    def __dealloc__(self):
-        del self.obj
-
-cdef class pyThermal:
-    """pyThermal( uth, ufl )
-
-    Class representing a thermal momentum distribution
-
-    Parameters
-    ----------
-    uth : { float, float, float }
-        Temperature distribution
-    ufl : { float, float, float }
-        Fluid momentum
-    """
-
-    cdef udist.Thermal * obj
-
-    def __cinit__( self, list uth, list ufl ):
-
-        cdef float3 _uth
-        _uth.x = uth[0]
-        _uth.y = uth[1]
-        _uth.z = uth[2]
-
-        cdef float3 _ufl
-        _ufl.x = ufl[0]
-        _ufl.y = ufl[1]
-        _ufl.z = ufl[2]
-
-        self.obj = new udist.Thermal( _uth, _ufl )
-
-    def __dealloc__(self):
-        del self.obj
-
-cdef class pyThermalCorr:
-    """pyThermal( uth, ufl, npmin = 2 )
-
-    Class representing a thermal momentum distribution. Momentum is corrected
-    to minimize fluid fluctuations.
-
-    Parameters
-    ----------
-    uth : { float, float, float }
-        Temperature distribution
-    ufl : { float, float, float }
-        Fluid momentum
-    npmin : int
-        Minimum number of particles in a cell to apply momentum correction
-    """
-
-    cdef udist.ThermalCorr * obj
-
-    def __cinit__( self, list uth, list ufl, int npmin = 2 ):
-
-        cdef float3 _uth
-        _uth.x = uth[0]
-        _uth.y = uth[1]
-        _uth.z = uth[2]
-
-        cdef float3 _ufl
-        _ufl.x = ufl[0]
-        _ufl.y = ufl[1]
-        _ufl.z = ufl[2]
-
-        self.obj = new udist.ThermalCorr( _uth, _ufl, npmin )
-
-    def __dealloc__(self):
-        del self.obj
-
-###############################################################################
-# 
-# Density
-
-cimport coord
-cimport density
-
-cdef class density_None:
-    """density_None()
-
-    Class representing a 0 density profile
-    """
-    cdef density.None * obj
-
-    def __cinit__(self ):
-        self.obj = new density.None( )
-
-    def __dealloc__(self):
-        del self.obj
-
-cdef class density_Uniform:
-    """density_Uniform( n0 )
-
-    Class representing a uniform density profile
-
-    Parameters
-    ----------
-    n0 : float
-        Density value
-    """
-    cdef density.Uniform * obj
-
-    def __cinit__(self, float n0 ):
-        self.obj = new density.Uniform( n0 )
-
-    def __dealloc__(self):
-        del self.obj
-    
-    @property
-    def n0( self ):
-        """Density value"""
-        return self.obj.n0
-
-cdef class density_Step:
-    """density_Step( dir, n0, pos )
-
-    Class representing a step density profile
-
-    Parameters
-    ----------
-    dir : string
-        Step direction, must be one of 'x' or 'y'
-    n0 : float
-        Density value
-    pos : float
-        Step position in simulation units
-    """
-    cdef density.Step * obj
-
-    def __cinit__(self, dir, float n0, float pos ):
-        cdef coord.cart dir_ = {'x':coord.cart.x, 'y':coord.cart.y }[dir]
-        self.obj = new density.Step( dir_, n0, pos )
-
-    def __dealloc__(self):
-        del self.obj
-    
-    @property
-    def n0( self ):
-        """Density value"""
-        return self.obj.n0
-
-    @property
-    def pos( self ):
-        """Edge position"""
-        return self.obj.pos
-
-    @property
-    def dir( self ):
-        """Step direction"""
-        return {0:'x',1:'y'}[ self.obj.dir ]
-
-cdef class density_Slab:
-    """density_Slab( dir, n0, begin, end )
-
-    Class representing a slab density profile
+from em2d cimport part
+from em2d cimport particles
 
 
-    Parameters
-    ----------
-    dir : string
-        Step direction, must be one of 'x' or 'y'
-    n0 : float
-        Density value
-    begin : float
-        Position of the beggining of the slab in simulation units
-    end : float
-        Position of the end of the slab in simulation units
-    """
-    cdef density.Slab * obj
-
-    def __cinit__(self, dir, float n0, float begin, float end ):
-        cdef coord.cart dir_ = {'x':coord.cart.x, 'y':coord.cart.y }[dir]
-        self.obj = new density.Slab( dir_, n0, begin, end )
-
-    def __dealloc__(self):
-        del self.obj
-    
-    @property
-    def n0( self ):
-        """Density value"""
-        return self.obj.n0
-
-    @property
-    def dir( self ):
-        """Step direction"""
-        return {0:'x',1:'y'}[ self.obj.dir ]
-
-    @property
-    def begin( self ):
-        """Slab begin position"""
-        return self.obj.begin
-
-    @property
-    def end( self ):
-        """Slab end position"""
-        return self.obj.end
 
 ###############################################################################
 # Species
 #
 
-from em2d cimport Species as cppSpecies
+from em2d cimport species
+cimport em2d.udist.udist
+cimport em2d.density.density
 
-cdef class pySpecies:
-    """pySpecies( name, m_q, ppc, udist = None)
+cdef class Species:
+    """Species( name, m_q, ppc, udist = None)
 
     Class representing a particle species
 
@@ -1305,44 +925,48 @@ cdef class pySpecies:
         should be -1)
     ppc : { int, int }
         Number of particles per cell. Defaults to None, meaning the object
-        will be a view of an existing cppSpecies object.
+        will be a view of an existing species.Species object.
     udist : object
         Velocity distribution to use, defaults to pyNone (0 velocity)
     """
-    cdef cppSpecies * obj
-    """Pointer to corresponding cppCurrent object"""
+    cdef species.Species * obj
+    """Pointer to corresponding current.Current object"""
     cdef bint is_view
-    """True if object is a view of an existing cppCurrent object"""    
+    """True if object is a view of an existing species.Species object"""    
 
-    def __cinit__(self, str name = None, float m_q = 0, list ppc = None, *, udist = None ):
+    def __cinit__(self, str name = None, float m_q = 0, list ppc = None,
+            *, udist = None, density = None ):
 
         cdef uint2 _ppc
         if ( ppc is not None ):
             _ppc.x = ppc[0]
             _ppc.y = ppc[1]
 
-            self.obj = new cppSpecies( name.encode('utf-8'), m_q, _ppc )
+            self.obj = new species.Species( name.encode('utf-8'), m_q, _ppc )
             self.is_view = False
 
             if ( udist is not None ):
                 self.set_udist( udist )
+            
+            if ( density is not None ):
+                self.set_density( density )
         else:
             self.obj = NULL
             self.is_view = True
 
-    cdef associate( self, cppSpecies * src ):
-        """associate( cppSpecies * src )
+    cdef associate( self, species.Species * src ):
+        """associate( species.Species * src )
         
-        Associate object with an existing cppSpecies object. This requires that the object
+        Associate object with an existing species.Species object. This requires that the object
         was created with ppc = None
 
         Parameters
         ----------
-        src : cppSpecies * src
-            Pointer to existing cppSpecies object
+        src : species.Species * src
+            Pointer to existing species.Species object
         """
         if ( not self.is_view ):
-            raise Exception( "pySpecies object is not of view type, cannot associate existing cppSpecies object")
+            raise Exception( "Species object is not of view type, cannot associate existing species.Species object")
         self.obj = src
 
     def __dealloc__(self):
@@ -1387,7 +1011,7 @@ cdef class pySpecies:
         return self.obj.name.decode('utf-8')
 
     def set_udist( self, udist ):
-        """set_udist( udist )
+        """set_udist( dist )
 
         Sets initial generalized velocity (u) distribution
 
@@ -1397,19 +1021,39 @@ cdef class pySpecies:
             Initial velocity distribution, must be of class pyNone, pyCold, pyThermal or pyThermalCorr
         """
 
-        if ( isinstance( udist, pyNone )):
-            self.obj.set_udist( (<pyNone> udist).obj[0] )
-        elif ( isinstance( udist, pyCold )):
-            self.obj.set_udist( (<pyCold> udist).obj[0] )
-        elif ( isinstance( udist, pyThermal )):
-            self.obj.set_udist( (<pyThermal> udist).obj[0] )
-        elif ( isinstance( udist, pyThermalCorr )):
-            self.obj.set_udist( (<pyThermalCorr> udist).obj[0] )
+        if ( isinstance( udist, em2d.udist.udist.None )):
+            self.obj.set_udist( (<em2d.udist.udist.None> udist).obj[0] )
+        elif ( isinstance( udist, em2d.udist.udist.Cold )):
+            self.obj.set_udist( (<em2d.udist.udist.Cold> udist).obj[0] )
+        elif ( isinstance( udist, em2d.udist.udist.Thermal )):
+            self.obj.set_udist( (<em2d.udist.udist.Thermal> udist).obj[0] )
+        elif ( isinstance( udist, em2d.udist.udist.ThermalCorr )):
+            self.obj.set_udist( (<em2d.udist.udist.ThermalCorr> udist).obj[0] )
         else:
             raise Exception( "Invalid udist object")
     
     def set_density( self, density ):
-        print("it's coming...")
+        """set_density( density )
+
+        Sets density profile
+
+        Parameters
+        ----------
+        density : object
+            Density profile, must be of class em2d.density.None, .Uniform,
+            .Step or .Slab
+        """
+
+        if ( isinstance( density, em2d.density.density.None )):
+            self.obj.set_density( (<em2d.density.density.None> density).obj[0] )
+        elif ( isinstance( density, em2d.density.density.Uniform )):
+            self.obj.set_density( (<em2d.density.density.Uniform> density).obj[0] )
+        elif ( isinstance( density, em2d.density.density.Step )):
+            self.obj.set_density( (<em2d.density.density.Step> density).obj[0] )
+        elif ( isinstance( density, em2d.density.density.Slab )):
+            self.obj.set_density( (<em2d.density.density.Slab> density).obj[0] )
+        else:
+            raise Exception( "Invalid density object")
 
     def save( self ):
         """save()
@@ -1495,10 +1139,12 @@ cdef class pySpecies:
 # Simulation
 #
 
-from em2d cimport Simulation as cppSimulation
+from em2d cimport simulation
 
-cdef class pySimulation:
-    """pySimulation( ntiles, nx, box, dt, species = None )
+cimport em2d.laser.laser
+
+cdef class Simulation:
+    """Simulation( ntiles, nx, box, dt, species = None )
 
     Class representing an em2d simulation
 
@@ -1512,20 +1158,20 @@ cdef class pySimulation:
         Simulation box size (x,y) in simulation units
     dt : float
         Simulation time step in simulation units
-    species : pySpecies or list of pySpecies
+    species : Species or list of Species
         Species or list of Species to be added to the simulation. Defaults to None,
         meaning no species will be used.
     moving_window : boolean
         Use a moving window for the simulation, defaults to False
     """
-    cdef cppSimulation * obj
-    """Pointer to corresponding cppSimulation object"""
-    cdef pyEMF emf
-    """View of the simulation EMF object"""
-    cdef pyCurrent current
-    """View of the simulation Current object"""
-    cdef bint mov_window
-    """Simulation uses a moving window"""
+    # cdef simulation.Simulation * obj
+    # """Pointer to corresponding cppSimulation object"""
+    # cdef EMF emf
+    # """View of the simulation EMF object"""
+    # cdef Current current
+    # """View of the simulation Current object"""
+    # cdef bint mov_window
+    # """Simulation uses a moving window"""
 
     def __cinit__(self, list ntiles, list nx, list box, double dt, *, 
         species = None, moving_window = False ):
@@ -1542,19 +1188,19 @@ cdef class pySimulation:
         _box.x = box[0]
         _box.y = box[1]
 
-        self.obj = new cppSimulation( _ntiles, _nx, _box, dt )
+        self.obj = new simulation.Simulation( _ntiles, _nx, _box, dt )
 
-        self.emf = pyEMF()
+        self.emf = EMF()
         self.emf.associate( &self.obj.emf )
 
-        self.current = pyCurrent()
+        self.current = Current()
         self.current.associate( &self.obj.current )       
 
-        if ( isinstance( species, pySpecies )):
-            self.obj.add_species( (<pySpecies> species).obj[0] )
+        if ( isinstance( species, Species )):
+            self.obj.add_species( (<Species> species).obj[0] )
         elif ( isinstance( species, (list,tuple) ) ):
             for s in species:
-                self.obj.add_species( (<pySpecies> s).obj[0] )
+                self.obj.add_species( (<Species> s).obj[0] )
         
         self.mov_window = moving_window
         if ( self.mov_window ):
@@ -1598,21 +1244,23 @@ cdef class pySimulation:
         """View of the simulation current density"""
         return self.current
     
-#    def add( self, src ):
-#        """add( src )
-#
-#        Add object to simulation
-#
-#        Parameters
-#        ----------
-#        src : object
-#            Object to add to the simulation. Currently only pySpecies objects
-#            are supported
-#        """
-#        if ( isinstance( src, pySpecies )):
-#            self.obj.add_species( (<pySpecies> src).obj[0] )
-#        else:
-#            raise Exception("Invalid src object type")
+    def add( self, src ):
+        """add( src )
+
+        Add object to simulation
+
+        Parameters
+        ----------
+        src : object
+            Object to add to the simulation. Currently only Laser objects
+            are supported
+        """
+        if ( isinstance( src, em2d.laser.laser.PlaneWave )):
+            (<em2d.laser.laser.PlaneWave> src).add( self.emf )
+        elif ( isinstance( src, em2d.laser.laser.Gaussian )):
+            (<em2d.laser.laser.Gaussian> src).add( self.emf )
+        else:
+            raise Exception("Invalid src object type")
     
     def advance( self ):
         """advance()

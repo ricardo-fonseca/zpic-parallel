@@ -2,7 +2,7 @@
 # 
 # Density
 
-cdef extern from "../em2d/density.h" namespace "Density":
+cdef extern from "../../../em2d/density.h" namespace "Density":
     cdef cppclass Profile:
         float n0
         Profile( float n0 )

@@ -1,11 +1,9 @@
 ###############################################################################
 # Laser pulse classes
 #
-cdef extern from "../em2d/emf.h":
-    cdef cppclass EMF:
-        pass
+cimport em2d.emf
 
-cdef extern from "../em2d/laser.h" namespace "Laser":
+cdef extern from "../../../em2d/laser.h" namespace "Laser":
     cdef cppclass Pulse:
         float start
         float fwhm
@@ -24,11 +22,11 @@ cdef extern from "../em2d/laser.h" namespace "Laser":
         int validate()
         
         Pulse()
-        int add( EMF & )
+        int add( em2d.emf.EMF & )
 
     cdef cppclass PlaneWave(Pulse):
         PlaneWave()
-        int add_plane "add"( EMF & )
+        int add_plane "add"( em2d.emf.EMF & )
 
     cdef cppclass Gaussian(Pulse):
         float W0
@@ -36,4 +34,4 @@ cdef extern from "../em2d/laser.h" namespace "Laser":
         float axis
 
         Gaussian()
-        int add_gaussian "add"( EMF & )
+        int add_gaussian "add"( em2d.emf.EMF & )

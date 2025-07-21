@@ -437,5 +437,7 @@ int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 con
 
     div_corr_x( E, B, dx );
 
+    // std::cout << "Launched gaussian pulse\n";
+
     return 0;
 }
