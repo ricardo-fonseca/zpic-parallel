@@ -1100,15 +1100,16 @@ cdef class Species:
         return dst
     
     def get_charge( self ):
+        """get_charge()
 
-        # bnd<unsigned int> gc;
-        # gc.x = {0,1};
-        # gc.y = {0,1};
+        Returns species charge density as a Grid object. Charge density is
+        recalculated when the routine is called.
 
-        # grid<float> charge( particles -> ntiles, particles -> nx, gc );
-        # charge.zero();
-        # deposit_charge( charge );
-        # charge.add_from_gc();
+        Returns
+        -------
+        charge : Grid
+            Grid object holding charge density
+        """
 
         ntiles_ = self.obj.get_ntiles()
         nx_     = self.obj.get_nx()
@@ -1122,7 +1123,7 @@ cdef class Species:
         self.obj.deposit_charge( charge.obj[0] )
         charge.add_from_gc()
         
-        return charge.gather()
+        return charge
 
     
     def plot( self, qx, qy, marker = '.', ms = 0.1, alpha = 0.5, **kwargs ):
@@ -1162,7 +1163,7 @@ cdef class Species:
             **kwargs )
 
     def plot_charge( self, **kwargs ):
-        """plot( fc, **kwargs )
+        """plot_charge( fc, **kwargs )
 
         Plot the charge density for the species. Plot is done using visxd.plot2d()
 
@@ -1180,7 +1181,7 @@ cdef class Species:
         ]
         time = self.obj.get_iter() * self.obj.get_dt()
 
-        visxd.plot2d( self.get_charge(), range = frange, 
+        visxd.plot2d( self.get_charge().gather(), range = frange, 
             title  = "$\\sf {} \\;charge \\;density$\n$t = {:g} \\;[\\sf {}]$".format( self.name, time, "1 / \\omega_n" ),
             xtitle = "$\\sf {} \\;[{}]$".format( 'x', 'c / \\omega_n' ),
             ytitle = "$\\sf {} \\;[{}]$".format( 'y', 'c / \\omega_n' ),
