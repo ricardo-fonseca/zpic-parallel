@@ -51,7 +51,7 @@ class Compensated : public Binomial{
     
     public:
 
-    Compensated( coord::cart dir, unsigned int order_ = 0 ) : Binomial ( dir, order_ ) {};
+    Compensated( coord::cart dir, unsigned int order = 0 ) : Binomial ( dir, order ) {};
 
     Compensated * clone() const override { return new Compensated ( dir, order); };
 

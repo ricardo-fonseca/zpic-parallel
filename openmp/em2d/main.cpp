@@ -13,6 +13,8 @@
 #include "simulation.h"
 #include "cathode.h"
 
+#include "zpic.h"
+
 /**
  * OpemMP support
  */
@@ -54,6 +56,10 @@ void info( void ) {
 }
 
 void test_laser( void ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
 
     uint2 ntiles = make_uint2( 16, 8 );
     uint2 nx = make_uint2( 64, 32 );
@@ -116,9 +122,17 @@ void test_laser( void ) {
 
     save_emf( );
 
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
 }
 
+
 void test_inj( void ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
 
     uint2 ntiles = make_uint2( 2, 2 );
     uint2 nx = make_uint2( 64, 64 );
@@ -157,10 +171,17 @@ void test_inj( void ) {
 
     diag();
 
-    std::cout << __func__ << " complete.\n";
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
 }
 
 void test_weibel( void ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
     uint2 gnx = make_uint2( 128, 128 );
     uint2 ntiles = make_uint2( 8, 8 );
 
@@ -232,11 +253,17 @@ void test_weibel( void ) {
     std::cout << "Elapsed time: " << timer.elapsed(timer::s) << " s"
               << ", Performance: " << perf << " GPart/s\n";
 
-    
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;     
 }
 
 void test_cathode()
 {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
 
     Simulation sim(
         make_uint2(    8,    8), // ntiles
@@ -309,6 +336,10 @@ void test_cathode()
 
     std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
               << ", Performance: " << perf << " GPart/s\n";
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset; 
 
 }
 
@@ -434,6 +465,10 @@ void test_weibel_large( )
     std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
               << ", Performance: " << perf << " GPart/s\n";
 
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset; 
+
 }
 
 void test_weibel_96( )
@@ -502,6 +537,75 @@ void test_weibel_96( )
 
 }
 
+void test_lwfa() {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+
+    uint2 dims { 1024, 128 };
+    float2 box { 20.48, 25.6 };
+
+    uint2 nx { 32, 32 };
+    uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
+
+    auto dt = zpic::courant( dims, box ) * 0.9f;
+    auto tmax = 22.0f;
+
+    // Create simulation
+    Simulation sim(ntiles, nx, box, dt);
+
+    // Add electrons
+    Species electrons("electrons", -1.0f, make_uint2( 4, 4 ));
+    electrons.set_density( Density::Step( coord::x, 1.0, 20.48 ) );
+    sim.add_species( electrons );
+    
+    // Add Laser
+    Laser::Gaussian laser;
+    laser.start   = 17.0;
+    laser.fwhm    = 2.0;
+    laser.a0      = 1.0;
+    laser.omega0  = 10.0;    
+    laser.W0      = 4.0;
+    laser.focus   = 20.0;
+    laser.axis    = 12.8;
+    laser.sin_pol = 1;
+
+    laser.add( sim.emf );
+
+    // Set moving window and current filtering
+    sim.set_moving_window();
+    sim.current.set_filter( Filter::Compensated( coord::x, 4 ));
+
+    Timer timer;
+                  
+    timer.start();
+                                 
+    while (sim.get_t() < tmax )
+    {
+        // std::cout << "n = " << sim.get_iter() << '\n';
+        sim.advance_mov_window();
+    }
+                 
+    timer.stop();
+
+    std::cout << "Simulation run up to t = " << sim.get_t()
+              << " in " << timer.elapsed(timer::s) << " s\n";
+
+    std::cout << "Saving diagnostics...\n";
+    
+    sim.emf.save(emf::e, fcomp::x);
+    sim.emf.save(emf::e, fcomp::y);
+    sim.emf.save(emf::e, fcomp::z);
+
+    electrons.save_charge();
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset; 
+}
+
 int main( void ) {
 
     // Initialize SIMD support
@@ -523,5 +627,7 @@ int main( void ) {
 
     // test_weibel_large();
 
-    test_weibel_96();
+    // test_weibel_96();
+
+    test_lwfa();
 }

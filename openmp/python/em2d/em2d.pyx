@@ -192,7 +192,9 @@ cdef class Grid:
         gather : numpy.ndarray
             Contiguous grid with all the grid values
         """
-        dst = np.empty( shape = [ self.obj.dims.y, self.obj.dims.x ], dtype = np.float32 )
+
+        cdef uint2 dims = self.obj.get_dims()
+        dst = np.empty( shape = [ dims.y, dims.x ], dtype = np.float32 )
         cdef float [:,:] buffer = dst
         self.obj.gather( & buffer[ 0, 0 ] )
         return dst
@@ -495,6 +497,7 @@ cdef class Vec3Grid:
 #
 
 from em2d cimport current
+cimport em2d.filter.filter
 
 cdef class Current:
     """Current( ntiles = None, nx = None, box = None, dt = 0)
@@ -586,11 +589,32 @@ cdef class Current:
         Current iteration number
         """
         return self.obj.get_iter()
+    
+    def set_filter( self, filter ):
+        """set_filter( filter )
+
+        Sets current filtering to be applied at each time step
+
+        Parameters
+        ----------
+        filter : object
+            Digital filter to be used, must be one of em2d.filter.None, 
+            .Binomial or .Compensated
+        """
+        if ( isinstance( filter, em2d.filter.filter.None )):
+            self.obj.set_filter( (<em2d.filter.filter.None> filter).obj[0] )
+        elif ( isinstance( filter, em2d.filter.filter.Binomial )):
+            self.obj.set_filter( (<em2d.filter.filter.Binomial> filter).obj[0] )
+        elif ( isinstance( filter, em2d.filter.filter.Compensated )):
+            self.obj.set_filter( (<em2d.filter.filter.Compensated> filter).obj[0] )
+        else:
+            raise Exception( "Invalid filter object")
 
     def save( self, fc ):
         """save( fc )
 
-        Save selected field component of current density to .zdf file with full metadata
+        Save selected field component of current density to .zdf file with full
+        metadata
 
         Parameters
         ----------
@@ -604,7 +628,8 @@ cdef class Current:
     def plot( self, fc, **kwargs ):
         """plot( fc, **kwargs )
 
-        Plot selected field component of current density. Plot is done using visxd.plot2d()
+        Plot selected field component of current density. Plot is done using
+        visxd.plot2d()
 
         Parameters
         ----------

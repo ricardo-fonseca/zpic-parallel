@@ -36,4 +36,7 @@ cdef extern from "../../em2d/grid.h":
 
         void save( string file )
 
+        uint2 get_ntiles()
+        uint2 get_dims()
+
 ctypedef grid[float] grid_float

@@ -69,7 +69,8 @@ ext = [
     Extension( "em2d.em2d",            sources = ["em2d/em2d.pyx"] + sources ),
     Extension( "em2d.laser.laser",     sources = ["em2d/laser/laser.pyx", '../em2d/laser.cpp' ] ),
     Extension( "em2d.udist.udist",     sources = ["em2d/udist/udist.pyx", '../em2d/udist.cpp' ] ),
-    Extension( "em2d.density.density", sources = ["em2d/density/density.pyx", '../em2d/density.cpp' ] )
+    Extension( "em2d.density.density", sources = ["em2d/density/density.pyx", '../em2d/density.cpp' ] ),
+    Extension( "em2d.filter.filter",   sources = ["em2d/filter/filter.pyx" ] )
 ]
 
 setup( 

@@ -3,6 +3,7 @@
 #
 
 from em2d.vec3grid cimport *
+cimport em2d.filter.defs as filter
 
 cdef extern from "../../em2d/current.h":
     cdef cppclass Current:
@@ -17,3 +18,5 @@ cdef extern from "../../em2d/current.h":
         void advance()
         void zero()
         void save( int )
+
+        void set_filter( filter.Digital & new_filter )
