@@ -422,6 +422,33 @@ public:
     }
 
     /**
+     * @brief Gets the number of tiles
+     * 
+     * @return auto 
+     */
+    auto get_ntiles() const {
+        return particles -> ntiles;
+    }
+
+    /**
+     * @brief Gets the tile grid size
+     * 
+     * @return auto 
+     */
+    auto get_nx() const {
+        return particles -> nx;
+    }
+
+    /**
+     * @brief Gets the simulation box size
+     * 
+     * @return auto 
+     */
+    auto get_box() const {
+        return box;
+    }
+
+    /**
      * @brief Returns the maximum number of particles per tile
      * 
      * @return auto 

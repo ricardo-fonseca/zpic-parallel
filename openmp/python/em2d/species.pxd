@@ -37,6 +37,10 @@ cdef extern from "../../em2d/species.h":
         
         void gather( int quant, float * data )
         uint64_t np_total() 
+        
         int get_iter()
         float get_dt()
+        uint2 get_ntiles()
+        uint2 get_nx()
+        float2 get_box()
 

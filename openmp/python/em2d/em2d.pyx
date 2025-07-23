@@ -104,18 +104,18 @@ cdef class Grid:
             self.is_view = True
         else:
             lntiles.x = ntiles[0]
-            lntiles.x = ntiles[1]
+            lntiles.y = ntiles[1]
 
             lnx.x = nx[0]
-            lnx.x = nx[1]
+            lnx.y = nx[1]
 
             if ( gc is None ):
                 self.obj = new grid.grid[ float ]( lntiles, lnx )
             else:
-                lgc.x.lower = gc[0,0]
-                lgc.x.upper = gc[0,1]
-                lgc.y.lower = gc[1,0]
-                lgc.y.upper = gc[1,1]
+                lgc.x.lower = gc[0][0]
+                lgc.x.upper = gc[0][1]
+                lgc.y.lower = gc[1][0]
+                lgc.y.upper = gc[1][1]
                 self.obj = new grid.grid[ float ]( lntiles, lnx, lgc )
 
             self.is_view = False
@@ -317,10 +317,10 @@ cdef class Vec3Grid:
             if ( gc is None ):
                 self.obj = new vec3grid.vec3grid[ float3 ]( _ntiles, _nx )
             else:
-                _gc.x.lower = gc[0,0]
-                _gc.x.upper = gc[0,1]
-                _gc.y.lower = gc[1,0]
-                _gc.y.upper = gc[1,1]
+                _gc.x.lower = gc[0][0]
+                _gc.x.upper = gc[0][1]
+                _gc.y.lower = gc[1][0]
+                _gc.y.upper = gc[1][1]
 
                 self.obj = new vec3grid.vec3grid[ float3 ]( _ntiles, _nx, _gc )
 
@@ -1099,6 +1099,32 @@ cdef class Species:
         self.obj.gather( q_, & buffer[0] )
         return dst
     
+    def get_charge( self ):
+
+        # bnd<unsigned int> gc;
+        # gc.x = {0,1};
+        # gc.y = {0,1};
+
+        # grid<float> charge( particles -> ntiles, particles -> nx, gc );
+        # charge.zero();
+        # deposit_charge( charge );
+        # charge.add_from_gc();
+
+        ntiles_ = self.obj.get_ntiles()
+        nx_     = self.obj.get_nx()
+
+        ntiles = [ ntiles_.x, ntiles_.y ]
+        nx     = [ nx_.x, nx_.y ]
+        gc     = [ [0,1], [0,1] ]
+        charge = Grid( ntiles, nx, gc )
+
+        charge.zero()
+        self.obj.deposit_charge( charge.obj[0] )
+        charge.add_from_gc()
+        
+        return charge.gather()
+
+    
     def plot( self, qx, qy, marker = '.', ms = 0.1, alpha = 0.5, **kwargs ):
         """plot( qx, qy, marker, ms, alpha, **kwargs )
 
@@ -1134,6 +1160,33 @@ cdef class Species:
                 ),
             marker = marker, ms = ms, alpha = alpha,
             **kwargs )
+
+    def plot_charge( self, **kwargs ):
+        """plot( fc, **kwargs )
+
+        Plot the charge density for the species. Plot is done using visxd.plot2d()
+
+        Parameters
+        ----------
+        **kwargs
+            Additional keyword arguments to be passed on to visxd.plot2d()
+        """
+
+        box = self.obj.get_box()
+
+        frange = [
+            [ 0, box.x ],
+            [ 0, box.y ]
+        ]
+        time = self.obj.get_iter() * self.obj.get_dt()
+
+        visxd.plot2d( self.get_charge(), range = frange, 
+            title  = "$\\sf {} \\;charge \\;density$\n$t = {:g} \\;[\\sf {}]$".format( self.name, time, "1 / \\omega_n" ),
+            xtitle = "$\\sf {} \\;[{}]$".format( 'x', 'c / \\omega_n' ),
+            ytitle = "$\\sf {} \\;[{}]$".format( 'y', 'c / \\omega_n' ),
+            vtitle = "$\\sf {} - {} \\;[{}]$".format( self.name, '\\rho', 'n_e' ),
+            **kwargs
+        )
 
 ###############################################################################
 # Simulation
