@@ -935,6 +935,7 @@ from em2d cimport particles
 from em2d cimport species
 cimport em2d.udist.udist
 cimport em2d.density.density
+from em2d cimport phasespace
 
 cdef class Species:
     """Species( name, m_q, ppc, udist = None)
@@ -1123,34 +1124,7 @@ cdef class Species:
 
         self.obj.gather( q_, & buffer[0] )
         return dst
-    
-    def get_charge( self ):
-        """get_charge()
-
-        Returns species charge density as a Grid object. Charge density is
-        recalculated when the routine is called.
-
-        Returns
-        -------
-        charge : Grid
-            Grid object holding charge density
-        """
-
-        ntiles_ = self.obj.get_ntiles()
-        nx_     = self.obj.get_nx()
-
-        ntiles = [ ntiles_.x, ntiles_.y ]
-        nx     = [ nx_.x, nx_.y ]
-        gc     = [ [0,1], [0,1] ]
-        charge = Grid( ntiles, nx, gc )
-
-        charge.zero()
-        self.obj.deposit_charge( charge.obj[0] )
-        charge.add_from_gc()
-        
-        return charge
-
-    
+       
     def plot( self, qx, qy, marker = '.', ms = 0.1, alpha = 0.5, **kwargs ):
         """plot( qx, qy, marker, ms, alpha, **kwargs )
 
@@ -1178,14 +1152,40 @@ cdef class Species:
 
         time = self.obj.get_iter() * self.obj.get_dt()
 
-        visxd.plot1d( self.gather(qx), self.gather(qy), 
+        visxd.plot1d( self.gather(qx), self.gather(qy), marker,
+            ms = ms, alpha = alpha,
             xtitle = "$\\sf {} \\;[{}]$".format( qlabels[qx], qunits[qx] ),
             ytitle = "$\\sf {} \\;[{}]$".format( qlabels[qy], qunits[qy] ),
             title  = "$\\sf {} - {}/{} $\n$t = {:g} \\;[\\sf {}]$".format( 
                   self.name, qlabels[qy], qlabels[qx], time, "1 / \\omega_n"
                 ),
-            marker = marker, ms = ms, alpha = alpha,
             **kwargs )
+
+    def get_charge( self ):
+        """get_charge()
+
+        Returns species charge density as a Grid object. Charge density is
+        recalculated when the routine is called.
+
+        Returns
+        -------
+        charge : Grid
+            Grid object holding charge density
+        """
+
+        ntiles_ = self.obj.get_ntiles()
+        nx_     = self.obj.get_nx()
+
+        ntiles = [ ntiles_.x, ntiles_.y ]
+        nx     = [ nx_.x, nx_.y ]
+        gc     = [ [0,1], [0,1] ]
+        charge = Grid( ntiles, nx, gc )
+
+        charge.zero()
+        self.obj.deposit_charge( charge.obj[0] )
+        charge.add_from_gc()
+        
+        return charge
 
     def plot_charge( self, **kwargs ):
         """plot_charge( fc, **kwargs )
@@ -1213,6 +1213,200 @@ cdef class Species:
             vtitle = "$\\sf {} - {} \\;[{}]$".format( self.name, '\\rho', 'n_e' ),
             **kwargs
         )
+    
+    def get_phasespace( self, quant0, range0, size0, quant1 = None, range1 = None, size1 = None ):
+        """get_phasespace( quant0, range0, size0, quant1, range1, size1 )
+
+        Deposit a 1d or 2d phasespace density grid
+
+        Arguments
+        ---------
+        quant0 : str
+            Quantitity for x axis, must be one of 'x', 'y', 'ux', 'uy' or 'uz'
+        range0 : list
+            Limits [min,max] for x axis
+        size0 : int
+            Size (number of cells) for x axis
+        quant1 : str
+            Quantitity for y axis, must be one of 'x', 'y', 'ux', 'uy' or 'uz'.
+            Defaults to None, which will generate a 1d phasespace. Must be different from quant0
+        range1 : list
+            Limits [min,max] for y axis
+        size1 : int
+            Size (number of cells) for y axis        
+        """
+
+        cdef phasespace.quant quant0_
+        cdef float2 range0_
+        cdef unsigned size0_
+
+        cdef phasespace.quant quant1_
+        cdef float2 range1_
+        cdef unsigned size1_
+
+        quants = {
+            'x'  : phasespace.quant.x,
+            'y'  : phasespace.quant.y,
+            'ux' : phasespace.quant.ux,
+            'uy' : phasespace.quant.uy,
+            'uz' : phasespace.quant.uz
+        }
+
+        cdef float[:] buffer1d
+        cdef float[:,:] buffer2d
+
+
+        quant0_ = quants[ quant0 ]
+        range0_.x = range0[0]
+        range0_.y = range0[1]
+        size0_ = size0
+
+        if ( quant1 is None ):
+            # 1D phasespace
+            pha = np.empty( shape = [ size0_ ], dtype = np.float32 )
+            buffer1d = pha
+
+            self.obj.dep_phasespace( & buffer1d[0], quant0_, range0_, size0_)
+
+        else:
+            if ( quant1 == quant0 ):
+                raise Exception( "Cannot generate a 2d phasespace with the same quantity on both axis")
+
+            # 2D phasespace
+            quant1_ = quants[ quant1 ]
+            range1_.x = range1[0]
+            range1_.y = range1[1]
+            size1_ = size1
+
+            pha = np.empty( shape = [ size1_, size0_ ], dtype = np.float32 )
+            buffer2d = pha
+
+            self.obj.dep_phasespace( & buffer2d[0,0], 
+                quant0_, range0_, size0_,
+                quant1_, range1_, size1_)
+
+        return pha
+
+    def save_phasespace( self, quant0, range0, size0, quant1 = None, range1 = None, size1 = None ):
+        """save_phasespace( quant0, range0, size0, quant1, range1, size1 )
+
+        Deposit a 1d or 2d phasespace density grid and save it to a .zdf file
+
+        Arguments
+        ---------
+        quant0 : str
+            Quantitity for x axis, must be one of 'x', 'y', 'ux', 'uy' or 'uz'
+        range0 : list
+            Limits [min,max] for x axis
+        size0 : int
+            Size (number of cells) for x axis
+        quant1 : str
+            Quantitity for y axis, must be one of 'x', 'y', 'ux', 'uy' or 'uz'.
+            Defaults to None, which will generate a 1d phasespace. Must be different from quant0
+        range1 : list
+            Limits [min,max] for y axis
+        size1 : int
+            Size (number of cells) for y axis        
+        """
+
+        cdef phasespace.quant quant0_
+        cdef float2 range0_
+        cdef unsigned size0_
+
+        cdef phasespace.quant quant1_
+        cdef float2 range1_
+        cdef unsigned size1_
+
+        quants = {
+            'x'  : phasespace.quant.x,
+            'y'  : phasespace.quant.y,
+            'ux' : phasespace.quant.ux,
+            'uy' : phasespace.quant.uy,
+            'uz' : phasespace.quant.uz
+        }
+
+        quant0_ = quants[ quant0 ]
+        range0_.x = range0[0]
+        range0_.y = range0[1]
+        size0_ = size0
+
+        if ( quant1 is None ):
+            # 1D phasespace
+            self.obj.save_phasespace( quant0_, range0_, size0_)
+        else:
+            # 2D phasespace
+            if ( quant1 == quant0 ):
+                raise Exception( "Cannot generate a 2d phasespace with the same quantity on both axis")
+
+            quant1_ = quants[ quant1 ]
+            range1_.x = range1[0]
+            range1_.y = range1[1]
+            size1_ = size1
+            self.obj.save_phasespace( quant0_, range0_, size0_,
+                                      quant1_, range1_, size1_)
+
+
+    def plot_phasespace( self, quant0, range0, size0, 
+            quant1 = None, range1 = None, size1 = None,
+            marker = '-',
+            **kwargs ):
+        """save_phasespace( quant0, range0, size0, quant1, range1, size1 )
+
+        Deposit a 1d or 2d phasespace density grid and plot it
+
+        Arguments
+        ---------
+        quant0 : str
+            Quantitity for x axis, must be one of 'x', 'y', 'ux', 'uy' or 'uz'
+        range0 : list
+            Limits [min,max] for x axis
+        size0 : int
+            Size (number of cells) for x axis
+        quant1 : str
+            Quantitity for y axis, must be one of 'x', 'y', 'ux', 'uy' or 'uz'.
+            Defaults to None, which will generate a 1d phasespace. Must be different from quant0
+        range1 : list
+            Limits [min,max] for y axis
+        size1 : int
+            Size (number of cells) for y axis        
+        **kwargs
+            Additional keyword arguments to be passed on to visxd.plot*()
+        """
+
+        qlabels = { 'x':'x', 'y':'y', 'ux':'u_x', 'uy':'u_y', 'uz':'u_z' }
+        qunits  = { 'x':'c/\\omega_n', 'y':'c/\\omega_n', 'ux':'c', 'uy':'c', 'uz':'c' }
+
+        time = self.obj.get_iter() * self.obj.get_dt()
+
+        if ( quant1 is None ):
+            # 1D phasespace
+            x = np.linspace( range0[0], range0[1], num = size0 )
+            y = self.get_phasespace( quant0, range0, size0 )
+
+            visxd.plot1d( x, y, marker = marker,
+                xtitle = "$\\sf {} \\;[{}]$".format( qlabels[quant0], qunits[quant0] ),
+                ytitle = "$\\sf {} \\;[{}]$".format( 'density', 'n_0' ),
+                title  = "$\\sf {} - {} $\n$t = {:g} \\;[\\sf {}]$".format( 
+                    self.name, qlabels[quant0], time, "1 / \\omega_n"
+                    ),
+                **kwargs
+            )            
+
+        else:
+            # 2D phasespace
+            if ( quant1 == quant0 ):
+                raise Exception( "Cannot plot a 2d phasespace with the same quantity on both axis")
+
+            data = self.get_phasespace( quant0, range0, size0, quant1, range1, size1 )
+            visxd.plot2d( data, [ range0, range1 ],
+                xtitle = "$\\sf {} \\;[{}]$".format( qlabels[quant0], qunits[quant0] ),
+                ytitle = "$\\sf {} \\;[{}]$".format( qlabels[quant1], qunits[quant1] ),
+                title  = "$\\sf {} - {}/{} $\n$t = {:g} \\;[\\sf {}]$".format( 
+                    self.name, qlabels[quant1], qlabels[quant0], time, "1 / \\omega_n"
+                    ),
+                vtitle = "$\\sf {} \\;[{}]$".format( 'density', 'n_0' ),
+                **kwargs
+            )
 
 ###############################################################################
 # Simulation

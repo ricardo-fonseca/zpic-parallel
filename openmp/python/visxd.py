@@ -8,6 +8,115 @@ import matplotlib.colors as colors
 
 import numpy as np
 
+
+def plot1d( x, y, marker : str = None, ms = None, alpha = None, c : str = None,
+    xlim : list = None, ylim : list = None, grid = True,
+    yscale : str = None, xscale : str = None,
+    title : str = None, xtitle : str = None, ytitle : str = None,
+    show = True ):
+    """Generate an x-y scatter plot
+
+    Args:
+        x (number): x values to plot
+        y (number): y values to plot
+        marker (str, optional): Marker shape to use for plot. Defaults to None
+            which will use the default Matplotlib marker.
+        ms (int, optional): Marker size to use for plot. Defaults to 1.
+        alpha (int, optional): Marker/line opacity value. Defaults to 1.
+        c (str, optional): Marker color. Defaults to None, which will use
+            the default Matplotlib color.
+        xlim (list, optional): Range of values for x-axis. Defaults to None,
+            which sets the axis range automatically.
+        ylim (list, optional): Range of values for x-axis. Defaults to None,
+            which sets the axis range automatically.
+        grid (bool, optional): Display gridlines on the plot. Defaults to True.
+        title (_type_, optional): Title for the plot. Defaults to None.
+        xtitle (_type_, optional): Title for the x-axis. Defaults to None.
+        ytitle (_type_, optional): Title for the y-axis. Defaults to None.
+        show (bool, optional): Controls if the plot is displayed using
+            `plt.show()`. Disabling this allows user to overplot additional
+             quantities. Defaults to True.
+    """
+
+    if ( marker is None ):
+        plt.plot( x, y, ms = ms, alpha = alpha, c = c )
+    else:
+        plt.plot( x, y, marker, ms = ms, alpha = alpha, c = c )
+
+    if ( xtitle is not None ):
+        plt.xlabel( xtitle )
+    
+    if ( ytitle is not None ):
+        plt.ylabel( ytitle )
+
+    if ( title is not None ):
+        plt.title( title )
+    
+    if ( xlim is not None ):
+        plt.xlim( xlim )
+
+    if ( ylim is not None ):
+        plt.ylim( ylim )
+
+    if ( xscale is not None ):
+        plt.xscale( xscale )
+
+    if ( yscale is not None ):
+        plt.yscale( yscale )
+
+    plt.grid(grid)
+    if ( show ):
+        plt.show()    
+
+
+def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None,
+    title = None, xtitle = None, ytitle = None, vtitle = None,
+    show = True ):
+
+    if ( range is None ):
+        range = [
+            [0,data.shape[0]],
+            [0,data.shape[1]]
+        ]
+
+    if ( vsim ):
+        amax = np.amax( np.abs(data) )
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = -amax, vmax = +amax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
+    else:
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = vmin, vmax = vmax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )    
+
+    if ( vtitle is None ):
+        plt.colorbar()
+    else:
+        plt.colorbar().set_label( vtitle )
+
+    if ( xtitle is not None ):
+        plt.xlabel( xtitle )
+    
+    if ( ytitle is not None ):
+        plt.ylabel( ytitle )
+
+    if ( title is not None ):
+        plt.title( title )
+    
+    if ( xlim is not None ):
+        plt.xlim( xlim )
+
+    if ( ylim is not None ):
+        plt.ylim( ylim )
+
+    plt.grid(grid)
+    if ( show ):
+        plt.show()
+
+
 def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     """Generates a line plot from a 1D grid file
 
@@ -730,78 +839,3 @@ def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = Non
         print("Plotting {} out of plane field for iteration {}.".format(fld,iter))
         grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = norm, shift = shift )
 
-
-def plot1d( x, y, marker = '.', ms = 1, alpha = 1, c = None,
-    xlim = None, ylim = None, grid = True,
-    title = None, xtitle = None, ytitle = None,
-    show = True ):
-
-    plt.plot( x, y, marker, ms = ms, alpha = alpha, c = c )
-
-    if ( xtitle is not None ):
-        plt.xlabel( xtitle )
-    
-    if ( ytitle is not None ):
-        plt.ylabel( ytitle )
-
-    if ( title is not None ):
-        plt.title( title )
-    
-    if ( xlim is not None ):
-        plt.xlim( xlim )
-
-    if ( ylim is not None ):
-        plt.ylim( ylim )
-
-    plt.grid(grid)
-    
-    if ( show ):
-        plt.show()    
-
-
-def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None,
-    title = None, xtitle = None, ytitle = None, vtitle = None,
-    show = True ):
-
-    if ( range is None ):
-        range = [
-            [0,data.shape[0]],
-            [0,data.shape[1]]
-        ]
-
-    if ( vsim ):
-        amax = np.amax( np.abs(data) )
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = -amax, vmax = +amax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-    else:
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = vmin, vmax = vmax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )    
-
-    if ( vtitle is None ):
-        plt.colorbar()
-    else:
-        plt.colorbar().set_label( vtitle )
-
-    if ( xtitle is not None ):
-        plt.xlabel( xtitle )
-    
-    if ( ytitle is not None ):
-        plt.ylabel( ytitle )
-
-    if ( title is not None ):
-        plt.title( title )
-    
-    if ( xlim is not None ):
-        plt.xlim( xlim )
-
-    if ( ylim is not None ):
-        plt.ylim( ylim )
-
-    plt.grid(grid)
-    if ( show ):
-        plt.show()

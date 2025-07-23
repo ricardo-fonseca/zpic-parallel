@@ -27,11 +27,17 @@ cdef extern from "../../em2d/species.h":
 
         void advance( emf.EMF & emf, current.Current & current )
 
-        void deposit_charge( grid[float] & charge )
-
         void save()
+
+        void deposit_charge( grid[float] & charge )
         void save_charge()
+
+        void dep_phasespace( float * data, int quant, float2 range, unsigned size )
         void save_phasespace( int quant, float2 range, int size )
+
+        void dep_phasespace(  float * data, 
+                              int quant0, float2 range0, unsigned size0,
+                              int quant1, float2 range1, unsigned size1 )
         void save_phasespace( int quant0, float2 range0, int size0,
                               int quant1, float2 range1, int size1 )
         

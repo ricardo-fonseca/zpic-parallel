@@ -126,32 +126,6 @@ private:
      */
     void move_window_inject();
 
-    /**
-     * @brief Deposit 1D phasespace density
-     * 
-     * @param d_data    Data buffer
-     * @param q         Quantity for axis
-     * @param range     Value range
-     * @param size      Number of grid points
-     */
-    void dep_phasespace( float * const d_data, 
-        phasespace::quant q, float2 const range, unsigned const size ) const;
-
-    /**
-     * @brief Deposit 2D phasespace density
-     * 
-     * @param d_data    Data buffer
-     * @param quant0    axis 0 quantity
-     * @param range0    axis 0 value range
-     * @param size0     axis 0 number of points
-     * @param quant1    axis 1 quantity
-     * @param range1    axis 1 value range
-     * @param size1     axis 1 number of points
-     */
-    void dep_phasespace( float * const d_data,
-        phasespace::quant quant0, float2 range0, unsigned const size0,
-        phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
-
 public:
 
      /// @brief Species name
@@ -480,6 +454,17 @@ public:
     void save_charge() const;
 
     /**
+     * @brief Deposit 1D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param q         Quantity for axis
+     * @param range     Value range
+     * @param size      Number of grid points
+     */
+    void dep_phasespace( float * const d_data, 
+        phasespace::quant q, float2 const range, unsigned const size ) const;
+
+    /**
      * @brief Save 1D phasespace density to file
      * 
      * @param quant     Phasespace quantity
@@ -488,6 +473,22 @@ public:
      */
     void save_phasespace ( 
         phasespace::quant quant, float2 const range, int const size ) const;
+
+
+    /**
+     * @brief Deposit 2D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param quant0    axis 0 quantity
+     * @param range0    axis 0 value range
+     * @param size0     axis 0 number of points
+     * @param quant1    axis 1 quantity
+     * @param range1    axis 1 value range
+     * @param size1     axis 1 number of points
+     */
+    void dep_phasespace( float * const d_data,
+        phasespace::quant quant0, float2 range0, unsigned const size0,
+        phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
 
     /**
      * @brief Save 2D phasespace density to file
