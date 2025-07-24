@@ -4,7 +4,9 @@
 # distutils: language = c++
 # cython: language_level=3
 
-import os
+#import os
+import platform
+
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 
@@ -15,6 +17,8 @@ from setuptools.command.build_ext import build_ext
 ##################################################################################
 #
 # Compiler customizations
+
+print( "Compiling for {}/{}...".format(platform.system(), platform.processor() ) )
 
 # C++ compilers
 cxx = sysconfig.get_config_var('CXX')
@@ -27,25 +31,35 @@ cxxflags = cxxflags.replace(' -g', '')
 
 # Disable common (safe) warnings
 cxxflags = cxxflags.replace(' -Wunreachable-code', '')
-cxxflags += ' -Wno-vla-cxx-extension'
 cxxflags += ' -Wno-unused-function'
-cxxflags += ' -Wno-delete-non-abstract-non-virtual-dtor'
 
 # OpenMP support
 cxxflags += ' -fopenmp'
 
-# ARM Neon extensions
-cxxflags += ' -DUSE_NEON'
+# System specific options
+if ( platform.system() == 'Darwin'):
+    cxxflags += ' -Wno-vla-cxx-extension'
+    cxxflags += ' -Wno-delete-non-abstract-non-virtual-dtor'
+elif ( platform.system() == 'Linux'):
+    # Run with -O3 optimizations
+    cxxflags = cxxflags.replace(' -O2', ' -O3')
+    # Compile with -fPIC
+    cxxflags += ' -fPIC'
+    cxxflags += ' -Wno-delete-non-virtual-dtor'
 
-# Enable AVX2 extensions with FMA support
-# cxxflags += ' -DUSE_AVX2 -mavx2 -mfma'
+# Processor specific optimizations
+if ( platform.processor() == 'arm'):
+    # Enable ARM Neon extensions
+    cxxflags += ' -DUSE_NEON'
+elif ( platform.processor() == 'x86_64'):
+	# Enable AVX2 extensions with FMA support
+    cxxflags += ' -DUSE_AVX2 -mavx2 -mfma'
 
 # C++ linker
 ldcxx = sysconfig.get_config_var('LDCXXSHARED')
 
 # C++ linker flags
 ldcxxflags = sysconfig.get_config_var('LDFLAGS')
-
 
 class custom_build_ext(build_ext):
 	def build_extensions(self):
