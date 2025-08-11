@@ -192,9 +192,9 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
     ///@brief imaginary unit
     constexpr std::complex<float> I{0,1};
     ///@brief exp( I pol )
-    const std::complex<float> pol_r{ cos_pol,  sin_pol };
+    const std::complex<float> pol_r{ cos_pol, -sin_pol };
     ///@brief exp( I (pol-π/2) )
-    const std::complex<float> pol_θ{-sin_pol, +cos_pol };
+    const std::complex<float> pol_θ{ sin_pol, +cos_pol };
 
     // Loop over tiles
     #pragma omp parallel for
@@ -355,9 +355,9 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
     ///@brief imaginary unit
     constexpr std::complex<float> I{0,1};
     ///@brief exp( I pol )
-    std::complex<float> pol_r{ cos_pol,  sin_pol };
+    std::complex<float> pol_r{ cos_pol, -sin_pol };
     ///@brief exp( I (pol-π/2) )
-    std::complex<float> pol_θ{-sin_pol, +cos_pol };
+    std::complex<float> pol_θ{ sin_pol, +cos_pol };
 
     // Loop over tiles
     #pragma omp parallel for
