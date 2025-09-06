@@ -1,0 +1,479 @@
+<?xml version="1.0" encoding="utf-8"?>
+<log version="1.0" tool="runtool">
+
+<msg id="1" tool="runtool">
+  <type>log-start</type>
+  <arg>2025/05/21 14:29:58</arg>
+</msg>
+<msg id="2" tool="runtool">
+  <type>bandwidth-measurement-starts</type>
+</msg>
+<msg id="3" tool="runtool">
+  <type>bandwidth-measurement-done</type>
+</msg>
+<msg id="4" tool="runtool">
+  <type>collector-starts</type>
+</msg>
+<msg id="5" tool="runtool">
+  <type>marker-file</type>
+  <arg>/home/sdp/zpic-parallel/sycl/e000/trc000/trc000.advixe</arg>
+</msg>
+<msg id="6" tool="trc">
+  <type>PROCESS_START</type>
+  <arg>/home/sdp/zpic-parallel/sycl/zpic</arg>
+  <arg>158385</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="7" tool="trc">
+  <type>PROCESS_ANALYSIS_MODE</type>
+  <arg>full</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="8" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/home/sdp/zpic-parallel/sycl/zpic</arg>
+  <arg>0x400000</arg>
+  <arg>0x6765af</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="9" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib64/ld-linux-x86-64.so.2</arg>
+  <arg>0x7f52c7b21000</arg>
+  <arg>0x7f52c7b5c2d7</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="10" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>[vdso]</arg>
+  <arg>0x7fff1bd2d000</arg>
+  <arg>0x7fff1bd2ddcc</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="11" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libstdc++.so.6</arg>
+  <arg>0x7f52b23ab000</arg>
+  <arg>0x7f52b25d68bf</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="12" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libm.so.6</arg>
+  <arg>0x7f52b2213000</arg>
+  <arg>0x7f52b22f9107</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="13" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libgcc_s.so.1</arg>
+  <arg>0x7f52b21f3000</arg>
+  <arg>0x7f52b22122e7</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="14" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libsycl.so.8</arg>
+  <arg>0x7f52b1e41000</arg>
+  <arg>0x7f52b21d15df</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="15" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libc.so.6</arg>
+  <arg>0x7f52b1be6000</arg>
+  <arg>0x7f52b1e0ee4f</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="16" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libdl.so.2</arg>
+  <arg>0x7f52b1b5e000</arg>
+  <arg>0x7f52b1b62027</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="17" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libpthread.so.0</arg>
+  <arg>0x7f52b1b36000</arg>
+  <arg>0x7f52b1b3a027</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="18" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libur_loader.so.0</arg>
+  <arg>0x7f52b0f27000</arg>
+  <arg>0x7f52b1b1456a</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:39 2025</timestamp>
+</msg>
+<msg id="19" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/librt.so.1</arg>
+  <arg>0x7f52b0eeb000</arg>
+  <arg>0x7f52b0eef037</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="20" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libimf.so</arg>
+  <arg>0x7f52b0add000</arg>
+  <arg>0x7f52b0ee859f</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="21" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libz.so.1</arg>
+  <arg>0x7f52b0ac1000</arg>
+  <arg>0x7f52b0adc0b7</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="22" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libsvml.so</arg>
+  <arg>0x7f52af480000</arg>
+  <arg>0x7f52b0ac0103</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="23" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libirng.so</arg>
+  <arg>0x7f52af387000</arg>
+  <arg>0x7f52af47f85d</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="24" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libintlc.so.5</arg>
+  <arg>0x7f52af325000</arg>
+  <arg>0x7f52af386237</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="25" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libur_adapter_level_zero.so.0</arg>
+  <arg>0x7f529fe0f000</arg>
+  <arg>0x7f529ff4a4e7</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="26" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/umf/0.9/lib/libumf.so.0</arg>
+  <arg>0x7f529fbf0000</arg>
+  <arg>0x7f529fc0648f</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="27" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libze_loader.so.1</arg>
+  <arg>0x7f529fa46000</arg>
+  <arg>0x7f529fa97527</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="28" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/tcm/1.2/lib/libhwloc.so.15</arg>
+  <arg>0x7f529f600000</arg>
+  <arg>0x7f529f8568c7</arg>
+  <arg>yes</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="29" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libze_intel_gpu.so.1</arg>
+  <arg>0x7f529beae000</arg>
+  <arg>0x7f529db1c8ff</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="30" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libigdgmm.so.12</arg>
+  <arg>0x7f529bdf6000</arg>
+  <arg>0x7f529be940ef</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:40 2025</timestamp>
+</msg>
+<msg id="31" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libigc.so.1</arg>
+  <arg>0x7f5291f8d000</arg>
+  <arg>0x7f52972c66c7</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:42 2025</timestamp>
+</msg>
+<msg id="32" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libigdml.so.1</arg>
+  <arg>0x7f528fc04000</arg>
+  <arg>0x7f528fd7772f</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:43 2025</timestamp>
+</msg>
+<msg id="33" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libdrm.so.2</arg>
+  <arg>0x7f528fbbc000</arg>
+  <arg>0x7f528fbd1bf7</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:43 2025</timestamp>
+</msg>
+<msg id="34" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libnl-genl-3.so.200</arg>
+  <arg>0x7f5284263000</arg>
+  <arg>0x7f528426b4f7</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:44 2025</timestamp>
+</msg>
+<msg id="35" tool="trc">
+  <type>LOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libnl-3.so.200</arg>
+  <arg>0x7f5284203000</arg>
+  <arg>0x7f528422545f</arg>
+  <arg>no</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:30:44 2025</timestamp>
+</msg>
+<msg id="36" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/home/sdp/zpic-parallel/sycl/zpic</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="37" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib64/ld-linux-x86-64.so.2</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="38" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>[vdso]</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="39" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libstdc++.so.6</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="40" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libm.so.6</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="41" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libgcc_s.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="42" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libsycl.so.8</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="43" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libc.so.6</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="44" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libdl.so.2</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="45" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libpthread.so.0</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="46" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libur_loader.so.0</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="47" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/librt.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="48" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libimf.so</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="49" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libz.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="50" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libsvml.so</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="51" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libirng.so</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="52" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libintlc.so.5</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="53" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/compiler/2025.0/lib/libur_adapter_level_zero.so.0</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="54" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/umf/0.9/lib/libumf.so.0</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="55" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libze_loader.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="56" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/opt/intel/oneapi/tcm/1.2/lib/libhwloc.so.15</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="57" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libze_intel_gpu.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="58" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libigdgmm.so.12</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="59" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libigc.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="60" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libigdml.so.1</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="61" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libdrm.so.2</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="62" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libnl-genl-3.so.200</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="63" tool="trc">
+  <type>UNLOAD_MODULE</type>
+  <arg>/lib/x86_64-linux-gnu/libnl-3.so.200</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="64" tool="trc">
+  <type>PROCESS_FINISH</type>
+  <arg>/home/sdp/zpic-parallel/sycl/zpic</arg>
+  <arg>158385</arg>
+  <arg>0x0</arg>
+  <severity>INFO</severity>
+  <timestamp>Wed May 21 14:31:36 2025</timestamp>
+</msg>
+<msg id="65" tool="runtool">
+  <type>app-exit-code</type>
+  <arg>0</arg>
+</msg>
+<msg id="66" tool="runtool">
+  <type>marker-file</type>
+  <arg>/home/sdp/zpic-parallel/sycl/e000/trc000/trc000.advixe</arg>
+</msg>
+<msg id="67" tool="runtool">
+  <type>collector-done</type>
+</msg>
+<msg id="68" tool="runtool">
+  <type>log-end</type>
+  <arg>2025/05/21 14:31:39</arg>
+</msg>
+
+</log>
+

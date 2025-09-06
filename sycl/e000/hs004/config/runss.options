@@ -1,0 +1,17 @@
+-r
+/home/sdp/zpic-parallel/sycl/e000/hs004
+-quiet
+--mrte-mode=auto
+--follow-child
+--strategy=ld-linux.so.2:notrace:notrace,ld-linux-x86-64.so.2:notrace:notrace
+--interval=10
+--itt-config=frame,task,event,counter,model
+--type=cpu:stack
+--stack-stitching
+--stackwalk=offline
+--stack-unwind-limit=8388608
+--data-limit-mb=500
+--mrte-type=java,python
+--opencl-trace-mode=default
+--
+./zpic

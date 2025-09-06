@@ -11,13 +11,15 @@ CXX = icpx
 
 # Production
 # CXXFLAGS = -O3
-CXXFLAGS = -Ofast
+CXXFLAGS = -O3 -ffast-math ###-Ofast
 
 # c++17 compliance and full warnings
 CXXFLAGS += -std=c++17 -Wall -fsycl
 
 # Compile for cuda device
 CXXFLAGS += -fsycl-targets=nvptx64-nvidia-cuda
+
+##CXXFLAGS += -fsycl-targets=intel_gpu_pvc
 
 # Compile for x86 avx2 cpu
 # CXXFLAGS += -fsycl-targets=spir64_x86_64 
