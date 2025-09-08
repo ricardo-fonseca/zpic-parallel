@@ -66,7 +66,8 @@ CXXFLAGS += -Wno-vla-cxx-extension
 # SOURCE = particles.cpp emf.cpp laser.cpp current.cpp \
 #          udist.cpp density.cpp species.cpp cathode.cpp
 
-SOURCE = emf.cpp laser.cpp
+SOURCE = particles.cpp emf.cpp laser.cpp current.cpp \
+         udist.cpp density.cpp species.cpp
 
 SOURCE += main.cpp
 

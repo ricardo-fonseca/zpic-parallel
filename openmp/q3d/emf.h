@@ -16,7 +16,7 @@ namespace emf {
     enum field  { e = 0, b };
 
     namespace bc {
-        enum type { none = 0, periodic, pec, pmc };
+        enum type { none = 0, axial, periodic, pec, pmc };
     }
 
     typedef bnd<bc::type> bc_type;
@@ -111,29 +111,33 @@ class EMF {
     /**
      * @brief Set the boundary condition type
      * 
-     * @param new_bc 
+     * @param new_bc    New boundary condition types (all directions)
      */
     void set_bc( emf::bc_type new_bc ) {
 
-        // Validate parameters
-        if ( (new_bc.y.lower == emf::bc::periodic) || (new_bc.y.upper == emf::bc::periodic) ) {
+        if ( new_bc.y.lower != emf::bc::axial ) {
+            std::cerr <<  "(*warning*) Invalid EMF axial boundary, overriding value\n";
+            new_bc.y.lower = emf::bc::axial;
+        }
+
+        if ( new_bc.y.upper == emf::bc::periodic ) {
             std::cerr << "(*error*) Invalid EMF boundary along r.\n";
             std::cerr << "(*error*) Periodic boundaries are not allowed in the radial direction.\n";
-            exit(1);
+            std::exit(1);
         }
 
         if ( (new_bc.x.lower == emf::bc::periodic) || (new_bc.x.upper == emf::bc::periodic) ) {
             if ( new_bc.x.lower != new_bc.x.upper ) {
                 std::cerr << "(*error*) EMF boundary type mismatch along x.\n";
                 std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                std::exit(1);
             }
         }
 
         // Store new values
         bc = new_bc;
 
-        std::string bc_name[] = {"none", "periodic", "pec", "pmc"};
+        std::string bc_name[] = { "none", "axial", "periodic", "pec", "pmc"};
         std::cout << "(*info*) EMF boundary conditions\n";
         std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
         std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";

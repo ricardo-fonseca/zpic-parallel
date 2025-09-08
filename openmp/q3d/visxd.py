@@ -769,7 +769,7 @@ def grid2d_fft( filename : str, xlim = None, ylim = None, grid = False, cmap = N
     plt.show()
 
 
-def plot_part( part, iter = None, qx = "x", qy = "y", xlim = None, ylim = None, grid = True, 
+def plot_part( part, iter = None, qx = "z", qy = "r", xlim = None, ylim = None, grid = True, 
     marker = '.', ms = 1, alpha = 1 ):
     
     file = "{}-{:06d}.zdf".format(part, iter)

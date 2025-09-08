@@ -126,6 +126,8 @@ class CylGrid {
             m -> set_periodic(p);
     }
 
+    auto get_nmodes() { return nmodes; }
+
     /**
      * @brief Get periodic boundary values
      * 

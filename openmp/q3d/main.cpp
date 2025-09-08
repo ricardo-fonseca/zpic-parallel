@@ -12,6 +12,7 @@
 
 #include "emf.h"
 #include "laser.h"
+#include "species.h"
 
 void test_cylgrid( void ) {
 
@@ -182,6 +183,32 @@ void test_laser( void ) {
 
 }
 
+void test_inj( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 8, 8 };
+    float2 box{ 4, 4 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint3 ppc{ 2, 8, 1 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.initialize( box, ntiles, nx, dt, 0 );
+    electrons.save();
+    electrons.save_charge( 0 );
+
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+
+}
+
+
 int main( void ) {
 
     std::cout << ansi::bold 
@@ -193,6 +220,7 @@ int main( void ) {
     // test_pvec3_cylgrid();
 
     // test_emf();
-    test_laser();
+    // test_laser();
 
+    test_inj();
 }

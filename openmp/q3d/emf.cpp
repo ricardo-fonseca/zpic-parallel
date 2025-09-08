@@ -296,7 +296,7 @@ void yeem_e(
  * @brief Construct a new EMF object
  * 
  * @param nmodes    Number of cylindrical modes (>= 1)
- * @param ntiles    Number of tiles in x,y direction
+ * @param ntiles    Number of tiles in z,r direction
  * @param nx        Tile size (#cells)
  * @param box       Simulation box size (sim. units)
  * @param dt        Time step
@@ -332,8 +332,10 @@ EMF::EMF( unsigned int nmodes, uint2 const ntiles, uint2 const nx, float2 const 
     E -> zero();
     B -> zero();
 
-    // Set default boundary conditions to periodic
-    bc = emf::bc_type (emf::bc::periodic);
+    // Set default boundary conditions
+    bc.x.lower = bc.x.upper = emf::bc::periodic;
+    bc.y.lower = emf::bc::axial; 
+    bc.y.upper = emf::bc::none;
 
     // Reset iteration number
     iter = 0;
