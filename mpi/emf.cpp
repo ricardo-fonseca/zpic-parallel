@@ -693,7 +693,7 @@ void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
 
             // Loop over cells
             for( unsigned iy = 0; iy < nx.y; ++iy ) {
-                for( unsigned ix = 0; ix < nx.y; ++ix ) {
+                for( unsigned ix = 0; ix < nx.x; ++ix ) {
                     float3 const efld = d_E[ tile_off + iy * ystride + ix ];
                     float3 const bfld = d_B[ tile_off + iy * ystride + ix ];
 
