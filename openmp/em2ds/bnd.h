@@ -76,6 +76,11 @@ class bnd {
      */
     bnd( T val ) : x(val), y(val) {};
 
+    bnd( const bnd<T>& rhs ) :
+        x( {rhs.x.lower, rhs.x.upper }), 
+        y( {rhs.y.lower, rhs.y.upper } )
+    { }
+
     /**
      * @brief Assignment (=) operator
      * 
