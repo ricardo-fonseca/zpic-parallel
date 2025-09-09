@@ -1381,7 +1381,8 @@ void Species::save_charge( const unsigned m ) const {
         // Fundamental mode
         grid<float> charge( particles -> ntiles, particles -> nx, gc );
         charge.set_periodic( int2{ particles->periodic_z, 0 } );
-
+        
+        charge.zero();
         deposit_charge0( charge );
         charge.add_from_gc();
         charge.save( info, iter_info, path );
@@ -1390,6 +1391,7 @@ void Species::save_charge( const unsigned m ) const {
         grid<std::complex<float>> charge( particles -> ntiles, particles -> nx, gc );
         charge.set_periodic( int2{ particles->periodic_z, 0 } );
 
+        charge.zero();
         deposit_charge( m, charge );
         charge.add_from_gc();
         charge.save( info, iter_info, path );
