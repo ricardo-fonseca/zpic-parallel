@@ -74,8 +74,8 @@ inline void inject_uniform_kernel(
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].y,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].x
+                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
+                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
                 };
             }
         }
@@ -373,8 +373,8 @@ void inject_step_kernel(
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].y,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].x
+                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
+                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
                 };
             }
         }
@@ -686,8 +686,8 @@ void inject_slab_kernel(
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].y,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].x
+                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
+                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
                 };
             }
         }
@@ -1014,12 +1014,12 @@ inline void inject_sphere_kernel(
         posθ[0] = { 1, 0 };
         if ( ppc.z > 1 ) {
             const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = { cos( Δθ ), sin( Δθ ) };
+            posθ[1] = float2{ cos( Δθ ), sin( Δθ ) };
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].y,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].x
+                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
+                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
                 };
             }
         }

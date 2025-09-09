@@ -195,12 +195,12 @@ void test_inj( void ) {
 
     auto dt = 0.99 * zpic::courant( ntiles, nx, box );
 
-    uint3 ppc{ 2, 4, 1 };
+    uint3 ppc{ 2, 2, 8 };
     Species electrons( "electrons", -1.0f, ppc );
 
 //    electrons.set_density(Density::Step(coord::z, 1.0, 2.0));
 //    electrons.set_density( Density::Slab(coord::z, 1.0, 2.0, 3.0)); 
-    electrons.set_density( Density::Sphere(1.0, float2{2,0}, 1.0)); 
+    electrons.set_density( Density::Sphere(1.0, float2{2,2}, 1.0)); 
 
     electrons.initialize( box, ntiles, nx, dt, 0 );
     electrons.save();

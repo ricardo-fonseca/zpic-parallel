@@ -554,6 +554,29 @@ def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.show()
 
+def cyl_part_quant( particles, info, quant ):
+
+    if ( quant == 'x' or quant == 'y' ):
+        r = particles['r']
+        if ( quant == 'x' ):
+            return particles['cosθ'] * r
+        else:
+            return particles['sinθ'] * r
+    else:
+        return particles[quant]
+
+def cyl_part_label( info, quant ):
+    if ( quant == 'x' or quant == 'y' ):
+        return quant
+    else:
+        return info.particles.qlabels[quant]
+
+def cyl_part_unit( info, quant ):
+    if ( quant == 'x' or quant == 'y' ):
+        return info.particles.qunits['r']
+    else:
+        return info.particles.qunits[quant]
+
 def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True, 
     marker = '.', ms = 1, alpha = 1 ):
     """Generates an (x,y) scatter plot from a ZDF particle file.
@@ -562,9 +585,9 @@ def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True,
         filename (str):
             Name of ZDF file to open
         qx (str):
-            X axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
+            X axis quantity, usually one of "z", "r", "ux", "uy", "uz", etc.
         qy (str): _description_
-            Y axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
+            Y axis quantity, usually one of "z", "r", "ux", "uy", "uz", etc.
         xlim (tuple, optional):
             Lower and upper limits of x axis. Defaults to the limits of the "qx" particle data.
         ylim (tuple, optional):
@@ -590,26 +613,18 @@ def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True,
         print("(*error*) file {} is not a particles file".format(filename))
         return
     
-    if ( not qx in info.particles.quants ):
-        print("(*error*) '{}' quantity (q1) is not present in file".format(qx) )
-        return
-
-    if ( not qy in info.particles.quants ):
-        print("(*error*) '{}' quantity (q2) is not present in file".format(qy) )
-        return
-
-    x = particles[qx]
-    y = particles[qy]
+    x = cyl_part_quant( particles, info, qx )
+    y = cyl_part_quant( particles, info, qy )
 
     plt.plot(x, y, marker, ms=ms, alpha = alpha)
 
-    title = "{}/{}".format( info.particles.qlabels[qy], info.particles.qlabels[qx])
+    title = "{}/{}".format( cyl_part_label(info,qy), cyl_part_label(info,qx))
     timeLabel = "t = {:g}\\,[{:s}]".format(info.iteration.t, info.iteration.tunits)
 
     plt.title(r'$\sf{' + title + r'}$' + '\n' + r'$\sf{' + timeLabel + r'}$')
 
-    xlabel = "{}\\,[{:s}]".format( info.particles.qlabels[qx], info.particles.qunits[qx] )
-    ylabel = "{}\\,[{:s}]".format( info.particles.qlabels[qy], info.particles.qunits[qy] )
+    xlabel = "{}\\,[{:s}]".format( cyl_part_label(info,qx), cyl_part_unit(info,qx) )
+    ylabel = "{}\\,[{:s}]".format( cyl_part_label(info,qy), cyl_part_unit(info,qy) )
 
     plt.xlabel(r'$\sf{' + xlabel + r'}$')
     plt.ylabel(r'$\sf{' + ylabel + r'}$')
