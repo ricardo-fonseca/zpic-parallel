@@ -38,7 +38,7 @@ inline float rgamma( const float3 u ) {
  * @param ix        Particle cell index
  * @param x         Particle postion inside cell
  * @param e[out]    E field at particle position
- * @param b[out]    B field at particleposition
+ * @param b[out]    B field at particle position
  */
 void interpolate_fld( 
     float3 const * const __restrict__ E, 

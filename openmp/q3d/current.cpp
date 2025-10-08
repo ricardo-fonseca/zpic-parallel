@@ -172,9 +172,8 @@ void Current::process_bc() {
 }
 
 /**
- * @brief Normalize current grid for "ring" particles 
+ * @brief Normalize current grid (m = 0)
  * 
- * @tparam T            Type (real or complex, depending on the mode)
  * @param m             Azymuthal mode
  * @param tile_idx      Tile index (x,y)
  * @param ntiles        Number of tiles in grid (x,y)
@@ -184,14 +183,12 @@ void Current::process_bc() {
  * @param ext_nx        External tile grid size
  * @param dr            Radial cell size (in simulation units)
  */
-template< class T >
-void current_norm(
-    unsigned const m,
+void current_norm_0(
     uint2 const tile_idx,
     uint2 const ntiles,
-    T * const __restrict__ d_current, int offset, 
+    cyl3<float> * const __restrict__ d_current, int offset, 
     uint2 const nx, uint2 const ext_nx,
-    const float dr
+    float2 const dx, double dt
 ) {
 
     auto tid = tile_idx.y * ntiles.x + tile_idx.x;
@@ -200,8 +197,11 @@ void current_norm(
 
     auto * __restrict__ current = &  d_current[ tile_off + offset ];
 
-    // High-order modes have an additional multiplication by 2
-    const float scale = ( m == 0 ) ? 1.0f : 2.0f;
+    ///@brief radial cell size
+    auto dr = dx.y;
+
+    float const dz_dt = dx.x / dt; 
+    float const dr_dt = dx.y / dt; 
 
     int ir0 = tile_idx.y * nx.y;
     for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
@@ -210,13 +210,13 @@ void current_norm(
         /// @brief r at lower edge of cell
         float rm   = abs( ir0 + j - 0.5f ) * dr;
         
-        float norm_r  = (ir0 + j == 0 )? 0 : scale / rc;
-        float norm_zθ = scale / rm;
+        float norm_r  = ( ir0 + j == 0 )? 0 : 1.0f / rc;
+        float norm_zθ = 1.0f / rm;
 
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ j * jstride +i ].z *= norm_zθ;
-            current[ j * jstride +i ].r *= norm_r;
-            current[ j * jstride +i ].θ *= norm_zθ;
+            current[ j * jstride +i ].z *= dz_dt * norm_zθ;
+            current[ j * jstride +i ].r *= dr_dt * norm_r;
+            current[ j * jstride +i ].θ *= dr_dt * norm_zθ;
         }
     }
 
@@ -225,9 +225,9 @@ void current_norm(
     if ( ir0 == 0 ) {
 
         // alternative, signθ = -(-1)^m
-        const auto signθ = ( m & 1 ) ? 1.f : -1.f;
+        const auto signθ = -1.f;
 
-        for( int i = 0; i < static_cast<int>(nx.x+1); i++ ){
+        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
 
@@ -242,8 +242,84 @@ void current_norm(
             current[ i + 0 * jstride ].θ  = signθ * current[ i +   1  * jstride ].θ;
         }
     }
+}
 
+/**
+ * @brief Normalize current grid, modes m > 0
+ * 
+ * @param m 
+ * @param tile_idx 
+ * @param ntiles 
+ * @param d_current 
+ * @param offset 
+ * @param nx 
+ * @param ext_nx 
+ * @param dx 
+ * @param dt 
+ */
+void current_norm_m(
+    unsigned const m,
+    uint2 const tile_idx,
+    uint2 const ntiles,
+    cyl3< std::complex<float> > * const __restrict__ d_current, int offset, 
+    uint2 const nx, uint2 const ext_nx,
+    float2 const dx, double dt
+) {
 
+    auto tid = tile_idx.y * ntiles.x + tile_idx.x;
+    const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
+    const int jstride = ext_nx.x;
+
+    auto * __restrict__ current = &  d_current[ tile_off + offset ];
+
+    ///@brief radial cell size
+    auto dr = dx.y;
+
+    float const dz_dt = dx.x / dt; 
+    float const dr_dt = dx.y / dt; 
+
+    ///@brief Normalization for jθ
+    const std::complex<float> norm_θ{0,-2/(m*static_cast<float>(dt))};
+
+    int ir0 = tile_idx.y * nx.y;
+    for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
+        /// @brief r at center of cell
+        float rc   = abs( ir0 + j        ) * dr;
+        /// @brief r at lower edge of cell
+        float rm   = abs( ir0 + j - 0.5f ) * dr;
+        
+        float norm_r  = ( ir0 + j == 0 )? 0 : 2.f / rc;
+        float norm_z  = 2.f / rm;
+
+        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
+            current[ j * jstride +i ].z *= dz_dt * norm_z ;
+            current[ j * jstride +i ].r *= dr_dt * norm_r;
+            current[ j * jstride +i ].θ *= norm_θ;
+        }
+    }
+
+    // Axial boundary
+    // Fold values for r < 0 back into simulation domain
+    if ( ir0 == 0 ) {
+
+        // alternative, signθ = -(-1)^m
+        const auto signθ = ( m & 1 ) ? 1.f : -1.f;
+
+        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
+            current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
+            current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
+
+            current[ i + 1 * jstride ].r -= current[ i +   (-1) * jstride ].r;
+
+            current[ i + 1 * jstride ].θ += signθ * current[ i +   0  * jstride ].θ;
+            current[ i + 2 * jstride ].θ += signθ * current[ i + (-1) * jstride ].θ;
+
+            // The following values are used for diagnostic output only
+            current[ i + 0 * jstride ].z  = current[ i + 1 * jstride ].z;
+            current[ i + 0 * jstride ].r  = 0;
+            current[ i + 0 * jstride ].θ  = signθ * current[ i +   1  * jstride ].θ;
+        }
+    }
 }
 
 
@@ -263,15 +339,17 @@ void Current::normalize() {
     #pragma omp parallel for
     for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
         auto tile_idx = uint2{ tid % ntiles.x, tid / ntiles.x };
-        current_norm( 0, tile_idx, ntiles, J0.d_buffer, offset, nx, ext_nx, dx.y );
+        current_norm_0( tile_idx, ntiles, J0.d_buffer, offset, nx, ext_nx, dx, dt );
     }
 
     // Normalize higher order modes
     #pragma omp parallel for
     for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
         auto tile_idx = uint2{ tid % ntiles.x, tid / ntiles.x };
-        for( unsigned m = 1; m < nmodes; m++ )
-            current_norm( m, tile_idx, ntiles, J -> mode(m).d_buffer, offset, nx, ext_nx, dx.y );
+        for( unsigned m = 1; m < nmodes; m++ ) {
+            auto & Jm = J -> mode(m);
+            current_norm_m( m, tile_idx, ntiles, Jm.d_buffer, offset, nx, ext_nx, dx, dt );
+        }
     }
 }
 
@@ -313,8 +391,8 @@ void Current::advance() {
  */
 void Current::save( const fcomp::cyl jc, unsigned m ) {
 
-    std::string vfname = "J";      // Dataset name
-    std::string vflabel = "J_";    // Dataset label (for plots)
+    std::string vfname = "J" + std::to_string(m);      // Dataset name
+    std::string vflabel = "J^" + std::to_string(m) + "_";    // Dataset label (for plots)
     std::string path{"CURRENT"};
 
     switch ( jc ) {

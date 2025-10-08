@@ -27,7 +27,7 @@ inline float rgamma( const float3 u ) {
 
 /**
  * @brief Interpolate EM field values at particle position using linear 
- * (1st order) interpolation.
+ * (1st order) interpolation (purely real)
  * 
  * @note The EM fields are assumed to be organized according to the Yee scheme with
  * the charge defined at lower left corner of the cell
@@ -40,46 +40,57 @@ inline float rgamma( const float3 u ) {
  * @param e[out]    E field at particle position
  * @param b[out]    B field at particle position
  */
+template< typename T >
 void interpolate_fld( 
-    float3 const * const __restrict__ E, 
-    float3 const * const __restrict__ B, 
-    const int ystride,
-    const int2 ix, const float2 x, float3 & e, float3 & b)
+    cyl3<T> const * const __restrict__ E, 
+    cyl3<T> const * const __restrict__ B, 
+    const int jstride,
+    const int2 ix, const float2 x, cyl3<T> & e, cyl3<T> & b)
 {
     const int i = ix.x;
     const int j = ix.y;
 
-    const float s0x = 0.5f - x.x;
-    const float s1x = 0.5f + x.x;
+    const auto z = x.x;
+    const auto r = x.y;
 
-    const float s0y = 0.5f - x.y;
-    const float s1y = 0.5f + x.y;
+    const auto s0z = 0.5f - z;
+    const auto s1z = 0.5f + z;
 
+    const auto s0r = 0.5f - r;
+    const auto s1r = 0.5f + r;
+
+    const int hz = z < 0;
+    const int hr = r < 0;
+
+    const int ih = i - hz;
+    const int jh = j - hr;
+
+    const auto s0zh = (1-hz) - z;
+    const auto s1zh = (  hz) + z;
+
+    const auto s0rh = (1-hr) - r;
+    const auto s1rh = (  hr) + r;
 
     // Interpolate E field
+    e.z = ( E[ih +     j *jstride].z * s0zh + E[ih+1 +     j *jstride].z * s1zh ) * s0r +
+          ( E[ih + (j +1)*jstride].z * s0zh + E[ih+1 + (j +1)*jstride].z * s1zh ) * s1r;
 
+    e.r = ( E[i  +     jh*jstride].r * s0z  + E[i+1  +     jh*jstride].r * s1z ) * s0rh +
+          ( E[i  + (jh+1)*jstride].r * s0z  + E[i+1  + (jh+1)*jstride].r * s1z ) * s1rh;
 
-    e.x = ( E[i +    j *ystride].x * s0x + E[i+1 +    j *ystride].x * s1x ) * s0y +
-          ( E[i + (j+1)*ystride].x * s0x + E[i+1 + (j+1)*ystride].x * s1x ) * s1y;
+    e.θ = ( E[i  +     j *jstride].θ * s0z  + E[i+1  +     j *jstride].θ * s1z ) * s0r +
+          ( E[i  + (j +1)*jstride].θ * s0z  + E[i+1  + (j +1)*jstride].θ * s1z ) * s1r;
 
-    e.y = ( E[i +    j *ystride].y * s0x + E[i+1 +    j *ystride].y * s1x ) * s0y +
-          ( E[i + (j+1)*ystride].y * s0x + E[i+1 + (j+1)*ystride].y * s1x ) * s1y;
+    // Interpolate B fieldj
+    b.z = ( B[i  +     jh*jstride].z * s0z  + B[i+1  +     jh*jstride].z * s1z ) * s0rh +
+          ( B[i  + (jh+1)*jstride].z * s0z  + B[i+1  + (jh+1)*jstride].z * s1z ) * s1rh;
 
-    e.z = ( E[i +    j *ystride].z * s0x + E[i+1 +    j *ystride].z * s1x ) * s0y +
-          ( E[i + (j+1)*ystride].z * s0x + E[i+1 + (j+1)*ystride].z * s1x ) * s1y;
+    b.r = ( B[ih +      j*jstride].r * s0zh + B[ih+1 +      j*jstride].r * s1zh ) * s0r +
+          ( B[ih + (j +1)*jstride].r * s0zh + B[ih+1 +  (j+1)*jstride].r * s1zh ) * s1r;
 
-    // Interpolate B field
-    b.x = ( B[i +    j *ystride].x * s0x + B[i+1 +    j *ystride].x * s1x ) * s0y +
-          ( B[i + (j+1)*ystride].x * s0x + B[i+1 + (j+1)*ystride].x * s1x ) * s1y;
-
-    b.y = ( B[i +    j *ystride].y * s0x + B[i+1 +    j *ystride].y * s1x ) * s0y +
-          ( B[i + (j+1)*ystride].y * s0x + B[i+1 + (j+1)*ystride].y * s1x ) * s1y;
-
-    b.z = ( B[i +    j *ystride].z * s0x + B[i+1 +    j *ystride].z * s1x ) * s0y +
-          ( B[i + (j+1)*ystride].z * s0x + B[i+1 + (j+1)*ystride].z * s1x ) * s1y;
-
+    b.θ = ( B[ih +     jh*jstride].θ * s0zh + B[ih+1 +     jh*jstride].θ * s1zh ) * s0rh +
+          ( B[ih + (jh+1)*jstride].θ * s0zh + B[ih+1 + (jh+1)*jstride].θ * s1zh ) * s1rh;
 }
-
 
 /**
  * @brief Advance momentum using a relativistic Boris pusher.
@@ -243,117 +254,497 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u,
 }
 
 /**
- * @brief Deposit current from single particle
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell (mode m = 0)
  * 
- * @param J         Electric current buffer
- * @param ystride   y-stride for J
- * @param ix0       Initial position of particle (cell)
- * @param x0        Initial position of particle (position inside cell)
- * @param u         Particle momenta
- * @param rg        1 / Lorentz γ
- * @param dx        Particle motion normalized to cell size
+ * @param ix        Particle cell
+ * @param x0        Initial particle position (z,r)
+ * @param x1        Final particle position (z,r)
+ * @param t0        Initial particle transverse position (x,y)
+ * @param t1        Final particle  transverse position (x,y)
  * @param q         Particle charge
+ * @param J         current(J) grid (should be in shared memory)
+ * @param stride    current(J) grid stride
  */
-inline void dep_current( float3 * const __restrict__ J, const int ystride, 
-    int2 ix0, float2 x0, float3 u, 
-    float rg, float2 dx, float q ) {
-
-    // Find position time centered with velocity
-    float2 x1 = make_float2( x0.x + 0.5f * dx.x, x0.y + 0.5f * dx.y );
+inline void dep_current_seg_0(
+    const int2 ix, const float2 x0, const float2 x1, 
+    const float2 t0, const float2 t1,
+    float q,
+    cyl3<float> * __restrict__ J, const int stride )
+{
+    const auto z0 = x0.x;
+    const auto z1 = x1.x;
+    const auto r0 = x0.y;
+    const auto r1 = x1.y;
     
-    int2 const deltai = make_int2(
+    const auto S0z0 = 0.5f - z0;
+    const auto S0z1 = 0.5f + z0;
+
+    const auto S1z0 = 0.5f - z1;
+    const auto S1z1 = 0.5f + z1;
+
+    const auto S0r0 = 0.5f - r0;
+    const auto S0r1 = 0.5f + r0;
+
+    const auto S1r0 = 0.5f - r1;
+    const auto S1r1 = 0.5f + r1;
+
+    const auto wl1 = q * (z1 - z0);
+    const auto wl2 = q * (r1 - r0);
+    
+    const auto wp10 = 0.5f*(S0r0 + S1r0);
+    const auto wp11 = 0.5f*(S0r1 + S1r1);
+    
+    const auto wp20 = 0.5f*(S0z0 + S1z0);
+    const auto wp21 = 0.5f*(S0z1 + S1z1);
+
+    const auto xif = t0.x + t1.x;
+    const auto yif = t0.y + t1.y;
+    const auto Δx  = t1.x - t0.x;
+    const auto Δy  = t1.y - t0.y;
+
+    const auto jθ = q * ( ops::fma( - Δx , yif , Δy * xif ) ) / sqrt( ops::fma( xif, xif, yif*yif) );
+
+    int i = ix.x;
+    int j = ix.y;
+
+    // When using more than 1 thread per tile all of these need to be atomic
+    J[ stride * j     + i     ].z += wl1 * wp10;
+    J[ stride * (j+1) + i     ].z += wl1 * wp11;
+
+    J[ stride * j     + i     ].r += wl2 * wp20;
+    J[ stride * j     + (i+1) ].r += wl2 * wp21;
+
+    J[ stride * j     + i     ].θ += jθ * ( S0z0 * S0r0 + S1z0 * S1r0 + (S0z0 * S1r0 - S1z0 * S0r0)/2.0f );
+    J[ stride * j     + (i+1) ].θ += jθ * ( S0z1 * S0r0 + S1z1 * S1r0 + (S0z1 * S1r0 - S1z1 * S0r0)/2.0f );
+    J[ stride * (j+1) + i     ].θ += jθ * ( S0z0 * S0r1 + S1z0 * S1r1 + (S0z0 * S1r1 - S1z0 * S0r1)/2.0f );
+    J[ stride * (j+1) + (i+1) ].θ += jθ * ( S0z1 * S0r1 + S1z1 * S1r1 + (S0z1 * S1r1 - S1z1 * S0r1)/2.0f );
+}
+
+/**
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell
+ * 
+ * @tparam m        Azymuthal mode (> 0)
+ * @param ix        Initial position (cell index)
+ * @param x0        Initial position (z,r)
+ * @param x1        Final position (z,r)
+ * @param θ0        Initial angular position (cos,sin)
+ * @param θm        Mid-point angular position (cos,sin)
+ * @param θ1        Final angular position (cos,sin)
+ * @param q         Charge
+ * @param vθ        Angular velocity (not momentum)
+ * @param J         Current buffer
+ * @param stride    j stride for current buffer
+ */
+template< int m >
+inline void dep_current_seg(
+    const int ir0, const int2 ix, const float2 x0, const float2 x1,
+    const float2 t0, const float2 t1, 
+    const float q,
+    cyl3<std::complex<float>> * __restrict__ J, const int stride )
+{
+    static_assert( m > 0, "only modes m > 0 are supported");
+    
+    // Initial and final grid positions
+    // We rename the variables for clarity
+    int i = ix.x;
+    int j = ix.y;
+    const auto z0 = x0.x;
+    const auto z1 = x1.x;
+    const auto r0 = x0.y;
+    const auto r1 = x1.y;
+
+    const auto cr0 = (ir0 + j) + r0;
+    const auto cr1 = (ir0 + j) + r1;
+
+    // const auto cr0 = sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
+    // const auto cr1 = sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
+
+    const auto θ0 = make_float2( t0.x/cr0, t0.y/cr0 );
+    const auto θ1 = make_float2( t1.x/cr1, t1.y/cr1 );
+
+    const auto xif = t0.x + t1.x;
+    const auto yif = t0.y + t1.y;
+
+    const auto rm2 = sqrt( ops::fma( xif, xif, yif*yif ) );
+    const auto θm = float2{ xif/rm2, yif/rm2 };
+
+    // Complex coefficients for initial, mid and final angular positions
+    auto cm = expimθ<m>( θm );
+    auto c0 = expimθ<m>( θ0 ) - cm;
+    auto c1 = expimθ<m>( θ1 ) - cm;
+
+    const auto S0z0 = 0.5f - z0;
+    const auto S0z1 = 0.5f + z0;
+
+    const auto S1z0 = 0.5f - z1;
+    const auto S1z1 = 0.5f + z1;
+
+    const auto S0r0 = 0.5f - r0;
+    const auto S0r1 = 0.5f + r0;
+
+    const auto S1r0 = 0.5f - r1;
+    const auto S1r1 = 0.5f + r1;
+
+    const auto wl1 = (z1 - z0) * cm;
+    const auto wl2 = (r1 - r0) * cm;
+    
+    const auto wp10 = 0.5f*(S0r0 + S1r0);
+    const auto wp11 = 0.5f*(S0r1 + S1r1);
+    
+    const auto wp20 = 0.5f*(S0z0 + S1z0);
+    const auto wp21 = 0.5f*(S0z1 + S1z1);
+
+    // When using more than 1 thread per tile all of these need to be atomic
+    J[ stride * j     + i     ].z += q * wl1 * wp10;
+    J[ stride * (j+1) + i     ].z += q * wl1 * wp11;
+
+    J[ stride * j     + i     ].r += q * wl2 * wp20;
+    J[ stride * j     + (i+1) ].r += q * wl2 * wp21;
+
+    J[ stride * j     + i     ].θ += q * ( S0z1 * S0r1 * c1 - S0z0 * S0r0 * c0 );
+    J[ stride * j     + (i+1) ].θ += q * ( S1z1 * S0r1 * c1 - S1z0 * S0r0 * c0 );
+    J[ stride * (j+1) + i     ].θ += q * ( S0z1 * S1r1 * c1 - S0z0 * S1r0 * c0 );
+    J[ stride * (j+1) + (i+1) ].θ += q * ( S1z1 * S1r1 * c1 - S1z0 * S1r0 * c0 );
+}
+
+/**
+ * @brief Split particle trajectory into segments fitting in a single cell
+ * 
+ * @param ix        Initial cell index (iz, ir)
+ * @param x0        Initial position inside cell (z, r)
+ * @param delta     Particle motion (Δz, Δr)
+ * @param deltai    [out] Cell motion
+ * @param t0        Initial transverse position (x, y)
+ * @param tdelta    Transverse particle motion (Δx, Δy)
+ * @param v0_ix     [out] 1st segment cell index (iz, ir)
+ * @param v0_x0     [out] 1st segment initial position (z0, r0)
+ * @param v0_x1     [out] 1st segment final position (z1, r1)
+ * @param v0_t0     [out] 1st segment initial transverse position (x0, y0)
+ * @param v0_t1     [out] 1st segment final transverse position (x1, y1)
+ * @param v1_ix     [out] 2nd segment cell index (iz, ir) 
+ * @param v1_x0     [out] 2nd segment initial position (z0, r0) 
+ * @param v1_x1     [out] 2nd segment final position (z1, r1) 
+ * @param v1_t0     [out] 2nd segment initial transverse position (x0, y0)
+ * @param v1_t1     [out] 2nd segment final transverse position (x1, y1) 
+ * @param v2_ix     [out] 3rd segment cell index (iz, ir) 
+ * @param v2_x0     [out] 3rd segment initial position (z0, r0) 
+ * @param v2_x1     [out] 3rd segment final position (z1, r1) 
+ * @param v2_t0     [out] 3rd segment initial transverse position (x0, y0)
+ * @param v2_t1     [out] 3rd segment final transverse position (x1, y1) 
+ * @param cross     [out] Cell edge crossing
+ */
+inline void split2d_cyl( 
+    const int ir0, const int2 ix, const float2 x0, const float2 delta, int2 & deltai,
+    const float2 t0, const float2 tdelta,
+    int2 & v0_ix, float2 & v0_x0, float2 & v0_x1, float2 & v0_t0, float2 & v0_t1,
+    int2 & v1_ix, float2 & v1_x0, float2 & v1_x1, float2 & v1_t0, float2 & v1_t1,
+    int2 & v2_ix, float2 & v2_x0, float2 & v2_x1, float2 & v2_t0, float2 & v2_t1,
+    int2 & cross
+) {
+    /// @brief final (z,r) position, indexed to original cell
+    float2 x1 = x0 + delta;
+
+    /// @brief final (x,y) transverse position
+    float2 t1 = t0 + tdelta;
+
+    // Get cell (iz,ir) motion
+    deltai = make_int2(
         ((x1.x >= 0.5f) - (x1.x < -0.5f)),
         ((x1.y >= 0.5f) - (x1.y < -0.5f))
     );
 
-    int2 ix  = make_int2( ix0.x + deltai.x, ix0.y + deltai.y );
-    float2 x = make_float2( x0.x - deltai.x, x0.y - deltai.y );
+    // Get cell crossings
+    cross = make_int2( deltai.x != 0, deltai.y != 0 );
 
-    const float S0x = 0.5f - x.x;
-    const float S1x = 0.5f + x.x;
+    /// @brief cell position of z-split, if any
+    float zs = 0.5f * deltai.x;
+    /// @brief cell position of r-split, if any
+    float rs = 0.5f * deltai.y;
 
-    const float S0y = 0.5f - x.y;
-    const float S1y = 0.5f + x.y;
+    /// @brief z split fraction
+    float εz;
+    /// @brief r split fraction
+    float εr;
 
-    const float jx = q * u.x * rg;
-    const float jy = q * u.y * rg;
-    const float jz = q * u.z * rg;
+    // z-split
+    float xz, yz, rz;
+    if ( cross.x ) {
+        εz = (zs - x0.x) / delta.x;
 
-    int idx = ix.y * ystride + ix.x;
+        // z-split positions
+        xz = t0.x + εz * tdelta.x;
+        yz = t0.y + εz * tdelta.y;
+        rz = ( delta.y == 0 ) ? x0.y : sqrt( ops::fma( xz, xz, yz * yz ) ) - (ir0 + ix.y);
+    }
 
-    J[ idx               ].x += S0y * S0x * jx;
-    J[ idx               ].y += S0y * S0x * jy;
-    J[ idx               ].z += S0y * S0x * jz;
+    // r-split
+    float xr, yr, zr;
+    if ( cross.y ) {
+        auto a = ops::fma( tdelta.x, tdelta.x, tdelta.y * tdelta.y );
+        auto b = ops::fma( t0.x, tdelta.x, t0.y * tdelta.y );
+        auto c = ( x0.y - rs ) * ( 2 * (ir0 + ix.y) + x0.y + rs );
 
-    J[ idx + 1           ].x += S0y * S1x * jx;
-    J[ idx + 1           ].y += S0y * S1x * jy;
-    J[ idx + 1           ].z += S0y * S1x * jz;
+        εr = - ( b + std::copysign( sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
+        if ( εr < 0 || εr >= 1 ) εr = c / (a * εr);
 
-    J[ idx + ystride     ].x += S1y * S0x * jx;
-    J[ idx + ystride     ].y += S1y * S0x * jy;
-    J[ idx + ystride     ].z += S1y * S0x * jz;
+        // std::cout << "(*info*) εr: " << εr << '\n';
+        if ( εr <= 0 || εr >= 1) {
+            std::cerr << "(*error*) Invalid εr: "<< εr << '\n'
+                      << "ti: " << t0 << ", tdelta: " << tdelta << '\n'
+                      << "a: " << a << ", b: " << b << ", c: " << c << '\n';
+            std::exit(1);
+        }
 
-    J[ idx + ystride + 1 ].x += S1y * S1x * jx;
-    J[ idx + ystride + 1 ].y += S1y * S1x * jy;
-    J[ idx + ystride + 1 ].z += S1y * S1x * jz;
+        // r-split positions
+        xr = t0.x + εr * tdelta.x;
+        yr = t0.y + εr * tdelta.y;
+        zr = x0.x + εr * delta.x;
+    }
+
+    // Set 1st segment initial positions
+    // This will be the same for any particle
+    v0_ix = ix; v0_x0 = x0; v0_t0 = t0;
+
+    // assume no splits, fill in other options later
+    v0_x1 = x1; v0_t1 = t1;
+
+    // z-cross only
+    if ( cross.x && ! cross.y ) {
+        v0_x1 = make_float2( zs, rz );
+        v0_t1 = make_float2( xz, yz );
+
+        v1_ix = make_int2( ix.x + deltai.x, ix.y );
+        v1_x0 = make_float2( -zs, rz );
+        v1_x1 = make_float2( x1.x - deltai.x, x1.y );
+
+        v1_t0 = v0_t1;
+        v1_t1 = t1;
+    }
+
+    // r-cross only
+    if ( ! cross.x && cross.y ) {
+        v0_x1 = make_float2( zr, rs );
+        v0_t1 = make_float2( xr, yr );
+
+        v1_ix = make_int2( ix.x, ix.y + deltai.y );
+        v1_x0 = make_float2( zr, -rs );
+        v1_x1 = make_float2( x1.x, x1.y - deltai.y );
+
+        v1_t0 = v0_t1;
+        v1_t1 = t1;
+    }
+
+    // crossing on 2 directions
+    if ( cross.x && cross.y ) {
+        if ( εz < εr ) {
+            // std::cout << "(*info*) z_cross 1st " << '\n';
+
+            // z-cross first
+            v0_x1 = make_float2( zs, rz );
+            v0_t1 = make_float2( xz, yz );
+
+            v1_ix = make_int2( ix.x + deltai.x, ix.y );
+            v1_x0 = make_float2( -zs, rz );
+            v1_x1 = make_float2( zr - deltai.x, rs );
+            v1_t0 = make_float2( xz, yz );
+            v1_t1 = make_float2( xr, yr );
+
+            v2_x0 = make_float2( zr - deltai.x, -rs );
+            v2_t0 = make_float2( xr, yr );
+        } else {
+            // std::cout << "(*info*) r_cross 1st " << '\n';
+
+            // r-cross first
+            v0_x1 = make_float2( zr, rs );
+            v0_t1 = make_float2( xr, yr );
+
+            v1_ix = make_int2( ix.x, ix.y + deltai.y );
+            v1_x0 = make_float2( zr, -rs );
+            v1_x1 = make_float2( zs, rz - deltai.y );
+            v1_t0 = make_float2( xr, yr );
+            v1_t1 = make_float2( xz, yz );
+
+            v2_x0 = make_float2( -zs, rz - deltai.y );
+            v2_t0 = make_float2( xz, yz );
+
+        }
+
+        v2_ix = make_int2( ix.x + deltai.x, ix.y + deltai.y );
+        v2_x1 = make_float2( x1.x  - deltai.x, x1.y - deltai.y );
+        v2_t1 = t1;
+    }
 }
 
 /**
- * @brief Deposit charge from single particle
- * 
- * @param rho       Charge density buffer
- * @param ystride   y-stride for rho
- * @param ix        Particle position (cell)
- * @param x         Particle position inside cell
- * @param q         Particle charge
- */
-inline void dep_charge( float * const __restrict__ rho, const int ystride, int2 ix, float2 x, float q )
-{
-
-    const float S0x = 0.5f - x.x;
-    const float S1x = 0.5f + x.x;
-
-    const float S0y = 0.5f - x.y;
-    const float S1y = 0.5f + x.y;
-
-    int idx = ix.y * ystride + ix.x;
-
-    rho[ idx               ] += S0y * S0x * q;
-    rho[ idx + 1           ] += S0y * S1x * q;
-    rho[ idx + ystride     ] += S1y * S0x * q;
-    rho[ idx + ystride + 1 ] += S1y * S1x * q;
-}
-
-/**
- * @brief Move particles and deposit current
+ * @brief Move particles and deposit current (mode 0 only)
  * 
  * @param tile_idx          Tile index
  * @param part              Particle data
  * @param d_current         Current grid (global)
  * @param current_offset    Offset to position [0,0] of the current grid
+ * @param nx                Current grid size (internal)
  * @param ext_nx            Current grid size (external)
  * @param dt_dx             Ratio between time step and cell size
  * @param q                 Particle charge
  * @param qnx               Current normalization
  */
-void move_deposit_kernel(
+void move_deposit_0(
     uint2 const tile_idx,
     ParticleData const part,
-    float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const current_ext_nx,
-    float  * const __restrict__ d_charge, unsigned int const charge_offset, uint2 const charge_ext_nx,
-    float2 const dt_dx, float const q, float2 const qnx ) 
+    cyl3<float> * const __restrict__ current_m0, 
+    unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
+    float2 const dt_dx, float2 const qnx ) 
 {
     const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( current_ext_nx.x * current_ext_nx.y );
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
     // This is usually in block shared memory
-    alignas(local_align) float3 _current_buffer[ tile_size ];
-    alignas(local_align) float  _charge_buffer[ tile_size ];
+    alignas(local_align) cyl3<float> tile_buffer_0[tile_size];
 
-    // Zero local buffers
+    // Zero local current buffer
+    for( auto i = 0; i < tile_size; i++ ) 
+        tile_buffer_0[i] = cyl3<float>{0};
+
+    // sync
+
+    // Move particles and deposit current
+    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
+
+    cyl3<float> * J0 = & tile_buffer_0[ current_offset ];
+    const int jstride = ext_nx.x;
+
+    const int part_offset    = part.offset[ tid ];
+    const int np             = part.np[ tid ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ θ  = &part.θ[ part_offset ];
+    auto * __restrict__ q  = &part.q[ part_offset ];
+    
+    auto const dt_dz = dt_dx.x;
+    auto const dt_dr = dt_dx.y;
+
+    const int ir0 = tile_idx.y * nx.y;
+
+    for( int i = 0; i < np; i++ ) {
+        auto pu  = u[i];
+        auto x0  = x[i];
+        auto ix0 = ix[i];
+        auto θi  = θ[i];
+        auto pq  = q[i];
+
+        // Get 1 / Lorentz gamma
+        float const rg = rgamma( pu );
+
+        // Cartesian motion
+        auto Δx = dt_dr * rg * pu.x;
+        auto Δy = dt_dr * rg * pu.y;
+
+        /// @brief initial radial position
+        auto ri = (ir0 + ix0.y) + x0.y;
+        auto xi = ri * θi.x;
+        auto yi = ri * θi.y;
+
+        // New cartesian positions
+        auto xf = ops::fma( ri, θi.x, Δx );
+        auto yf = ops::fma( ri, θi.y, Δy );
+
+        /// @brief xi + xf
+        auto xif = ops::fma( ri, θi.x, xf );
+        /// @brief yi + yf
+        auto yif = ops::fma( ri, θi.y, yf );
+
+        // Final positions
+
+        /// @brief New radial position
+        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        /// @brief radial motion
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+
+        // Advance grid (z,r) position
+        auto Δz = dt_dz * rg * pu.z;
+        float2 delta = make_float2( Δz, Δr );
+
+        // Check for cell crossings and split trajectory
+        int2 deltai, cross;
+
+        int2 v0_ix; float2 v0_x0, v0_x1, v0_t0, v0_t1; 
+        int2 v1_ix; float2 v1_x0, v1_x1, v1_t0, v1_t1; 
+        int2 v2_ix; float2 v2_x0, v2_x1, v2_t0, v2_t1; 
+
+        split2d_cyl( 
+            ir0, ix0, x0, delta, deltai,
+            make_float2( xi, yi ), make_float2( Δx, Δy ),
+            v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
+            v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
+            v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
+            cross
+        );
+        
+        // Deposit current (mode 0)
+                                  dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
+        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
+
+        // Modify cell position and store
+        x[i] = make_float2( 
+            (x0.x + Δz ) - deltai.x,
+            (x0.y + Δr ) - deltai.y
+        );
+
+        // Modify cell and store
+        ix[i] = make_int2(
+            ix0.x + deltai.x,
+            ix0.y + deltai.y
+        );
+
+        /// @brief store new angular position
+        θ[i] = float2{ xf/rf, yf/rf };
+
+    }
+
+    // Current normalization is done in Current::normalize()
+
+    // Add current to global buffer
+    const int tile_off = tid * tile_size;
+
+    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
+        current_m0[tile_off + i] += tile_buffer_0[i];
+    }
+}
+
+/**
+ * @brief Move particles and deposit current (modes 0 and 1)
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param d_current         Current grid (global)
+ * @param current_offset    Offset to position [0,0] of the current grid
+ * @param nx                Current grid size (internal)
+ * @param ext_nx            Current grid size (external)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param q                 Particle charge
+ * @param qnx               Current normalization
+ */
+void move_deposit_1(
+    uint2 const tile_idx,
+    ParticleData const part,
+    cyl3<float> * const __restrict__ current_m0, 
+    cyl3<std::complex<float>> * const __restrict__ current_m1, 
+    unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
+    float2 const dt_dx, float2 const qnx ) 
+{
+    const uint2 ntiles  = part.ntiles;
+    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+
+    // This is usually in block shared memory
+    alignas(local_align) cyl3<float>               tile_buffer_0[tile_size];
+    alignas(local_align) cyl3<std::complex<float>> tile_buffer_1[tile_size];
+
+    // Zero local current buffer
     for( auto i = 0; i < tile_size; i++ ) {
-        _current_buffer[i] = make_float3(0,0,0);
-        _charge_buffer[i] = 0;
+        tile_buffer_0[i] = cyl3<float>{0};
+        tile_buffer_1[i] = cyl3<std::complex<float>>{0};
     }
 
     // sync
@@ -361,73 +752,121 @@ void move_deposit_kernel(
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J   = & _current_buffer[ current_offset ];
-    float  * rho = & _charge_buffer[ charge_offset ];
+    cyl3<float> *               J0 = & tile_buffer_0[ current_offset ];
+    cyl3<std::complex<float>> * J1 = & tile_buffer_1[ current_offset ];
+
+    const int jstride = ext_nx.x;
 
     const int part_offset    = part.offset[ tid ];
     const int np             = part.np[ tid ];
-    int2   * __restrict__ ix = &part.ix[ part_offset ];
-    float2 * __restrict__ x  = &part.x[ part_offset ];
-    float3 * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ θ  = &part.θ[ part_offset ];
+    auto * __restrict__ q  = &part.q[ part_offset ];
+    
+    auto const dt_dz = dt_dx.x;
+    auto const dt_dr = dt_dx.y;
+
+    const int ir0 = tile_idx.y * nx.y;
 
     for( int i = 0; i < np; i++ ) {
-        float3 pu = u[i];
-        float2 const x0 = x[i];
-        int2   const ix0 =ix[i];
+        auto pu  = u[i];
+        auto x0  = x[i];
+        auto ix0 = ix[i];
+        auto θi  = θ[i];
+        auto pq  = q[i];
 
         // Get 1 / Lorentz gamma
         float const rg = rgamma( pu );
 
-        // Get particle motion
-        float2 const delta = make_float2(
-            dt_dx.x * rg * pu.x,
-            dt_dx.y * rg * pu.y
+        // Cartesian motion
+        auto Δx = dt_dr * rg * pu.x;
+        auto Δy = dt_dr * rg * pu.y;
+
+        /// @brief initial radial position
+        auto ri = ( ir0 + ix0.y ) + x0.y;
+        auto xi = ri * θi.x;
+        auto yi = ri * θi.y;
+
+        // New cartesian positions
+        auto xf = ops::fma( ri, θi.x, Δx );
+        auto yf = ops::fma( ri, θi.y, Δy );
+
+        /// @brief xi + xf
+        auto xif = ops::fma( ri, θi.x, xf );
+        /// @brief yi + yf
+        auto yif = ops::fma( ri, θi.y, yf );
+
+        // Final positions
+
+        /// @brief New radial position
+        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        /// @brief radial motion
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+
+        // Advance grid (z,r) position
+        auto Δz = dt_dz * rg * pu.z;
+        float2 delta = make_float2( Δz, Δr );
+
+        // Check for cell crossings and split trajectory
+        int2 deltai, cross;
+
+        int2 v0_ix; float2 v0_x0, v0_x1, v0_t0, v0_t1; 
+        int2 v1_ix; float2 v1_x0, v1_x1, v1_t0, v1_t1; 
+        int2 v2_ix; float2 v2_x0, v2_x1, v2_t0, v2_t1; 
+
+        split2d_cyl( 
+            ir0, ix0, x0, delta, deltai,
+            make_float2( xi, yi ), make_float2( Δx, Δy ),
+            v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
+            v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
+            v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
+            cross
+        );
+        
+        // Deposit current (mode 0)
+        dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
+        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
+
+        // Deposit current (mode 1)
+        dep_current_seg<1>( ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
+        if ( cross.x || cross.y ) dep_current_seg<1>( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
+        if ( cross.x && cross.y ) dep_current_seg<1>( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
+
+
+        // Correct cell position and store
+        x[i] = make_float2( 
+            (x0.x + Δz ) - deltai.x,
+            (x0.y + Δr ) - deltai.y
         );
 
-        // Deposit current
-        dep_current( J, current_ext_nx.x, ix0, x0, pu, rg, delta, q );
-
-        // Advance position
-        float2 x1 = make_float2(
-            x0.x + delta.x,
-            x0.y + delta.y
-        );
-
-        // Check for cell crossings
-        int2 const deltai = make_int2(
-            ((x1.x >= 0.5f) - (x1.x < -0.5f)),
-            ((x1.y >= 0.5f) - (x1.y < -0.5f))
-        );
-
-        // Correct position
-        x1.x -= deltai.x;
-        x1.y -= deltai.y;
-
-        // Modify cell
-        int2 ix1 = make_int2(
+        // Modify cell and store
+        ix[i] = make_int2(
             ix0.x + deltai.x,
             ix0.y + deltai.y
         );
 
-        // Deposit charge
-        dep_charge( rho, charge_ext_nx.x, ix1, x1, q );
-
-        // Store result
-        x[i] = x1;
-        ix[i] = ix1;
+        /// @brief store new angular position
+        θ[i] = float2{ xf/rf, yf/rf };
     }
+
+    // Current normalization is done in Current::normalize()
 
     // Add current to global buffer
     const int tile_off = tid * tile_size;
 
-    for( unsigned i = 0; i < current_ext_nx.x * current_ext_nx.y; i++ ) {
-        d_current[tile_off + i] += _current_buffer[i];
-        d_charge[tile_off + i] += _charge_buffer[i];
+    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
+        current_m0[tile_off + i] += tile_buffer_0[i];
+        current_m1[tile_off + i] += tile_buffer_1[i];
     }
 }
 
+
+
 /**
- * @brief Advance particle velocities
+ * @brief Advance particle velocities (mode 0 only)
  * 
  * @tparam type 
  * @param tile_idx      Tile index
@@ -440,10 +879,10 @@ void move_deposit_kernel(
  * @param d_energy      Total particle energy (if using OpenMP this must be a reduction variable)
  */
 template < species::pusher type >
-void push_kernel ( 
+void push_0 ( 
     uint2 const tile_idx,
     ParticleData const part,
-    float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
+    cyl3<float> * __restrict__ d_E, cyl3<float> * __restrict__ d_B, 
     unsigned int const field_offset, uint2 const ext_nx,
     float const alpha, double * __restrict__ d_energy )
 {
@@ -457,16 +896,16 @@ void push_kernel (
 
     // Copy E and B into shared memory
 
-    alignas(local_align) float3 E_local[ field_vol ];
-    alignas(local_align) float3 B_local[ field_vol ];
+    alignas(local_align) cyl3<float> E_local_m0[ field_vol ];
+    alignas(local_align) cyl3<float> B_local_m0[ field_vol ];
 
     for( auto i = 0; i < field_vol; i++ ) {
-        E_local[i] = d_E[tile_off + i];
-        B_local[i] = d_B[tile_off + i];
+        E_local_m0[i] = d_E[tile_off + i];
+        B_local_m0[i] = d_B[tile_off + i];
     }
 
-    float3 const * const __restrict__ E = & E_local[ field_offset ];
-    float3 const * const __restrict__ B = & B_local[ field_offset ];
+    cyl3<float> const * const __restrict__ E_m0 = & E_local_m0[ field_offset ];
+    cyl3<float> const * const __restrict__ B_m0 = & B_local_m0[ field_offset ];
 
     // Push particles
     const int part_offset = part.offset[ tid ];
@@ -474,22 +913,149 @@ void push_kernel (
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
+    float2 * __restrict__ θ  = &part.θ[ part_offset ];
 
     double energy = 0;
 
-    const int ystride = ext_nx.x;
+    const int jstride = ext_nx.x;
 
     for( int i = 0; i < np; i++ ) {
 
         // Interpolate field
-        float3 e, b;
-        interpolate_fld( E, B, ystride, ix[i], x[i], e, b );
+        cyl3<float> e, b;
+        interpolate_fld( E_m0, B_m0, jstride, ix[i], x[i], e, b );
         
+        // Convert to cartesian components
+        float3 cart_e = make_float3(
+            ops::fma( e.r, θ[i].x, - e.θ * θ[i].y ),
+            ops::fma( e.r, θ[i].y, + e.θ * θ[i].x ),
+            b.z
+        );
+
+        float3 cart_b = make_float3(
+            ops::fma( b.r, θ[i].x, - b.θ * θ[i].y ),
+            ops::fma( b.r, θ[i].y, + b.θ * θ[i].x ),
+            b.z
+        );
+
         // Advance momentum
         float3 pu = u[i];
-        
-        if constexpr ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
-        if constexpr ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
+
+        if constexpr ( type == species::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, energy );
+        if constexpr ( type == species::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, energy );
+    }
+
+    // Add up energy from all particles
+    // In OpenMP, d_energy needs to be a reduction variable
+    *d_energy += energy;
+}
+
+/**
+ * @brief Advance particle velocities (modes 0 and 1)
+ * 
+ * @tparam type 
+ * @param tile_idx      Tile index
+ * @param part          Particle data
+ * @param d_E           E-field grid (global)
+ * @param d_B           B-field grid (global)
+ * @param field_offset  Offset to position [0,0] of field grids
+ * @param ext_nx        Field grid size (external)
+ * @param alpha         Normalization parameter
+ * @param d_energy      Total particle energy (if using OpenMP this must be a reduction variable)
+ */
+template < species::pusher type >
+void push_1 ( 
+    uint2 const tile_idx,
+    ParticleData const part,
+    cyl3<float>               * __restrict__ d_E_m0, cyl3<float>               * __restrict__ d_B_m0, 
+    cyl3<std::complex<float>> * __restrict__ d_E_m1, cyl3<std::complex<float>> * __restrict__ d_B_m1, 
+    unsigned int const field_offset, uint2 const ext_nx,
+    float const alpha, double * __restrict__ d_energy )
+{
+    const uint2 ntiles  = part.ntiles;
+
+    // Tile ID
+    const int tid =  tile_idx.y * ntiles.x + tile_idx.x;
+
+    int const field_vol = roundup4( ext_nx.x * ext_nx.y );
+    int const tile_off = tid * field_vol;
+
+    // Copy E and B into shared memory
+
+    alignas(local_align) cyl3<float> E_local_m0[ field_vol ];
+    alignas(local_align) cyl3<float> B_local_m0[ field_vol ];
+
+    for( auto i = 0; i < field_vol; i++ ) {
+        E_local_m0[i] = d_E_m0[tile_off + i];
+        B_local_m0[i] = d_B_m0[tile_off + i];
+    }
+
+    cyl3<float> const * const __restrict__ E_m0 = & E_local_m0[ field_offset ];
+    cyl3<float> const * const __restrict__ B_m0 = & B_local_m0[ field_offset ];
+
+    alignas(local_align) cyl3<std::complex<float>> E_local_m1[ field_vol ];
+    alignas(local_align) cyl3<std::complex<float>> B_local_m1[ field_vol ];
+
+    for( auto i = 0; i < field_vol; i++ ) {
+        E_local_m1[i] = d_E_m1[tile_off + i];
+        B_local_m1[i] = d_B_m1[tile_off + i];
+    }
+
+    cyl3<std::complex<float>> const * const __restrict__ E_m1 = & E_local_m1[ field_offset ];
+    cyl3<std::complex<float>> const * const __restrict__ B_m1 = & B_local_m1[ field_offset ];
+
+    // Push particles
+    const int part_offset = part.offset[ tid ];
+    const int np          = part.np[ tid ];
+    int2   * __restrict__ ix = &part.ix[ part_offset ];
+    float2 * __restrict__ x  = &part.x[ part_offset ];
+    float3 * __restrict__ u  = &part.u[ part_offset ];
+    float2 * __restrict__ θ  = &part.θ[ part_offset ];
+
+    double energy = 0;
+
+    const int jstride = ext_nx.x;
+
+    for( int i = 0; i < np; i++ ) {
+
+        // Interpolate field - mode 0
+        cyl3<float> e, b;
+        interpolate_fld( E_m0, B_m0, jstride, ix[i], x[i], e, b );
+
+        // Interpolate field - mode 1
+        cyl3<std::complex<float>> e1, b1;
+        interpolate_fld( E_m1, B_m1, jstride, ix[i], x[i], e1, b1 );
+
+        // Get full field
+        auto exp_m1 = expimθ<1>( θ[i] );
+
+        e.z += ops::fma( real(exp_m1), real(e1.z), - imag(exp_m1) * imag( e1.z ) );
+        e.r += ops::fma( real(exp_m1), real(e1.r), - imag(exp_m1) * imag( e1.r ) );
+        e.θ += ops::fma( real(exp_m1), real(e1.θ), - imag(exp_m1) * imag( e1.θ ) );
+
+        b.z += ops::fma( real(exp_m1), real(b1.z), - imag(exp_m1) * imag( b1.z ) );
+        b.r += ops::fma( real(exp_m1), real(b1.r), - imag(exp_m1) * imag( b1.r ) );
+        b.θ += ops::fma( real(exp_m1), real(b1.θ), - imag(exp_m1) * imag( b1.θ ) );
+
+        // Convert to cartesian components
+        float3 cart_e = make_float3(
+            ops::fma( e.r, θ[i].x, - e.θ * θ[i].y ),
+            ops::fma( e.r, θ[i].y, + e.θ * θ[i].x ),
+            e.z
+        );
+
+        float3 cart_b = make_float3(
+            ops::fma( b.r, θ[i].x, - b.θ * θ[i].y ),
+            ops::fma( b.r, θ[i].y, + b.θ * θ[i].x ),
+            b.z
+        );
+
+
+        // Advance momentum
+        float3 pu = u[i];
+
+        if constexpr ( type == species::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, energy );
+        if constexpr ( type == species::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, energy );
     }
 
     // Add up energy from all particles
@@ -532,21 +1098,33 @@ Species::Species( std::string const name, float const m_q, uint3 const ppc ):
     particles = nullptr;
     tmp = nullptr;
     sort = nullptr;
+
+    // Set nmodes to invalid value, will be set by initialize
+    nmodes = 0;
 }
 
 
 /**
  * @brief Initialize data structures and inject initial particle distribution
  * 
+ * @param nmodes_            Number of cylindrical modes (including fundamental mode)
  * @param box_              Global simulation box size
  * @param ntiles            Number of tiles
  * @param nx                Individual tile grid size
  * @param dt_               Time step
  * @param id_               Species unique identifier
  */
-void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
+void Species::initialize( int nmodes_, float2 const box_, uint2 const ntiles, uint2 const nx,
     float const dt_, int const id_ ) {
     
+    // Store number of cylindrical modes
+    nmodes = nmodes_;
+
+    if ( nmodes < 1 || nmodes > 2 ) {
+        std::cerr << "(*error*) Unsupported number of nodes, must be 1 or 2\n";
+        std::exit(1);
+    }
+
     // Store simulation box size
     box = box_;
 
@@ -627,7 +1205,7 @@ void Species::inject( ) {
 
     float2 ref{0};
 
-    density -> inject( *particles, ppc, dx, ref, particles -> local_range() );
+    density -> inject( *particles, copysign( 1.0f, m_q ), ppc, dx, ref, particles -> local_range() );
 }
 
 /**
@@ -638,7 +1216,7 @@ void Species::inject( bnd<unsigned int> range ) {
 
     float2 ref{0};
 
-    density -> inject( *particles, ppc, dx, ref, range );
+    density -> inject( *particles, copysign( 1.0f, m_q ), ppc, dx, ref, range );
 }
 
 /**
@@ -810,10 +1388,6 @@ void Species::process_bc() {
  */
 void Species::advance( ) {
 
-    NOT_IMPLEMENTED
-
-#if 0
-
     // Advance positions
     move( );
 
@@ -825,8 +1399,6 @@ void Species::advance( ) {
 
     // Increase internal iteration number
     iter++;
-
-#endif
 }
 
 /**
@@ -840,25 +1412,19 @@ void Species::advance( ) {
  * @param emf       EM fields
  * @param current   Electric current density
  */
-void Species::advance( Current &current ) {
-
-    NOT_IMPLEMENTED
-
-#if 0
+void Species::advance( Current & current ) {
 
     // Advance positions and deposit current
-    move( current.J );
+    move( current );
 
     // Process physical boundary conditions
-    process_bc();
+    // process_bc();
 
     // Increase internal iteration number
     iter++;
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
-
-#endif
 
 }
 
@@ -907,39 +1473,59 @@ void Species::advance( EMF const &emf, Current &current ) {
  * 
  * @param current   Current grid
  */
-void Species::move( cyl3grid<float3> * const current )
+void Species::move( Current & current )
 {
 
-    NOT_IMPLEMENTED
-
-#if 0
     const float2 dt_dx = make_float2(
         dt / dx.x,
         dt / dx.y
     );
 
     const float2 qnx = make_float2(
-        q * dx.x / dt,
-        q * dx.y / dt
+        dx.x / dt,
+        dx.y / dt
     );
 
-    #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        
-        const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-        move_deposit_kernel(
-            tile_idx, *particles,
-            J -> d_buffer, J -> offset, J -> ext_nx, 
-            rho -> d_buffer, rho -> offset, rho -> ext_nx,
-            dt_dx, q, qnx
-        );
+    auto & J0 = current.mode0();
+
+    switch (nmodes)
+    {
+    case 1: {
+        #pragma omp parallel for schedule(dynamic)
+        for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
+            
+            const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
+            move_deposit_0(
+                tile_idx, *particles,
+                J0.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
+                dt_dx, qnx
+            );
+        }
+    } break;
+
+    case 2: {
+        auto & J1 = current.mode(1);
+
+        #pragma omp parallel for schedule(dynamic)
+        for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
+            
+            const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
+            move_deposit_1(
+                tile_idx, *particles,
+                J0.d_buffer, J1.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
+                dt_dx, qnx
+            );
+        }
+    } break;
+
+    default:
+        break;
     }
 
     // This avoids the reduction overhead
     for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
         d_nmove += particles -> np[tid];
     }
-#endif
 }
 
 /**
@@ -963,28 +1549,58 @@ void move_kernel(
 
     const int part_offset    = part.offset[ tid ];
     const int np             = part.np[ tid ];
-    int2   * __restrict__ ix = &part.ix[ part_offset ];
-    float2 * __restrict__ x  = &part.x[ part_offset ];
-    float3 * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ θ  = &part.θ[ part_offset ];
+    
+    auto const dt_dz = dt_dx.x;
+    auto const dt_dr = dt_dx.y;
 
     for( int i = 0; i < np; i++ ) {
-        float3 pu = u[i];
-        float2 x0 = x[i];
-        int2 ix0 =ix[i];
+        auto pu  = u[i];
+        auto x0  = x[i];
+        auto ix0 = ix[i];
+
+        auto cosθ = θ[i].x;
+        auto sinθ = θ[i].y; 
 
         // Get 1 / Lorentz gamma
         float rg = rgamma( pu );
 
-        // Get particle motion
-        float2 delta = make_float2(
-            dt_dx.x * rg * pu.x,
-            dt_dx.y * rg * pu.y
-        );
+        // Cartesian motion
+        auto Δx = dt_dr * rg * pu.x;
+        auto Δy = dt_dr * rg * pu.y;
+        auto Δz = dt_dz * rg * pu.z;
 
-        // Advance position
+        // New cartesian positions
+        auto ri = ix0.y + x0.y;
+        auto xf = ops::fma( ri, cosθ, Δx );
+        auto yf = ops::fma( ri, sinθ, Δy );
+
+        // New radial position
+        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+
+        // Protection agains rf == 0
+        // This is VERY unlikely
+        float Δr;
+        if ( rf > 0 ) {
+            Δr = ops::fma( Δx , fma( ri, cosθ, xf ) , Δy * fma( ri, sinθ, yf ) ) / (rf + ri);
+            cosθ = xf/rf;
+            sinθ = yf/rf;
+        } else {
+            Δr   = -ri;
+            cosθ = 1;
+            sinθ = 0;
+        }
+
+        // Store new angular position
+        θ[i] = float2{ cosθ, sinθ };
+
+        // Advance grid (z,r) position
         float2 x1 = make_float2(
-            x0.x + delta.x,
-            x0.y + delta.y
+            x0.x + Δz,
+            x0.y + Δr
         );
 
         // Check for cell crossings
@@ -996,7 +1612,6 @@ void move_kernel(
         // Correct position and store
         x1.x -= deltai.x;
         x1.y -= deltai.y;
-                
         x[i] = x1;
 
         // Modify cell and store
@@ -1014,15 +1629,10 @@ void move_kernel(
  * 
  * This is usually used for test species: species that do not self-consistently
  * influence the simulation
- * 
- * @param current   Current grid
  */
 void Species::move( )
 {
 
-    NOT_IMPLEMENTED
-
-    #if 0
 
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -1031,7 +1641,6 @@ void Species::move( )
 
     #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        
         const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
         move_kernel ( tile_idx, *particles, dt_dx );
     }
@@ -1040,9 +1649,6 @@ void Species::move( )
     for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
         d_nmove += particles -> np[tid];
     }
-
-    #endif
-
 }
 
 /**
@@ -1051,44 +1657,58 @@ void Species::move( )
  * @param E     Electric field
  * @param B     Magnetic field
  */
-void Species::push( cyl3grid<float3> * const E, cyl3grid<float3> * const B )
+void Species::push( Cyl3CylGrid<float> & E, Cyl3CylGrid<float> & B )
 {
 
-    NOT_IMPLEMENTED
+    // Currently only Boris pusher
+    if ( push_type != species::boris ) {
+        std::cerr << "(*error*) Only Boris pusher is currently available\n";
+        std::exit(1);
+    }
 
-#if 0
-    uint2 ext_nx = E -> ext_nx;
     const float alpha = 0.5 * dt / m_q;
     d_energy = 0;
 
-    switch( push_type ) {
-    case( species :: euler ):
+    auto E0 = E.mode0();
+    auto B0 = B.mode0();
 
+    switch (nmodes)
+    {
+    case 1: {
         #pragma omp parallel for schedule(dynamic) reduction(+:d_energy)
         for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {    
             const uint2 tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            push_kernel <species::euler> (
+            push_0 <species::boris> (
                 tile_idx, *particles,
-                E -> d_buffer, B -> d_buffer, E -> offset, ext_nx, alpha,
+                E0.d_buffer, B0.d_buffer, E0.offset, E0.ext_nx, alpha,
                 &d_energy
             );
         }
-        break;
+    }
+    break;
 
-    case( species :: boris ):
-
+    case 2: {
+        auto E1 = E.mode(1);
+        auto B1 = B.mode(1);
+        
         #pragma omp parallel for schedule(dynamic) reduction(+:d_energy)
         for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {    
             const uint2 tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            push_kernel <species::boris> (
+            push_1 <species::boris> (
                 tile_idx, *particles,
-                E -> d_buffer, B -> d_buffer, E -> offset, ext_nx, alpha,
+                E0.d_buffer, B0.d_buffer, 
+                E1.d_buffer, B1.d_buffer, 
+                E0.offset, E0.ext_nx, alpha,
                 &d_energy
             );
         }
+    }
+    break;
+
+    default:
         break;
     }
-#endif
+
 }
 
 /**
@@ -1102,7 +1722,7 @@ void Species::push( cyl3grid<float3> * const E, cyl3grid<float3> * const B )
  * @param d_x       Particle buffer (position)
  * @param q         Species charge per particle
  */
-void dep_charge0(
+void dep_charge_0(
     uint2 const tile_idx,
     ParticleData const part,
     float * const __restrict__ d_charge, int offset, uint2 ext_nx )
@@ -1153,7 +1773,7 @@ void dep_charge0(
 }
 
 /**
- * @brief kernel for depositing mode m=0 charge
+ * @brief kernel for depositing mode m>0 charge
  * 
  * @param d_charge  Charge density grid (will be zeroed by this kernel)
  * @param offset    Offset to position (0,0) of grid
@@ -1278,7 +1898,7 @@ void Species::deposit_charge0( grid<float> &charge0 ) const {
         );
        
         // Deposit mode 0
-        dep_charge0( tile_idx, *particles, charge0.d_buffer, charge0.offset, charge0.ext_nx );
+        dep_charge_0( tile_idx, *particles, charge0.d_buffer, charge0.offset, charge0.ext_nx );
 
         charge_norm( tile_idx, charge0.get_ntiles(), charge0.d_buffer, charge0.offset, 
                     charge0.nx, charge0.ext_nx, dx.y  );

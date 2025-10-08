@@ -339,8 +339,6 @@ EMF::EMF( unsigned int nmodes, uint2 const ntiles, uint2 const nx, float2 const 
 
     // Reset iteration number
     iter = 0;
-
-    std::cout << "completed EMF() constructor\n";
 };
 
 

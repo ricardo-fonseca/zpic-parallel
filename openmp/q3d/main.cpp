@@ -202,7 +202,7 @@ void test_inj( void ) {
 //    electrons.set_density( Density::Slab(coord::z, 1.0, 2.0, 3.0)); 
     electrons.set_density( Density::Sphere(1.0, float2{2,2}, 1.0)); 
 
-    electrons.initialize( box, ntiles, nx, dt, 0 );
+    electrons.initialize( 2, box, ntiles, nx, dt, 0 );
     electrons.save();
     electrons.save_charge( 0 );
 
@@ -212,6 +212,95 @@ void test_inj( void ) {
 
 }
 
+void test_mov( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint3 ppc{ 2, 2, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( Density::Sphere(1.0, float2{2,2}, 1.0)); 
+    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1.e6 } ) );
+
+    electrons.initialize( 2, box, ntiles, nx, dt, 0 );
+
+    electrons.save_charge(0);
+
+    int niter = 100;
+    for( auto i = 0; i < niter; i ++ ) {
+        electrons.advance();
+    }
+
+    electrons.save_charge(0);
+    electrons.save();
+
+
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+
+}
+
+
+void test_current( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+    float2 box{ 12.8, 12.8 };
+
+    // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    
+    auto dt = 0.06;
+
+    Current current( 2, ntiles, nx, box, dt );
+
+    uint3 ppc{ 2, 2, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( Density::Sphere(1.0, float2{6.4,6.4}, 3.2)); 
+
+    electrons.set_udist( UDistribution::Cold( float3{ 1e6, 1e6, 1.e6 } ) );
+//    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1e6 } ) );
+
+    electrons.initialize( 2, box, ntiles, nx, dt, 0 );
+
+    electrons.save_charge(0);
+
+    current.zero();
+
+    electrons.advance( current );
+    
+    current.advance();
+
+    // Save mode 0
+    current.save( fcomp::z, 0 );
+    current.save( fcomp::r, 0 );
+    current.save( fcomp::θ, 0 );
+
+    // Save mode 1
+    current.save( fcomp::z, 1 );
+    current.save( fcomp::r, 1 );
+    current.save( fcomp::θ, 1 );
+
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+
+}
 
 int main( void ) {
 
@@ -226,5 +315,7 @@ int main( void ) {
     // test_emf();
     // test_laser();
 
-    test_inj();
+   // test_inj();
+   // test_mov();
+   test_current();
 }

@@ -54,7 +54,10 @@ class Species {
 
 protected:
 
-     /// @brief Unique species identifier
+    /// @brief Number of cylindrical modes (including fundamental mode)
+    int nmodes;
+
+    /// @brief Unique species identifier
     int id;
 
     /// @brief Number of particles per cell(z,r,θ)
@@ -159,6 +162,7 @@ public:
     /**
      * @brief Initialize data structures and inject initial particle distribution
      * 
+     * @param nmodes            Number of cylindrical modes (including fundamental mode)
      * @param box               Global simulation box size
      * @param global_ntiles     Global number of tiles
      * @param nx                Individutal tile grid size
@@ -166,7 +170,7 @@ public:
      * @param id                Species unique identifier
      * @param parallel          Parallel configuration
      */
-    virtual void initialize( float2 const box, uint2 const global_ntiles, uint2 const nx,
+    virtual void initialize( int nmodes, float2 const box, uint2 const global_ntiles, uint2 const nx,
         float const dt, int const id );
 
     /**
@@ -174,6 +178,13 @@ public:
      * 
      */
     ~Species();
+
+    /**
+     * @brief Get the number of cylindrical modes (including fundamental mode )
+     * 
+     * @return int 
+     */
+    int get_nmodes() { return nmodes; }
 
     /**
      * @brief Set the density profile object
@@ -285,14 +296,14 @@ public:
      * @param E     Electric field
      * @param B     Magnetic field
      */
-    void push( cyl3grid<float3> * const E, cyl3grid<float3> * const B );
+    void push( Cyl3CylGrid<float> & E, Cyl3CylGrid<float> & B );
 
     /**
      * @brief Move particles (advance positions) and deposit current
      * 
      * @param current   Electric current density
      */
-    void move( cyl3grid<float3> * const current );
+    void move( Current & current );
 
     /**
      * @brief Move particles (advance positions) without depositing current

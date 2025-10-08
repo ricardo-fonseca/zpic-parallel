@@ -367,7 +367,6 @@ class grid {
      * 
      */
     void add_from_gc(){
-
         // Add along x direction
 
         // Loop over tiles

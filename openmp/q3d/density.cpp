@@ -13,6 +13,7 @@ inline void inject_uniform_kernel(
     uint2 const tile_idx, 
     bnd<unsigned int> range,
     uint3 const ppc,
+    const float q0,
     double const dr,
     ParticleData const part )
 {
@@ -38,7 +39,7 @@ inline void inject_uniform_kernel(
     // Use signed integers for the calculations below
     int const nxx = nx.x;
     int const nxy = nx.y;
-    
+
     // If range overlaps with tile
     if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
         ( rj0 < nxy ) && ( rj1 >= 0 )) {
@@ -106,7 +107,7 @@ inline void inject_uniform_kernel(
                         );
 
                         double r = ( shiftr + cell.y ) + double( pos.y );
-                        float qnorm = r * dr / ( ppc.z * ppc.y * ppc.x );
+                        float qnorm = q0 * r * dr;
 
                         int part_idx = np + grid_vol * ppc_idx + grid_idx;
 
@@ -178,24 +179,28 @@ inline void inject_uniform_kernel(
  * @brief Injects a uniform density profile
  * 
  * @param part      Particle data object
+ * @param norm      Charge normalization constant
  * @param ppc       Number of particles per cell (z,r,θ)
  * @param dx        Cell size (z,r)
  * @param ref       Position of local grid on global simulation box in simulation
  *                  units (z,r)
  * @param range     Cell range in which to inject
  */
-void Density::Uniform::inject( Particles & part, 
+void Density::Uniform::inject( Particles & part, const float norm,
     uint3 const ppc, float2 const dx, float2 const ref,
     bnd<unsigned int> range ) const
 {
     auto ntiles = part.ntiles;
+
+    /// @brief Single particle charge
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
     #pragma omp parallel for
     for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
         const uint2 tile_idx = make_uint2( tx, ty );
-        inject_uniform_kernel( tile_idx, range, ppc, dx.y, part );
+        inject_uniform_kernel( tile_idx, range, ppc, q0, dx.y, part );
     }
 }
 
@@ -315,7 +320,7 @@ template < coord::cyl dir >
 void inject_step_kernel( 
     uint2 const tile_idx, 
     bnd<unsigned int> range,
-    const float step, const uint3 ppc,
+    const float step, const uint3 ppc, const float q0,
     double const dr,
     ParticleData const part )
 {
@@ -380,7 +385,7 @@ void inject_step_kernel(
         }
 
         // Charge normalization
-        auto qnorm =  dr / ( ppc.z * ppc.y * ppc.x );
+        auto qnorm =  q0 * dr;
         auto α = ( ppc.y % 2 == 0) ? 
             ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
             (2. / 3.);
@@ -445,13 +450,15 @@ void inject_step_kernel(
  *                  units
  * @param range     Cell range in which to inject
  */
-void Density::Step::inject( Particles & part,
+void Density::Step::inject( Particles & part, const float norm,
     uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
 {    
     /// @brief Step position (normalized to node grid coordinates)
     float step_pos;
 
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    /// @brief Single particle charge
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
     switch( dir ) {
     case( coord::z ):
@@ -460,7 +467,7 @@ void Density::Step::inject( Particles & part,
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
             inject_step_kernel <coord::z> (
-                tile_idx, range, step_pos, ppc, dx.y,
+                tile_idx, range, step_pos, ppc, q0, dx.y,
                 part );
         }
         break;
@@ -470,7 +477,7 @@ void Density::Step::inject( Particles & part,
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
             inject_step_kernel <coord::r> (
-                tile_idx, range, step_pos, ppc, dx.y,
+                tile_idx, range, step_pos, ppc, q0, dx.y,
                 part );
         }
         break;
@@ -581,7 +588,7 @@ void np_inject_step_kernel(
  * @param range     Cell range in which to inject
  * @param np        (out) Number of particles to inject per tile
  */
-void Density::Step::np_inject( Particles & part, 
+void Density::Step::np_inject( Particles & part,
     uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
 {
@@ -631,7 +638,7 @@ template < coord::cyl dir >
 void inject_slab_kernel( 
     uint2 const tile_idx,
     bnd<unsigned int> range,
-    const float start, const float finish, uint3 ppc,
+    const float start, const float finish, uint3 ppc, const float q0, 
     double const dr,
     ParticleData const part )
 {
@@ -693,7 +700,7 @@ void inject_slab_kernel(
         }
 
         // Charge normalization
-        auto qnorm =  dr / ( ppc.z * ppc.y * ppc.x );
+        auto qnorm =  q0 * dr;
         auto α = ( ppc.y % 2 == 0) ? 
             ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
             (2. / 3.);
@@ -760,7 +767,7 @@ void inject_slab_kernel(
  *                  units
  * @param range     Cell range in which to inject
  */
-void Density::Slab::inject( Particles & part,
+void Density::Slab::inject( Particles & part, const float norm,
     uint3 const ppc,float2 const dx, float2 const ref,
     bnd<unsigned int> range ) const
 {
@@ -771,6 +778,9 @@ void Density::Slab::inject( Particles & part,
 
     const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
+    /// @brief Single particle charge
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
+
     switch( dir ) {
     case( coord::z ):
         slab_begin = (begin - ref.x)/ dx.x;
@@ -779,7 +789,7 @@ void Density::Slab::inject( Particles & part,
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
             inject_slab_kernel < coord::z > (
-                tile_idx, range, slab_begin, slab_end, ppc, dx.y,
+                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
                 part );
         }
         break;
@@ -790,7 +800,7 @@ void Density::Slab::inject( Particles & part,
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
             inject_slab_kernel < coord::r > (
-                tile_idx, range, slab_begin, slab_end, ppc, dx.y,
+                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
                 part );
         }
         break;
@@ -962,7 +972,7 @@ void Density::Slab::np_inject( Particles & part,
 inline void inject_sphere_kernel( 
     uint2 const tile_idx,
     bnd<unsigned int> range,
-    float2 center, float radius, float2 dx, uint3 ppc,
+    const float2 center, const float radius, const float2 dx, uint3 ppc, const float q0,
     ParticleData const part )
 {
 
@@ -1025,7 +1035,7 @@ inline void inject_sphere_kernel(
         }
 
         // Charge normalization
-        auto qnorm =  1. / ( ppc.z * ppc.y * ppc.x );
+        auto qnorm =  q0;
         auto α = ( ppc.y % 2 == 0) ? 
             ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
             (2. / 3.);
@@ -1087,7 +1097,7 @@ inline void inject_sphere_kernel(
  *                  units
  * @param range     Cell range in which to inject
  */
-void Density::Sphere::inject( Particles & part,
+void Density::Sphere::inject( Particles & part, const float norm,
     uint3 const ppc, float2 const dx, float2 const ref,
     bnd<unsigned int> range ) const
 {
@@ -1096,11 +1106,14 @@ void Density::Sphere::inject( Particles & part,
     sphere_center.y -= ref.y;
     const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
+    /// @brief Single particle charge
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
+
     #pragma omp parallel for
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
         const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
         inject_sphere_kernel (
-            tile_idx, range, sphere_center, radius, dx, ppc,
+            tile_idx, range, sphere_center, radius, dx, ppc, q0,
             part );
     }
 }

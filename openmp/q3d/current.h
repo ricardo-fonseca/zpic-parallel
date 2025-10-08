@@ -17,11 +17,8 @@ class Current {
 
     private:
 
-    /// @brief Simulation box size
-    float2 box;
-
     /// @brief cell size
-    float2 dx;
+    const float2 dx;
     
     /// @brief time step
     float dt;
@@ -45,6 +42,8 @@ class Current {
 
     /// @brief Number of cylindrical modes (including fundamental mode)
     const int nmodes;
+    /// @brief Simulation box size
+    const float2 box;
 
     /// @brief Current density
     Cyl3CylGrid<float> * J;
@@ -62,9 +61,10 @@ class Current {
      * @param dt        Time step
      */
     Current( unsigned int nmodes, uint2 const ntiles, uint2 const nx, float2 const box, float const dt ):
-        box(box), 
+        dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
         dt(dt),
-        nmodes( nmodes )
+        nmodes( nmodes ),
+        box(box)
     {
         // Guard cells (1 below, 2 above)
         bnd<unsigned int> gc;
@@ -80,7 +80,7 @@ class Current {
 
         // Set default boundary conditions
         bc.x.lower = bc.x.upper = current::bc::periodic;
-        bc.y.lower = current::bc::axial; 
+        bc.y.lower = current::bc::axial;
         bc.y.upper = current::bc::none;
 
         // Set default filtering
@@ -97,6 +97,32 @@ class Current {
     ~Current() {
         delete (filter);
         delete (J);
+    }
+
+    /**
+     * @brief Get the number of modes (including mode 0)
+     * 
+     * @return auto 
+     */
+    auto get_nmodes() { return J -> get_nmodes(); };
+
+    /**
+     * @brief Get mode 0 cyl. grid (real)
+     * 
+     * @return auto& 
+     */
+    auto & mode0() {
+        return J -> mode0();
+    }
+
+    /**
+     * @brief Get mode m > 0 cyl. grid (complex)
+     * 
+     * @param m 
+     * @return auto& 
+     */
+    auto & mode( int m ) {
+        return J -> mode( m );
     }
 
     /**

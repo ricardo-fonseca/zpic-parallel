@@ -76,11 +76,13 @@ class CylGrid {
         grid_0 = new G( ntiles, nx, gc );
         grid_0 -> name = name + "-m0";
 
-        grid_m.reserve( nmodes - 1 );
-        for ( int i = 0; i < nmodes - 1; i++ ) {
-            auto * m = new cG( ntiles, nx, gc );
-            m -> name = name + "-m" + std::to_string(i+1);
-            grid_m.push_back( m );
+        if ( nmodes > 1 ) {
+            grid_m.reserve( nmodes - 1 );
+            for ( int i = 0; i < nmodes - 1; i++ ) {
+                auto * m = new cG( ntiles, nx, gc );
+                m -> name = name + "-m" + std::to_string(i+1);
+                grid_m.push_back( m );
+            }
         }
 
         set_periodic( periodic );

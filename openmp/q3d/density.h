@@ -18,7 +18,7 @@ namespace Density {
 
         virtual Profile * clone() const = 0;
         
-        virtual void inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const = 0;
+        virtual void inject( Particles & part, float const norm, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const = 0;
     
         virtual void np_inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const = 0;
 
@@ -38,7 +38,7 @@ namespace Density {
         None * clone() const override {
             return new None( n0 );
         };
-        void inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override {
+        void inject( Particles & part, float const norm, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override {
             // no injection
         };
         void np_inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override {
@@ -61,7 +61,7 @@ namespace Density {
         Uniform * clone() const override {
             return new Uniform(n0);
         };
-        void inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void inject( Particles & part, float const norm, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
         void np_inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
@@ -89,7 +89,7 @@ namespace Density {
             return new Step( dir, n0, pos );
         };
 
-        void inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void inject( Particles & part, float const norm, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
         void np_inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
@@ -119,7 +119,7 @@ namespace Density {
             return new Slab( dir, n0, begin, end );
         };
 
-        void inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void inject( Particles & part, float const norm, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
         void np_inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
@@ -146,7 +146,7 @@ namespace Density {
         Sphere * clone() const override { 
             return new Sphere(n0, center, radius);
         };
-        void inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
+        void inject( Particles & part, float const norm, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override;
         void np_inject( Particles & part, uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range, int * np ) const override;
     };
 
