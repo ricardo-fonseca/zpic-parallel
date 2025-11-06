@@ -353,7 +353,7 @@ class grid {
      * 
      */
     void copy_to_gc()  {
-
+        
         // Copy along x direction
         copy_to_gc_x();
 

@@ -378,13 +378,13 @@ def complex_grid2d( filename : str, part = 'real', **kwargs ):
         title = info.grid.name    
 
     if ( part == 'real' ):
-        title = "\\Re {:s}".format(title)
+        title = "\\Re \\; {:s}".format(title)
     elif ( part == 'imag' ):
-        title = "\\Im {:s}".format(title)
+        title = "\\Im \\; {:s}".format(title)
     elif ( part == 'abs'):
         title = "\\left| {:s} \\right|".format(title)
     elif ( part == 'angle' ):
-        title = "Arg \\,{:s}".format(title)
+        title = "Arg \\; \\,{:s}".format(title)
 
     if ( info.iteration ):
         if ( info.iteration.tunits ):

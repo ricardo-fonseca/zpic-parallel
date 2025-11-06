@@ -93,8 +93,14 @@ class Pulse {
         auto & E1 = emf.E -> mode(1);
         auto & B1 = emf.B -> mode(1);
 
+        // Create temporary grids
         cyl3grid<std::complex<float>> tmp_E( E1.ntiles, E1.nx, E1.gc );
         cyl3grid<std::complex<float>> tmp_B( B1.ntiles, B1.nx, B1.gc );
+        
+        // Disable periodic boundaries
+        // This is critical in cylindrical geometries as the laser will touch the lower bound.
+        tmp_E.set_periodic(int2{0});
+        tmp_B.set_periodic(int2{0});
 
         // Get mode m = 1 laser fields
         int ierr = launch( tmp_E, tmp_B, emf.box );

@@ -130,6 +130,56 @@ void yee0_e(
     }
 }
 
+void yee0J_e( 
+    cyl_float3 * const __restrict__ E, 
+    cyl_float3 const * const __restrict__ B, 
+    uint2 const nx, int const jstride, 
+    cyl_float3 const * const __restrict__ J, int const J_jstride, 
+    const double dt, float2 const dx, const int ir0 )
+{
+    // cylindrical cell sizes
+    const auto dz    = dx.x;
+    const auto dr    = dx.y;
+
+    const auto dt_dz = dt / dz;
+    const auto dt_dr = dt / dr;
+
+    // Standard advance away from axial boundary
+    const int j0 = ( ir0 > 0 ) ? 0 : 1;
+
+    for( int j = j0; j < static_cast<int>(nx.y) + 2; j ++ ) {
+
+        /// @brief r at center of j-1 cell, normalized to Δr
+        float rcm  = ir0 + j - 1;
+        /// @brief r at center of j cell, normalized to Δr
+        float rc   = ir0 + j;
+        /// @brief Δt/r at the lower edge of j cell
+        float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
+
+        for( int i = 0; i < static_cast<int>(nx.x) + 2; i++ ) {
+
+            E[i + j*jstride].r += ( - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ) )
+                                  - dt * J[i + j*J_jstride].r;
+
+            E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r) - 
+                                      dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) )
+                                  - dt * J[i + j*J_jstride].θ;
+
+            E[i + j*jstride].z += ( + dt_rm * ( rc * B[i + j*jstride].θ - rcm * B[i + (j-1)*jstride].θ) )
+                                  - dt * J[i + j*J_jstride].z;
+        }
+    }
+
+    // Solve for axial boundary if needed
+    if ( ir0 == 0 ) {
+        for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
+            E[i +   0 *jstride].r = 0;
+            E[i +   0 *jstride].θ = -E[i + 1*jstride].θ;
+            E[i +   0 *jstride].z = E[i + 1*jstride].z;
+        }
+    }
+}
+
 /**
  * @brief B advance for Yee algorithm (mode m)
  * 
@@ -292,6 +342,75 @@ void yeem_e(
     }
 }
 
+void yeemJ_e( 
+    const int m,
+    cyl_cfloat3 * const __restrict__ E, 
+    cyl_cfloat3 const * const __restrict__ B, 
+    uint2 const nx, int const jstride, 
+    cyl_cfloat3 const * const __restrict__ J, int const J_jstride, 
+    const double dt, float2 const dx, const int ir0 )
+{
+    // cylindrical cell sizes
+    const auto dz    = dx.x;
+    const auto dr    = dx.y;
+
+    const float dt_dz = dt / dz;
+    const float dt_dr = dt / dr;
+
+    // Standard advance away from axial boundary
+    const int j0 = ( ir0 > 0 ) ? 0 : 1;
+
+    /// @brief m * imaginary unit
+    const std::complex<float> mI{0,static_cast<float>(m)};
+
+    for( int j = j0; j < static_cast<int>(nx.y) + 2; j ++ ) {
+
+        /// @brief r/Δr at center of j-1 cell
+        float rcm  = ir0 + j - 1;
+        /// @brief rΔr at center of j cell
+        float rc   = ir0 + j;
+        /// @brief Δt/r at the lower edge of j cell
+        float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
+        /// @brief Δt/r at the center of j cell
+        float dt_rc = dt / ( ( ir0 + j ) * dr );
+
+        for( int i = 0; i < static_cast<int>(nx.x) + 2; i++ ) {           
+            E[i + j*jstride].r += ( 
+                - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)   // Δt ∂Bθ/∂z 
+                + dt_rc * mI * B[ i + j * jstride ].z                      // (Δt/r) m I Bz
+            ) - dt * J[i + j*J_jstride].r;
+
+            E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
+                                    - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) )
+                                    - dt * J[i + j*J_jstride].θ;
+
+            E[i + j*jstride].z +=  dt_rm * (                                // Δt/r
+                + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ    // ∂(r Bθ)/∂r 
+                - mI * B[i + j * jstride].r                               // m I Br
+            ) - dt * J[i + j*J_jstride].z;
+
+        }
+    }
+
+    // Solve for axial boundary if needed
+    if ( ir0 == 0 ) {
+        if ( m == 1 ) {
+            // Mode m = 1 is a special case
+            for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
+                E[ i + 0 *jstride ].r = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;  
+                E[ i + 0 *jstride ].θ =  E[ i + 1 * jstride ].θ;   // ∂Bθ/∂r(r=0) = 0
+                E[ i + 0 *jstride ].z = -E[ i + 1 * jstride ].z;  // Ez(r=0) = 0
+            }
+        } else {
+            for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
+                E[ i + 0 *jstride ].r = 0;
+                E[ i + 0 *jstride ].θ = - E[ i + 1 *jstride ].θ;    // Eθ(r=0) = 0
+                E[ i + 0 *jstride ].z = - E[ i + 1 *jstride ].z;    // Ez(r=0) = 0;  
+            }
+        }
+    }
+}
+
 /**
  * @brief Construct a new EMF object
  * 
@@ -308,11 +427,11 @@ EMF::EMF( unsigned int nmodes, uint2 const ntiles, uint2 const nx, float2 const 
     nmodes( nmodes ),
     box(box)
 {
-    auto cour = zpic::courant( dx );
+    auto cour = zpic::courant( nmodes, dx );
     if ( dt >= cour ){
-        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
-        std::cerr << "(*error*) For the current resolution " << dx;
-        std::cerr << " the maximum timestep is dt = " << cour <<'\n';
+        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n"
+                  << "(*error*) For the no. modes / current resolution " << nmodes << " / " << dx
+                  << " the maximum timestep is dt = " << cour << '\n';
         exit(-1);
     }
 
@@ -431,6 +550,114 @@ void EMF::advance() {
     // Advance internal iteration number
     iter += 1;    
 
+    // Move simulation window if needed
+    if ( moving_window.active() ) move_window();
+}
+
+/**
+ * @brief Advance EM fields 1 time step including current
+ * 
+ */
+void EMF::advance( Current & current ) {
+
+    // Get tile information from mode0
+    auto & E0 = E -> mode0();
+    auto & B0 = B -> mode0();
+
+    const auto ntiles    = E0.ntiles;
+    const auto field_vol = E0.tile_vol;
+    const auto nx        = E0.nx;
+    const auto offset    = E0.offset;
+    const int  rstride   = E0.ext_nx.x;
+
+    auto & J0 = current.mode0();
+    auto J_rstride = J0.ext_nx.x;
+
+    // Solve for mode 0
+    #pragma omp parallel for
+    for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
+
+        int ir0 = ( tid / ntiles.x ) * nx.y;
+        const auto tile_off = tid * field_vol;
+
+        // Copy E and B into shared memory
+        cyl_float3 E_local[ field_vol ];
+        cyl_float3 B_local[ field_vol ];
+        for( unsigned i = 0; i < field_vol; i++ ) {
+            E_local[i] = E0.d_buffer[ tile_off + i ];
+            B_local[i] = B0.d_buffer[ tile_off + i ];
+        }
+
+        auto * const __restrict__ tile_E = & E_local[ offset ];
+        auto * const __restrict__ tile_B = & B_local[ offset ];
+
+        // Use J from global memory
+        const auto J_tile_off = tid * J0.tile_vol + J0.offset;
+        auto * const __restrict__ tile_J = & J0.d_buffer[ J_tile_off ];
+
+        yee0_b(  tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
+        yee0J_e( tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt,   dx, ir0 );
+        yee0_b(  tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
+
+        // Copy data to global memory
+        for( unsigned i = 0; i < field_vol; i++ ) {
+            E0.d_buffer[ tile_off + i ] = E_local[i];
+            B0.d_buffer[ tile_off + i ] = B_local[i];
+        }
+    }
+
+    // Solve for high-order modes
+    for( unsigned m = 1; m < nmodes; m++ ) {
+        auto & Em = E -> mode(m);
+        auto & Bm = B -> mode(m);
+        auto & Jm = current.mode(m);
+
+        #pragma omp parallel for
+        for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
+
+            const auto tile_off = tid * field_vol;
+            int ir0 = ( tid / ntiles.x ) * nx.y;
+ 
+            // Copy E and B into shared memory
+            cyl_cfloat3 E_local[ field_vol ];
+            cyl_cfloat3 B_local[ field_vol ];
+            for( unsigned i = 0; i < field_vol; i++ ) {
+                E_local[i] = Em.d_buffer[ tile_off + i ];
+                B_local[i] = Bm.d_buffer[ tile_off + i ];
+            }
+
+            auto * const __restrict__ tile_E = & E_local[ offset ];
+            auto * const __restrict__ tile_B = & B_local[ offset ];
+
+            const auto J_tile_off = tid * J0.tile_vol + J0.offset;
+            auto * const __restrict__ tile_J = & Jm.d_buffer[ J_tile_off ];
+
+
+            yeem_b(  m, tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
+            yeem_e( m, tile_E, tile_B, nx, rstride, dt,   dx, ir0 );
+            // yeemJ_e( m, tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt, dx, ir0 );
+            yeem_b(  m, tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
+
+            // Copy data to global memory
+            for( unsigned i = 0; i < field_vol; i++ ) {
+                Em.d_buffer[ tile_off + i ] = E_local[i];
+                Bm.d_buffer[ tile_off + i ] = B_local[i];
+            }
+        }        
+    }
+
+    // Update guard cells with new values
+    E -> copy_to_gc();
+    B -> copy_to_gc();
+
+    // Do additional bc calculations if needed
+    // process_bc();
+
+    // Advance internal iteration number
+    iter += 1;    
+
+    // Move simulation window if needed
+    if ( moving_window.active() ) move_window();
 }
 
 /**
@@ -440,7 +667,7 @@ void EMF::advance() {
  * @param fc        Which field component to save (r, θ or z)
  * @param m         Mode
  */
-void EMF::save( emf::field const field, const fcomp::cyl fc, unsigned m ) {
+void EMF::save( emf::field const field, const fcomp::cyl fc, const unsigned m ) {
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
     std::string path{"EMF"};
@@ -523,15 +750,14 @@ void EMF::save( emf::field const field, const fcomp::cyl fc, unsigned m ) {
 /**
  * @brief Get EM field energy
  * 
- * Energy is reported per mode
- * 
  * @note The energy will be recalculated each time this routine is called;
  * @note Axial cell values are currently being ignored
  * 
- * @param ene_E     Electric field energy
- * @param ene_b     Magnetic field energy
- */
-void EMF::get_energy( cyl_double3 ene_E[], cyl_double3 ene_B[] ) {
+* @param ene_E     Electric field energy
+* @param ene_b     Magnetic field energy
+* @param m         Mode
+*/
+void EMF::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const unsigned m ) {
 
     // Get tile information from mode0
     auto & E0 = E -> mode0();
@@ -546,15 +772,10 @@ void EMF::get_energy( cyl_double3 ene_E[], cyl_double3 ene_B[] ) {
     const double dz = dx.x;
     const double dr = dx.y;
 
-    for( int i = 0; i < nmodes; i++ ) {
-        ene_E[i] = ene_B[i] = cyl_double3{0};
-    }
+    double ene_Er{0}, ene_Eθ{0}, ene_Ez{0};
+    double ene_Br{0}, ene_Bθ{0}, ene_Bz{0};
 
-    // Get energy for mode 0
-    {
-        double ene_Er{0}, ene_Eθ{0}, ene_Ez{0};
-        double ene_Br{0}, ene_Bθ{0}, ene_Bz{0};
-
+    if ( m == 0 ) {
         #pragma omp parallel for \
             reduction(+:ene_Er,ene_Eθ,ene_Ez,ene_Br,ene_Bθ,ene_Bz)
         for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {    
@@ -592,18 +813,14 @@ void EMF::get_energy( cyl_double3 ene_E[], cyl_double3 ene_B[] ) {
             ene_Er += tile_ene_E.r; ene_Eθ += tile_ene_E.θ; ene_Ez += tile_ene_E.z;
             ene_Br += tile_ene_B.r; ene_Bθ += tile_ene_B.θ; ene_Bz += tile_ene_B.z;
         }
+    } else {
+        if ( m > nmodes ) {
+            std::cerr << "(*error*) Invalid mode (" << m << ") requested, aborting...\n";
+            std::exit(1);
+        }
 
-        ene_E[0] = cyl_double3{ ene_Ez, ene_Er, ene_Eθ };
-        ene_B[0] = cyl_double3{ ene_Bz, ene_Br, ene_Bθ };
-    }
-
-    // Get energy for high order modes
-    for( int m = 1; m < nmodes; m++ ) {
         auto & Em = E -> mode(m);
         auto & Bm = B -> mode(m);
-
-        double ene_Er{0}, ene_Eθ{0}, ene_Ez{0};
-        double ene_Br{0}, ene_Bθ{0}, ene_Bz{0};
 
         #pragma omp parallel for \
             reduction(+:ene_Er,ene_Eθ,ene_Ez,ene_Br,ene_Bθ,ene_Bz)
@@ -641,15 +858,31 @@ void EMF::get_energy( cyl_double3 ene_E[], cyl_double3 ene_B[] ) {
             ene_Er += tile_ene_E.r; ene_Eθ += tile_ene_E.θ; ene_Ez += tile_ene_E.z;
             ene_Br += tile_ene_B.r; ene_Bθ += tile_ene_B.θ; ene_Bz += tile_ene_B.z;
         }
-
-        ene_E[m] += cyl_double3{ ene_Ez, ene_Er, ene_Eθ };
-        ene_B[m] += cyl_double3{ ene_Bz, ene_Br, ene_Bθ };
     }
 
-    // Multiply by 0.5 * cell volume
-    for( int m = 0; m < nmodes; m++ ) {
-        const double norm = dz * dr * M_PI;
-        ene_E[m] *= norm;
-        ene_B[m] *= norm;
+    ene_E = cyl_double3{ ene_Ez, ene_Er, ene_Eθ };
+    ene_B = cyl_double3{ ene_Bz, ene_Br, ene_Bθ };
+
+    const double norm = dz * dr * M_PI;
+    ene_E *= norm;
+    ene_B *= norm;
+}
+
+/**
+ * @brief Move simulation window
+ * 
+ * When using a moving simulation window checks if a window move is due
+ * at the current iteration and if so shifts left the data, zeroing the
+ * rightmost cells.
+ * 
+ */
+void EMF::move_window() {
+
+    if ( moving_window.needs_move( iter * dt ) ) {
+
+        E->x_shift_left(1);
+        B->x_shift_left(1);
+
+        moving_window.advance();
     }
 }

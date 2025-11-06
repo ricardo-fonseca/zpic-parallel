@@ -111,8 +111,17 @@ inline void sys_info() {
  * @param dx        Cell size
  * @return float    CFL time limit
  */
-inline float courant( const float2 dx ) {
-    return std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+inline float courant( const unsigned m, const float2 dx ) {
+    auto dz = dx.x;
+    auto dr = dx.y;
+
+    auto cour = 1.0f/(dz*dz) + 1.0f/(dr*dr);
+
+    cour += ( m > 1 ) ?
+            ( 4.0f * (m-1) * (m-1) )/ (dr * M_PI * dr * M_PI):
+            1.0f / (dr * M_PI * dr * M_PI);
+
+    return std::sqrt( 1.0f/cour );
 }
 
 /**
@@ -122,9 +131,9 @@ inline float courant( const float2 dx ) {
  * @param box       Simulation box size (global)
  * @return float    CFL time limit
  */
-inline float courant( const uint2 gnx, const float2 box  ) {
-    float2 dx = make_float2( box.x/gnx.x, box.y/gnx.y);
-    return courant(dx);
+inline float courant( const unsigned m, const uint2 gnx, const float2 box  ) {
+    auto dx = make_float2( box.x/gnx.x, box.y/gnx.y);
+    return courant(m,dx);
 }
 
 /**
@@ -135,9 +144,9 @@ inline float courant( const uint2 gnx, const float2 box  ) {
  * @param box       Simulation box size (global)
  * @return float    CFL time limit
  */
-inline float courant( const uint2 ntiles, const uint2 nx, const float2 box ) {
-    float2 dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
-    return courant(dx);
+inline float courant( const unsigned m, const uint2 ntiles, const uint2 nx, const float2 box ) {
+    auto dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
+    return courant(m,dx);
 }
 
 }

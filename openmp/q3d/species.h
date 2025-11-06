@@ -11,6 +11,7 @@
 #include "current.h"
 
 #include "density.h"
+#include "moving_window.h"
 #include "udist.h"
 
 namespace phasespace {
@@ -103,6 +104,9 @@ private:
 
     /// @brief Boundary condition
     species::bc_type bc;
+
+    /// @brief Moving window information
+    MovingWindow moving_window;
 
     /// @brief Initial velocity distribution
     UDistribution::Type * udist;
@@ -267,6 +271,25 @@ public:
      */
     species::bc_type get_bc( ) { return bc; }
 
+    /**
+     * @brief Sets moving window algorithm
+     * 
+     * This method can only be called before the simulation has started (iter = 0)
+     * 
+     * @return int  0 on success, -1 on error
+     */
+    virtual int set_moving_window() { 
+        if ( iter == 0 ) {
+            moving_window.init( dx.x );
+
+            bc.x.lower = bc.x.upper = species::bc::open;
+            particles -> periodic_z = false;
+            return 0;
+        } else {
+            std::cerr << "(*error*) set_moving_window() called with iter != 0\n";
+            return -1; 
+        }
+    }
 
     /**
      * @brief Inject particles in the simulation box
@@ -293,10 +316,9 @@ public:
     /**
      * @brief Advance particle velocities
      * 
-     * @param E     Electric field
-     * @param B     Magnetic field
+     * @param emf   EM Field
      */
-    void push( Cyl3CylGrid<float> & E, Cyl3CylGrid<float> & B );
+    void push( EMF const &emf );
 
     /**
      * @brief Move particles (advance positions) and deposit current
@@ -304,6 +326,13 @@ public:
      * @param current   Electric current density
      */
     void move( Current & current );
+
+    /**
+     * @brief Move particles (advance positions), deposit current and shift positions
+     * 
+     * @param current   Electric current density
+     */
+    void move( Current & current, int2 const shift );
 
     /**
      * @brief Move particles (advance positions) without depositing current
@@ -330,6 +359,15 @@ public:
     virtual void advance( Current &current );
 
     /**
+     * @brief Free stream particles 1 timestep and update moving window
+     * 
+     * @param emf       EM fields
+     * @param current   Electric current density
+     */
+    virtual void advance_mov_window( Current &current );
+
+
+    /**
      * @brief Advance particles 1 timestep
      * 
      * Momentum is advanced from EMF fields and current is deposited
@@ -338,6 +376,14 @@ public:
      * @param current   Electric current density
      */
     virtual void advance( EMF const &emf, Current &current );
+
+    /**
+     * @brief Advance particles 1 timestep and update moving window
+     * 
+     * @param emf       EM fields
+     * @param current   Electric current density
+     */
+    virtual void advance_mov_window( EMF const &emf, Current &current );
 
     /**
      * @brief Deposit charge density (mode 0)

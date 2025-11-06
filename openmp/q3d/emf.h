@@ -5,7 +5,7 @@
 #include "utils.h"
 
 #include "bnd.h"
-// #include "current.h"
+#include "current.h"
 #include "moving_window.h"
 
 #include "cyl3modes.h"
@@ -181,7 +181,7 @@ class EMF {
      * 
      * @param current   Current density
      */
-    // void advance( Current & current );
+    void advance( Current & current );
 
     /**
      * @brief Save EM field component to file
@@ -190,19 +190,19 @@ class EMF {
      * @param fc        Which field component to save (r, θ or z)
      * @param m         Mode
      */
-    void save( emf::field const field, const fcomp::cyl fc, unsigned m );
+    void save( emf::field const field, const fcomp::cyl fc, const unsigned m );
     
     /**
      * @brief Get EM field energy
      * 
-     * Energy is reported per mode
      * 
      * @note The energy will be recalculated each time this routine is called
      * 
      * @param ene_E     Electric field energy
      * @param ene_b     Magnetic field energy
+     * @param m         Mode
      */
-    void get_energy( cyl_double3 ene_E[], cyl_double3 ene_b[] );
+    void get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const unsigned m );
 
 };
 

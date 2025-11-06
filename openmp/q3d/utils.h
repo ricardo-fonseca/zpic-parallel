@@ -250,6 +250,36 @@ namespace ansi {
 
 }
 
+#include <execinfo.h>
+#include <iostream>
+#include <cstdlib>
+
+namespace debug {
+
+/**
+ * @brief Print the callstack
+ * 
+ */
+static inline void stack_trace() {
+    const int maxFrames = 64;
+    void* addrlist[maxFrames];
+
+    auto addrlen = backtrace(addrlist, maxFrames);
+    if (addrlen == 0) {
+        std::cerr << "No stack frames found.\n";
+    } else {
+        std::cout << "Stack trace:\n";
+        char** symbols = backtrace_symbols(addrlist, addrlen);
+        for (int i = 0; i < addrlen; ++i) {
+            std::cout << symbols[i] << '\n';
+        }
+        free(symbols);
+    }
+}
+
+}
+
+
 #define NOT_IMPLEMENTED {\
     std::cerr << "(*error*) " << __func__ \
               << '(' << __FILE__ << ':' << __LINE__ \

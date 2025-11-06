@@ -60,20 +60,23 @@ inline void split2d_cyl(
     // r-split
     float xr, yr, zr;
     if ( cross.y ) {
-        auto a = ops::fma( tdelta.x, tdelta.x, tdelta.y * tdelta.y );
-        auto b = ops::fma( t0.x, tdelta.x, t0.y * tdelta.y );
-        auto c = ( x0.y - rs ) * ( 2 * ix.y + x0.y + rs );
-
-        εr = - ( b + std::copysign( sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
-        if ( εr < 0 || εr >= 1 ) εr = c / (a * εr);
+        if ( x1.y == 0.5f ) {
+            εr = 1;
+        } else {
+            auto a = ops::fma( tdelta.x, tdelta.x, tdelta.y * tdelta.y );
+            auto b = ops::fma( t0.x, tdelta.x, t0.y * tdelta.y );
+            auto c = ( x0.y - rs ) * ( 2 * ix.y + x0.y + rs );
+            εr = - ( b + std::copysign( sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
+            if ( εr <= 0 || εr >= 1 ) εr = c / (a * εr);
+            if ( εr < 0 || εr > 1) {
+                std::cerr << "(*error*) Invalid εr: "<< εr << '\n'
+                        << "ti: " << t0 << ", tdelta: " << tdelta << '\n'
+                        << "a: " << a << ", b: " << b << ", c: " << c << '\n';
+                std::exit(1);
+            }
+        }
 
         std::cout << "(*info*) εr: " << εr << '\n';
-        if ( εr <= 0 || εr >= 1) {
-            std::cerr << "(*error*) Invalid εr: "<< εr << '\n'
-                      << "ti: " << t0 << ", tdelta: " << tdelta << '\n'
-                      << "a: " << a << ", b: " << b << ", c: " << c << '\n';
-            std::exit(1);
-        }
 
         // r-split positions
         xr = t0.x + εr * tdelta.x;
@@ -309,6 +312,25 @@ int main( void ) {
     // No angular motion
     tdelta = make_float2( delta.y * ang.x, delta.y * ang.y );
     std::cout << "delta: " << delta << ", " << tdelta << '\n';
+
+    split2d_cyl( ix, x0, delta, deltai, t0, tdelta,
+                v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
+                v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
+                v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
+                cross );
+
+    split_info( cross, 
+                v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
+                v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
+                v2_ix, v2_x0, v2_x1, v2_t0, v2_t1 );
+
+
+    // --- zr split B
+
+    std::cout << ansi::bold << "\nr-split at +0.5\n" << ansi::reset;
+
+    delta = make_float2( 0.0, 0.5 );
+    tdelta = make_float2( delta.y * ang.x, delta.y * ang.y );
 
     split2d_cyl( ix, x0, delta, deltai, t0, tdelta,
                 v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,

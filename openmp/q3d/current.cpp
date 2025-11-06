@@ -391,7 +391,7 @@ void Current::advance() {
  */
 void Current::save( const fcomp::cyl jc, unsigned m ) {
 
-    std::string vfname = "J" + std::to_string(m);      // Dataset name
+    std::string vfname  = "J" + std::to_string(m);      // Dataset name
     std::string vflabel = "J^" + std::to_string(m) + "_";    // Dataset label (for plots)
     std::string path{"CURRENT"};
 
