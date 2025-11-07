@@ -324,8 +324,6 @@ void test_beam( void ) {
     std::cout << "dt     = " << dt << '\n';
     std::cout << "ntiles = " << ntiles << '\n';
 
-    auto tmax = 10.0f;
-
     // Create simulation
     Simulation sim( 2, ntiles, nx, box, dt );
 
@@ -371,6 +369,69 @@ void test_beam( void ) {
 
 }
 
+void test_pwfa( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+    uint2 dims { 256, 256 };
+    float2 box { 25.6, 25.6 };
+
+    // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint2 nx { 32, 32 };
+    uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
+
+    auto dt = zpic::courant( 2, dims, box ) * 0.5f;
+
+    std::cout << "dt     = " << dt << '\n';
+    std::cout << "ntiles = " << ntiles << '\n';
+
+    // Create simulation
+    Simulation sim( 1, ntiles, nx, box, dt );
+
+    uint3 ppc{ 2, 2, 1 };
+
+    Species beam( "beam", -1.0f, ppc );
+    beam.set_density( Density::Sphere(1.0, float2{23.0,0.0}, 1.6)); 
+    beam.set_udist( UDistribution::Cold( float3{ 0, 0, 1e6 } ) );
+    sim.add_species( beam );
+
+    Species plasma( "plasma", -1.0f, ppc );
+    plasma.set_density( Density::Step( coord::z, 1.0, 40.96 ) ); 
+    sim.add_species( plasma );
+
+    sim.set_moving_window();
+
+    auto diag = [& sim, & beam, & plasma ]( ) {
+        // Save mode 0
+        beam.save_charge(0);
+        plasma.save_charge(0);
+        plasma.save();
+
+        sim.emf.save(emf::e, fcomp::z, 0);
+        sim.emf.save(emf::e, fcomp::r, 0);
+        sim.emf.save(emf::e, fcomp::θ, 0);
+
+        sim.emf.save(emf::b, fcomp::z, 0);
+        sim.emf.save(emf::b, fcomp::r, 0);
+        sim.emf.save(emf::b, fcomp::θ, 0);
+
+        sim.current.save( fcomp::z, 0 );
+        sim.current.save( fcomp::r, 0 );
+        sim.current.save( fcomp::θ, 0 );
+    };
+
+    while ( sim.get_t() <= 61.5 ) {
+        if ( sim.get_iter() % 10 == 0 ) diag();
+        sim.advance_mov_window();
+    }
+
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+}
 
 void test_lwfa() {
 
@@ -461,6 +522,8 @@ void test_lwfa() {
 
 #else
 
+    std::cout << "Starting simulation, dt = " << dt << '\n';
+
     while( sim.get_t() <= 1.05 * box.x ) {
         if ( sim.get_iter() % 10 == 0 ) {
             std::cout << "i = " << sim.get_iter() << '\n';
@@ -497,5 +560,6 @@ int main( void ) {
 
 
    // test_beam();
-   test_lwfa();
+   test_pwfa();
+   // test_lwfa();
 }

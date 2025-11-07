@@ -231,7 +231,7 @@ void current_norm_0(
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
 
-            current[ i + 1 * jstride ].r -= current[ i +   (-1) * jstride ].r;
+            current[ i + 1 * jstride ].r -= current[ i + (-1) * jstride ].r;
 
             current[ i + 1 * jstride ].θ += signθ * current[ i +   0  * jstride ].θ;
             current[ i + 2 * jstride ].θ += signθ * current[ i + (-1) * jstride ].θ;

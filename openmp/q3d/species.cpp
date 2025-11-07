@@ -490,6 +490,7 @@ inline void split2d_cyl(
             εr = - ( b + std::copysign( sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
             if ( εr <= 0 || εr >= 1 ) εr = c / (a * εr);
 
+            /*
             // std::cout << "(*info*) εr: " << εr << '\n';
             if ( εr < 0 || εr > 1) {
                 std::cerr << "(*error*) Invalid εr: "<< εr << '\n'
@@ -498,6 +499,7 @@ inline void split2d_cyl(
                         << "a: " << a << ", b: " << b << ", c: " << c << '\n';
                 std::exit(1);
             }
+            */
         }
 
         // r-split positions
@@ -664,6 +666,7 @@ void move_deposit_0(
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -937,6 +940,7 @@ void move_deposit_0(
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -1201,15 +1205,18 @@ void push_0 (
         interpolate_fld( E_m0, B_m0, jstride, ix[i], x[i], e, b );
         
         // Convert to cartesian components
+        auto cosθ = θ[i].x;
+        auto sinθ = θ[i].y;
+        
         float3 cart_e = make_float3(
-            ops::fma( e.r, θ[i].x, - e.θ * θ[i].y ),
-            ops::fma( e.r, θ[i].y, + e.θ * θ[i].x ),
-            b.z
+            ops::fma( e.r, cosθ, - e.θ * sinθ ),
+            ops::fma( e.r, sinθ, + e.θ * cosθ ),
+            e.z
         );
 
         float3 cart_b = make_float3(
-            ops::fma( b.r, θ[i].x, - b.θ * θ[i].y ),
-            ops::fma( b.r, θ[i].y, + b.θ * θ[i].x ),
+            ops::fma( b.r, cosθ, - b.θ * sinθ ),
+            ops::fma( b.r, sinθ, + b.θ * cosθ ),
             b.z
         );
 
@@ -1302,8 +1309,8 @@ void push_1 (
         interpolate_fld( E_m1, B_m1, jstride, ix[i], x[i], e1, b1 );
 
         // Get full field
-        float cosθ = θ[i].x;
-        float sinθ = θ[i].y;
+        auto cosθ = θ[i].x;
+        auto sinθ = θ[i].y;
 
         e.z += ops::fma( cosθ, real(e1.z), - sinθ * imag( e1.z ) );
         e.r += ops::fma( cosθ, real(e1.r), - sinθ * imag( e1.r ) );
@@ -1735,7 +1742,6 @@ void Species::advance( EMF const &emf, Current &current ) {
 }
 
 void Species::advance_mov_window( Current &current ) {
-
 
     if ( moving_window.needs_move( (iter+1) * dt ) ) {
 
@@ -2491,7 +2497,7 @@ void Species::save() const {
     }
 
     if ( np > 0 ) {
-        float2 scale{ dx.x, 0 };
+        float2 scale{ dx.x, static_cast<float>(moving_window.motion()) };
         particles -> gather( part::quant::z, scale, h_data );
     }
     zdf::add_quant_part_file( part_file, "z", h_data, np );

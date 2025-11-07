@@ -55,13 +55,13 @@ void yee0_b(
         for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
 
             B[ i +   0 *jstride ].r = - B[ i + 1*jstride ].r;  
-            // B[ i + (-1)*jstride ].r = - B[ i + 2*jstride ].r;  // not used
-
             B[ i +   0  *jstride ].θ = 0;
-            // B[ i +  (-1)*jstride ].θ = - B[ i + 1*jstride ].θ; // not used
-
             B[ i +   0 *jstride ].z += - 4 * dt_dr * E[ i + 1*jstride ].θ;  
-            // B[ i + (-1)*jstride ].z  = B[ i + 1 *jstride ].z; // not used
+
+            // The guard cell values are not used
+            // B[ i + (-1)*jstride ].r = - B[ i + 2*jstride ].r;
+            // B[ i + (-1)*jstride ].θ = - B[ i + 1*jstride ].θ;
+            // B[ i + (-1)*jstride ].z =   B[ i + 1*jstride ].z;
 
         }
     }
@@ -119,13 +119,13 @@ void yee0_e(
     if ( ir0 == 0 ) {
         for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
             E[i +   0 *jstride].r = 0;
-            // E[i + (-1)*jstride].r = -E[i + 1*jstride].r; // not used
-
             E[i +   0 *jstride].θ = -E[i + 1*jstride].θ;
-            // E[i + (-1)*jstride].θ = -E[i + 2*jstride].θ; // not used
-
             E[i +   0 *jstride].z = E[i + 1*jstride].z;
-            // E[i + (-1)*jstride].z = E[i + 2*jstride].z; // not used
+
+            // The guard cell values are not used
+            // E[i + (-1)*jstride].r = -E[i + 1*jstride].r;
+            // E[i + (-1)*jstride].θ = -E[i + 2*jstride].θ;
+            // E[i + (-1)*jstride].z =  E[i + 2*jstride].z;
         }
     }
 }
@@ -175,7 +175,7 @@ void yee0J_e(
         for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
             E[i +   0 *jstride].r = 0;
             E[i +   0 *jstride].θ = -E[i + 1*jstride].θ;
-            E[i +   0 *jstride].z = E[i + 1*jstride].z;
+            E[i +   0 *jstride].z =  E[i + 1*jstride].z;
         }
     }
 }
@@ -629,7 +629,7 @@ void EMF::advance( Current & current ) {
             auto * const __restrict__ tile_E = & E_local[ offset ];
             auto * const __restrict__ tile_B = & B_local[ offset ];
 
-            const auto J_tile_off = tid * J0.tile_vol + J0.offset;
+            const auto J_tile_off = tid * Jm.tile_vol + Jm.offset;
             auto * const __restrict__ tile_J = & Jm.d_buffer[ J_tile_off ];
 
 
