@@ -86,7 +86,7 @@ void interpolate_fld(
           ( B[i  + (jh+1)*jstride].z * s0z  + B[i+1  + (jh+1)*jstride].z * s1z ) * s1rh;
 
     b.r = ( B[ih +      j*jstride].r * s0zh + B[ih+1 +      j*jstride].r * s1zh ) * s0r +
-          ( B[ih + (j +1)*jstride].r * s0zh + B[ih+1 +  (j+1)*jstride].r * s1zh ) * s1r;
+          ( B[ih + (j +1)*jstride].r * s0zh + B[ih+1 + (j +1)*jstride].r * s1zh ) * s1r;
 
     b.θ = ( B[ih +     jh*jstride].θ * s0zh + B[ih+1 +     jh*jstride].θ * s1zh ) * s0rh +
           ( B[ih + (jh+1)*jstride].θ * s0zh + B[ih+1 + (jh+1)*jstride].θ * s1zh ) * s1rh;
@@ -480,6 +480,10 @@ inline void split2d_cyl(
     // r-split
     float xr, yr, zr;
     if ( cross.y ) {
+
+#if 0
+        // New splitter
+        // This has some roundoff issues
         if ( x1.y == 0.5f ) { 
             εr = 1;
         } else {
@@ -488,20 +492,19 @@ inline void split2d_cyl(
             auto c = ( x0.y - rs ) * ( 2 * (ir0 + ix.y) + x0.y + rs );
 
             εr = - ( b + std::copysign( sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
-            if ( εr <= 0 || εr >= 1 ) εr = c / (a * εr);
-
-            /*
-            // std::cout << "(*info*) εr: " << εr << '\n';
-            if ( εr < 0 || εr > 1) {
-                std::cerr << "(*error*) Invalid εr: "<< εr << '\n'
-                        << "ir : " << ir0 + ix.y << ", ri: " << x0.y << ", rdelta: " << delta.y << ", rf = " << x1.y << '\n'
-                        << "ti: " << t0 << ", tdelta: " << tdelta << '\n'
-                        << "a: " << a << ", b: " << b << ", c: " << c << '\n';
-                std::exit(1);
-            }
-            */
+            if ( εr < 0 || εr > 1 ) εr = c / (a * εr);
         }
+#else
+        // Old splitter (OSIRIS)
+        εr = (rs - x0.y) / delta.y;
+#endif
 
+/*
+        if ( εr < 0 || εr > 1) {
+            std::cerr << "(*error*) Invalid εr: "<< εr << '\n';
+            std::exit(1);
+        }
+*/
         // r-split positions
         xr = t0.x + εr * tdelta.x;
         yr = t0.y + εr * tdelta.y;
@@ -583,16 +586,15 @@ inline void split2d_cyl(
 }
 
 /**
- * @brief Move particles and deposit current (mode 0 only)
+ * @brief Move particles and deposit current (mode 0 only) and shift positions
  * 
  * @param tile_idx          Tile index
  * @param part              Particle data
- * @param d_current         Current grid (global)
+ * @param current_m0        Current grid (m=0)
  * @param current_offset    Offset to position [0,0] of the current grid
  * @param nx                Current grid size (internal)
  * @param ext_nx            Current grid size (external)
  * @param dt_dx             Ratio between time step and cell size
- * @param q                 Particle charge
  */
 void move_deposit_0(
     uint2 const tile_idx,
@@ -647,7 +649,7 @@ void move_deposit_0(
         auto Δy = dt_dr * rg * pu.y;
 
         /// @brief initial radial position
-        auto ri = (ir0 + ix0.y) + x0.y;
+        auto ri = ( ir0 + ix0.y ) + x0.y;
         auto xi = ri * θi.x;
         auto yi = ri * θi.y;
 
@@ -665,8 +667,8 @@ void move_deposit_0(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        // auto Δr = rf - ri;
+        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -788,6 +790,7 @@ void move_deposit_1(
         // Cartesian motion
         auto Δx = dt_dr * rg * pu.x;
         auto Δy = dt_dr * rg * pu.y;
+        auto Δz = dt_dz * rg * pu.z;
 
         /// @brief initial radial position
         auto ri = ( ir0 + ix0.y ) + x0.y;
@@ -808,10 +811,10 @@ void move_deposit_1(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        auto Δr = rf - ri;
 
         // Advance grid (z,r) position
-        auto Δz = dt_dz * rg * pu.z;
         float2 delta = make_float2( Δz, Δr );
 
         // Check for cell crossings and split trajectory
@@ -868,6 +871,18 @@ void move_deposit_1(
     }
 }
 
+/**
+ * @brief Move particles and deposit current (mode 0 only) and shift positions
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param current_m0        Current grid (m=0)
+ * @param current_offset    Offset to position [0,0] of the current grid
+ * @param nx                Current grid size (internal)
+ * @param ext_nx            Current grid size (external)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param shift             Cell shift
+ */
 void move_deposit_0(
     uint2 const tile_idx,
     ParticleData const part,
@@ -939,8 +954,8 @@ void move_deposit_0(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        // auto Δr = rf - ri;
+        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -999,13 +1014,13 @@ void move_deposit_0(
  * 
  * @param tile_idx          Tile index
  * @param part              Particle data
- * @param d_current         Current grid (global)
+ * @param current_m0        Current grid (m=0)
+ * @param current_m1        Current grid (m=1)
  * @param current_offset    Offset to position [0,0] of the current grid
  * @param nx                Current grid size (internal)
  * @param ext_nx            Current grid size (external)
  * @param dt_dx             Ratio between time step and cell size
- * @param q                 Particle charge
- * @param shift             Position shift
+ * @param shift             Cell shift
  */
 void move_deposit_1(
     uint2 const tile_idx,
@@ -1015,6 +1030,8 @@ void move_deposit_1(
     unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
     float2 const dt_dx, const int2 shift ) 
 {
+//    std::cout << "move_deposit_1(shift)\n";
+
     const uint2 ntiles  = part.ntiles;
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
 
@@ -1038,8 +1055,8 @@ void move_deposit_1(
 
     const int jstride = ext_nx.x;
 
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
+    const int part_offset  = part.offset[ tid ];
+    const int np           = part.np[ tid ];
     auto * __restrict__ ix = &part.ix[ part_offset ];
     auto * __restrict__ x  = &part.x[ part_offset ];
     auto * __restrict__ u  = &part.u[ part_offset ];
@@ -1084,7 +1101,8 @@ void move_deposit_1(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -1254,6 +1272,8 @@ void push_1 (
     unsigned int const field_offset, uint2 const ext_nx,
     float const alpha, double * __restrict__ d_energy )
 {
+//    std::cout << "push_1()\n";
+    
     const uint2 ntiles  = part.ntiles;
 
     // Tile ID
@@ -1312,13 +1332,13 @@ void push_1 (
         auto cosθ = θ[i].x;
         auto sinθ = θ[i].y;
 
-        e.z += ops::fma( cosθ, real(e1.z), - sinθ * imag( e1.z ) );
-        e.r += ops::fma( cosθ, real(e1.r), - sinθ * imag( e1.r ) );
-        e.θ += ops::fma( cosθ, real(e1.θ), - sinθ * imag( e1.θ ) );
+        e.z += ops::fma( cosθ, real( e1.z ), -sinθ * imag( e1.z ) );
+        e.r += ops::fma( cosθ, real( e1.r ), -sinθ * imag( e1.r ) );
+        e.θ += ops::fma( cosθ, real( e1.θ ), -sinθ * imag( e1.θ ) );
 
-        b.z += ops::fma( cosθ, real(b1.z), - sinθ * imag( b1.z ) );
-        b.r += ops::fma( cosθ, real(b1.r), - sinθ * imag( b1.r ) );
-        b.θ += ops::fma( cosθ, real(b1.θ), - sinθ * imag( b1.θ ) );
+        b.z += ops::fma( cosθ, real( b1.z ), -sinθ * imag( b1.z ) );
+        b.r += ops::fma( cosθ, real( b1.r ), -sinθ * imag( b1.r ) );
+        b.θ += ops::fma( cosθ, real( b1.θ ), -sinθ * imag( b1.θ ) );
 
         // Convert to cartesian components
         float3 cart_e = make_float3(
@@ -1332,7 +1352,6 @@ void push_1 (
             ops::fma( b.r, sinθ, + b.θ * cosθ ),
             b.z
         );
-
 
         // Advance momentum
         float3 pu = u[i];

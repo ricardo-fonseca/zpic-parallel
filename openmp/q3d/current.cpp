@@ -292,9 +292,9 @@ void current_norm_m(
         float norm_z  = 2.f / rm;
 
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ j * jstride +i ].z *= dz_dt * norm_z ;
-            current[ j * jstride +i ].r *= dr_dt * norm_r;
-            current[ j * jstride +i ].θ *= norm_θ;
+            current[ i + j * jstride ].z *= dz_dt * norm_z;
+            current[ i + j * jstride ].r *= dr_dt * norm_r;
+            current[ i + j * jstride ].θ *= norm_θ;
         }
     }
 
@@ -309,7 +309,7 @@ void current_norm_m(
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
 
-            current[ i + 1 * jstride ].r -= current[ i +   (-1) * jstride ].r;
+            current[ i + 1 * jstride ].r -= current[ i + (-1) * jstride ].r;
 
             current[ i + 1 * jstride ].θ += signθ * current[ i +   0  * jstride ].θ;
             current[ i + 2 * jstride ].θ += signθ * current[ i + (-1) * jstride ].θ;
