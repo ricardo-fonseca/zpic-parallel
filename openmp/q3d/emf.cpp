@@ -38,7 +38,7 @@ void yee0_b(
         /// @brief r at upper edge of j cell, normalized to Δr
         float rp  = ir0 + j + 0.5f;
         /// @brief Δt/r at the center of j cell
-        float t   = dt / ( ( ir0 + j ) * dr );
+        float dt_rc   = dt / ( ( ir0 + j ) * dr );
 
         for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
             B[ i + j*jstride ].r += (   dt_dz * ( E[(i+1) + j*jstride].θ - E[i + j*jstride].θ ) );  
@@ -46,7 +46,7 @@ void yee0_b(
             B[ i + j*jstride ].θ += ( - dt_dz * ( E[(i+1) + j*jstride].r - E[i + j*jstride].r ) + 
                                         dt_dr * ( E[i + (j+1)*jstride].z - E[i + j*jstride].z ) );  
 
-            B[ i + j*jstride ].z += ( - t * ( rp * E[i + (j+1)*jstride].θ - rm * E[i + j*jstride].θ ) );  
+            B[ i + j*jstride ].z += ( - dt_rc * ( rp * E[i + (j+1)*jstride].θ - rm * E[i + j*jstride].θ ) );  
         }
     }
 
@@ -54,9 +54,9 @@ void yee0_b(
     if ( ir0 == 0 ) {
         for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
 
-            B[ i +   0 *jstride ].r = - B[ i + 1*jstride ].r;  
-            B[ i +   0  *jstride ].θ = 0;
-            B[ i +   0 *jstride ].z += - 4 * dt_dr * E[ i + 1*jstride ].θ;  
+            B[ i +   0 * jstride ].r = - B[ i + 1*jstride ].r;  
+            B[ i +   0 * jstride ].θ = 0;
+            B[ i +   0 * jstride ].z += - 4 * dt_dr * E[ i + 1*jstride ].θ;  
 
             // The guard cell values are not used
             // B[ i + (-1)*jstride ].r = - B[ i + 2*jstride ].r;
@@ -158,7 +158,7 @@ void yee0J_e(
 
         for( int i = 0; i < static_cast<int>(nx.x) + 2; i++ ) {
 
-            E[i + j*jstride].r += ( - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ) )
+            E[i + j*jstride].r += - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)
                                   - dt * J[i + j*J_jstride].r;
 
             E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r) - 
@@ -217,29 +217,27 @@ void yeem_b(
     for( int j = j0; j < static_cast<int>(nx.y) + 1; j++ ) {
         
         /// @brief r/Δr at lower edge of j cell
-        float rm  = ir0 + j - 0.5f;
+        float rl  = ir0 + j - 0.5f;
         /// @brief r/Δr at upper edge of j cell
-        float rp  = ir0 + j + 0.5f;
+        float ru  = ir0 + j + 0.5f;
         /// @brief Δt/r at the center of j cell
         float dt_rc = dt / ( ( ir0 + j ) * dr );
         /// @brief Δt/r at the lower edge of j cell
-        float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
+        float dt_rl = dt / ( ( ir0 + j - 0.5 ) * dr );
 
         for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
 
-            B[ i + j*jstride ].r += (   
-                + dt_dz * ( E[(i+1) + j*jstride].θ - E[i + j*jstride].θ )   // Δt ∂Eθ/∂z
-                - dt_rm * mI * E[ i + j * jstride ].z                       // (Δt/r) m I Ez
-            );  
+            B[ i + j*jstride ].r += 
+                - dt_rl * mI * E[ i + j * jstride ].z                       // (Δt/r) m I Ez
+                + dt_dz * ( E[(i+1) + j*jstride].θ - E[i + j*jstride].θ );  // Δt ∂Eθ/∂z
 
-            B[ i + j*jstride ].θ += ( 
+            B[ i + j*jstride ].θ += 
                 - dt_dz * ( E[(i+1) + j*jstride].r - E[i + j*jstride].r )   // Δt ∂Er/∂z
-                + dt_dr * ( E[i + (j+1)*jstride].z - E[i + j*jstride].z )   // Δt ∂Ez/∂r
-            );  
+                + dt_dr * ( E[i + (j+1)*jstride].z - E[i + j*jstride].z );  // Δt ∂Ez/∂r
 
-            B[ i + j*jstride ].z += - dt_rc * (                                // Δt/r
-                + ( rp * E[i + (j+1)*jstride].θ - rm * E[i + j*jstride].θ )    // ∂(r Eθ)/∂r 
-                - mI * E[ i + j * jstride ].r                                  // m I Er
+            B[ i + j*jstride ].z += - dt_rc * (                             // Δt/r
+                + ( ru * E[i + (j+1)*jstride].θ - rl * E[i + j*jstride].θ ) // ∂(r Eθ)/∂r 
+                - mI * E[ i + j * jstride ].r                               // m I Er
             );  
         }
     }
@@ -249,15 +247,15 @@ void yeem_b(
         if ( m == 1 ) {
             // Mode m = 1 is a special case
             for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
-                B[ i + 0 *jstride ].r = + B[ i + 1*jstride ].r;  
-                B[ i + 0 *jstride ].θ = - 0.125f * I * (9.f * B[ i + 1*jstride ].r - B[ i + 2*jstride ].r );
-                B[ i + 0 *jstride ].z = 0;  
+                B[ i + 0 *jstride ].r = B[ i + 1*jstride ].r;  
+                B[ i + 0 *jstride ].θ = 0.125f * I * (9.f * B[ i + 1*jstride ].r - B[ i + 2*jstride ].r );
+                B[ i + 0 *jstride ].z = 0;
             }
         } else {
             for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
                 B[ i + 0 *jstride ].r = - B[ i + 1*jstride ].r;  // Br(r=0) = 0
                 B[ i + 0 *jstride ].θ = 0;
-                B[ i + 0 *jstride ].z = 0;  
+                B[ i + 0 *jstride ].z = 0;
             }
         }
     }
@@ -302,7 +300,7 @@ void yeem_e(
         /// @brief rΔr at center of j cell
         float rc   = ir0 + j;
         /// @brief Δt/r at the lower edge of j cell
-        float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
+        float dt_rl = dt / ( ( ir0 + j - 0.5 ) * dr );
         /// @brief Δt/r at the center of j cell
         float dt_rc = dt / ( ( ir0 + j ) * dr );
 
@@ -315,9 +313,9 @@ void yeem_e(
             E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
                                     - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) );
 
-            E[i + j*jstride].z +=  dt_rm * (                                // Δt/r
-                + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ    // ∂(r Bθ)/∂r 
-                - mI * B[i + j * jstride].r                               // m I Br
+            E[i + j*jstride].z +=  dt_rl * (                                // Δt/r
+                + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ  // ∂(r Bθ)/∂r 
+                - mI * B[i + j * jstride].r                                 // - m I Br
             );
 
         }
@@ -375,18 +373,19 @@ void yeemJ_e(
         float dt_rc = dt / ( ( ir0 + j ) * dr );
 
         for( int i = 0; i < static_cast<int>(nx.x) + 2; i++ ) {           
-            E[i + j*jstride].r += ( 
-                - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)   // Δt ∂Bθ/∂z 
+            E[i + j*jstride].r +=  
                 + dt_rc * mI * B[ i + j * jstride ].z                      // (Δt/r) m I Bz
-            ) - dt * J[i + j*J_jstride].r;
+                - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)   // Δt ∂Bθ/∂z 
+                - dt * J[i + j*J_jstride].r;
 
-            E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
-                                    - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) )
-                                    - dt * J[i + j*J_jstride].θ;
+            E[i + j*jstride].θ += 
+                + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
+                - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) 
+                - dt * J[i + j*J_jstride].θ;
 
             E[i + j*jstride].z +=  dt_rm * (                                // Δt/r
-                + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ    // ∂(r Bθ)/∂r 
-                - mI * B[i + j * jstride].r                               // m I Br
+                + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ  // ∂(r Bθ)/∂r 
+                - mI * B[i + j * jstride].r                                 // m I Br
             ) - dt * J[i + j*J_jstride].z;
 
         }
@@ -397,9 +396,12 @@ void yeemJ_e(
         if ( m == 1 ) {
             // Mode m = 1 is a special case
             for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
-                E[ i + 0 *jstride ].r = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;  
+                E[ i + 0 *jstride ].r = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;
                 E[ i + 0 *jstride ].θ =  E[ i + 1 * jstride ].θ;   // ∂Bθ/∂r(r=0) = 0
                 E[ i + 0 *jstride ].z = -E[ i + 1 * jstride ].z;  // Ez(r=0) = 0
+
+                //                E[ i + 0 *jstride ].θ =  0;
+//                E[ i + 0 *jstride ].z = 0;
             }
         } else {
             for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
@@ -596,7 +598,7 @@ void EMF::advance( Current & current ) {
         auto * const __restrict__ tile_J = & J0.d_buffer[ J_tile_off ];
 
         yee0_b(  tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
-        yee0J_e( tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt,   dx, ir0 );
+        yee0J_e( tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt, dx, ir0 );
         yee0_b(  tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
 
         // Copy data to global memory
@@ -632,10 +634,9 @@ void EMF::advance( Current & current ) {
             const auto J_tile_off = tid * Jm.tile_vol + Jm.offset;
             auto * const __restrict__ tile_J = & Jm.d_buffer[ J_tile_off ];
 
-
             yeem_b(  m, tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
-            yeem_e( m, tile_E, tile_B, nx, rstride, dt,   dx, ir0 );
-            // yeemJ_e( m, tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt, dx, ir0 );
+            yeem_e( m, tile_E, tile_B, nx, rstride, dt, dx, ir0 );
+//            yeemJ_e( m, tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt, dx, ir0 );
             yeem_b(  m, tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
 
             // Copy data to global memory
