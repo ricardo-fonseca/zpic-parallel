@@ -405,7 +405,7 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
 
                 tile_B[ i + 0 * jstride ].z = 0;
                 tile_B[ i + 0 * jstride ].r = + tile_B[ i + 1*jstride ].r;  
-                tile_B[ i + 0 * jstride ].θ = - 0.125f * I * ( 9.f * tile_B[ i + 1*jstride ].r - tile_B[ i + 2*jstride ].r );
+                tile_B[ i + 0 * jstride ].θ = 0.125f * I * ( 9.f * tile_B[ i + 1*jstride ].r - tile_B[ i + 2*jstride ].r );
             }
 
             // values for j < 0 are unused for linear interpolation
