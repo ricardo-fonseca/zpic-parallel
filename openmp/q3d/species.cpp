@@ -676,8 +676,8 @@ void move_deposit_0(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        auto Δr = rf - ri;
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -820,8 +820,8 @@ void move_deposit_1(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        auto Δr = rf - ri;
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         float2 delta = make_float2( Δz, Δr );
@@ -963,8 +963,8 @@ void move_deposit_0(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        auto Δr = rf - ri;
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
@@ -1110,8 +1110,8 @@ void move_deposit_1(
         /// @brief New radial position
         auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
-        // auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        auto Δr = rf - ri;
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+        // auto Δr = rf - ri;
 
         // Advance grid (z,r) position
         auto Δz = dt_dz * rg * pu.z;
