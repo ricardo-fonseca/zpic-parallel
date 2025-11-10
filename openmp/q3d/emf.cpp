@@ -247,7 +247,7 @@ void yeem_b(
         if ( m == 1 ) {
             // Mode m = 1 is a special case
             for( int i = -1; i < static_cast<int>(nx.x) + 1; i++) {
-                B[ i + 0 *jstride ].r = B[ i + 1*jstride ].r;  
+                B[ i + 0 *jstride ].r = B[ i + 1*jstride ].r;
                 B[ i + 0 *jstride ].θ = 0.125f * I * (9.f * B[ i + 1*jstride ].r - B[ i + 2*jstride ].r );
                 B[ i + 0 *jstride ].z = 0;
             }
@@ -327,7 +327,7 @@ void yeem_e(
             // Mode m = 1 is a special case
             for( int i = 0; i < static_cast<int>(nx.x) + 2; i++) {
                 E[ i + 0 *jstride ].r = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;  
-                E[ i + 0 *jstride ].θ =  E[ i + 1 * jstride ].θ;   // ∂Bθ/∂r(r=0) = 0
+                E[ i + 0 *jstride ].θ =  E[ i + 1 * jstride ].θ;  // ∂Bθ/∂r(r=0) = 0
                 E[ i + 0 *jstride ].z = -E[ i + 1 * jstride ].z;  // Ez(r=0) = 0
             }
         } else {

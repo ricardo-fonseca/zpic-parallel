@@ -76,7 +76,7 @@ class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > 
         } else {
             grid_m[m-1] -> save( fc, metadata, iter, path );
         }   
-    }    
+    }
 };
 
 #endif

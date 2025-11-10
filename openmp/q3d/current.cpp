@@ -374,7 +374,7 @@ void Current::advance() {
     normalize();
 
     // Apply filtering
-    // filter -> apply( *J );
+    apply_filter();
 
     // Advance iteration count
     iter++;

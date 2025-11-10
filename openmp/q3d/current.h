@@ -84,7 +84,7 @@ class Current {
         bc.y.upper = current::bc::none;
 
         // Set default filtering
-        filter = new Filter::None();
+        filter = nullptr;
 
         // Reset iteration number
         iter = 0;
@@ -235,6 +235,17 @@ class Current {
     void set_filter( Filter::Digital const & new_filter ) {
         delete filter;
         filter = new_filter.clone();
+    }
+
+    void apply_filter() {
+        if ( filter != nullptr ) {
+            auto & J0 = J -> mode0();
+            filter -> apply( J0 );
+            for( auto m = 1; m < nmodes; m++ ) {
+                auto & Jm = J -> mode(m);
+                filter -> apply( Jm );
+            }
+        }
     }
 };
 

@@ -261,7 +261,7 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
 
     if ( filter > 0 ) {
 
-        Filter::Compensated fcomp( coord::x, filter);
+        Filter::Compensated fcomp( coord::z, filter );
         fcomp.apply(E);
         fcomp.apply(B);
     }

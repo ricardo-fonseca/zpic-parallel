@@ -496,7 +496,7 @@ void test_lwfa() {
     laser.start   = 20.0;
     laser.fwhm    = 2.0;
     laser.a0      = 1.0;
-    laser.omega0  = 10.0;    
+    laser.omega0  = 10.0;
     laser.W0      = 4.0;
     laser.focus   = 20.48;
     laser.sin_pol = 1;
@@ -506,7 +506,7 @@ void test_lwfa() {
 
     // Set moving window and current filtering
     sim.set_moving_window();
-//    sim.current.set_filter( Filter::Compensated( coord::z, 4 ));
+    sim.current.set_filter( Filter::Compensated( coord::z, 4 ));
 
     auto diag = [& sim, & electrons ]( ) {
         sim.emf.save(emf::e, fcomp::z, 0);
@@ -531,32 +531,10 @@ void test_lwfa() {
 
     };
 
-#if 0
-    Timer timer;
-                  
-    timer.start();
-                                 
-    while (sim.get_t() < tmax )
-    {
-        if ( sim.get_iter() % 10 == 0 ) {
-            diag();
-        }
-
-        // std::cout << "n = " << sim.get_iter() << '\n';
-        sim.advance_mov_window();
-    }
-    
-    diag();
-
-    timer.stop();
-
-    std::cout << "Simulation run up to t = " << sim.get_t()
-              << " in " << timer.elapsed(timer::s) << " s\n";
-
-
-#else
-
     std::cout << "Starting simulation, dt = " << dt << '\n';
+
+    Timer timer;
+    timer.start();
 
     while( sim.get_t() <= 1.05 * box.x ) {
         if ( sim.get_iter() % 10 == 0 ) {
@@ -566,8 +544,10 @@ void test_lwfa() {
         sim.advance_mov_window();
     }
 
-#endif
+    timer.stop();
 
+    std::cout << "Simulation run up to t = " << sim.get_t()
+              << " in " << timer.elapsed(timer::s) << " s\n";
 
 
     std::cout << ansi::bold;

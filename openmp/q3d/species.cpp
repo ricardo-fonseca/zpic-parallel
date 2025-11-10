@@ -2266,7 +2266,9 @@ void dep_charge(
         const float s0y = 0.5f - x[i].y;
         const float s1y = 0.5f + x[i].y;
 
-        auto qm = q[i] * expimθ<m>( θ[i] );
+        static_assert( m == 1, "only mode m = 1 is currently supported" );
+        // auto qm = q[i] * expimθ<m>( θ[i] );
+        auto qm = q[i] * std::complex<float>{ θ[i].x, -θ[i].y };
 
         // When use more than 1 thread per tile, these need to be atomic inside tile
         charge[ idx               ] += s0y * s0x * qm;
@@ -2370,7 +2372,8 @@ void Species::deposit_charge( const unsigned m, grid<std::complex<float>> &charg
             tid % particles -> ntiles.x,
             tid / particles -> ntiles.x
         );
-       
+
+/*
         switch( m ) {
             case 4:
                 dep_charge<4>( tile_idx, *particles, charge.d_buffer, charge.offset, charge.ext_nx );
@@ -2385,6 +2388,8 @@ void Species::deposit_charge( const unsigned m, grid<std::complex<float>> &charg
                 dep_charge<1>( tile_idx, *particles, charge.d_buffer, charge.offset, charge.ext_nx );
                 break;
         }
+*/
+        dep_charge<1>( tile_idx, *particles, charge.d_buffer, charge.offset, charge.ext_nx );
 
         // High-order modes need an additional factor of 2
         charge_norm( tile_idx, charge.get_ntiles(), charge.d_buffer, charge.offset, 
