@@ -635,8 +635,7 @@ void EMF::advance( Current & current ) {
             auto * const __restrict__ tile_J = & Jm.d_buffer[ J_tile_off ];
 
             yeem_b(  m, tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
-            yeem_e( m, tile_E, tile_B, nx, rstride, dt, dx, ir0 );
-//            yeemJ_e( m, tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt, dx, ir0 );
+            yeemJ_e( m, tile_E, tile_B, nx, rstride, tile_J, J_rstride, dt, dx, ir0 );
             yeem_b(  m, tile_E, tile_B, nx, rstride, dt/2, dx, ir0 );
 
             // Copy data to global memory

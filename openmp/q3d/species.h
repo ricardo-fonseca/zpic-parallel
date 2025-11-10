@@ -502,6 +502,11 @@ public:
     }
 };
 
+/**
+ * @brief exp( - i m θ )
+ * 
+ * @tparam mode 
+ */
 template< int mode >
 constexpr auto expimθ( float2 θ ) { 
     static_assert( 0, "expimθ not supported for this m value");
@@ -520,7 +525,7 @@ constexpr auto expimθ<1> ( float2 θ ) {
 
     return std::complex<float>{
         cosθ,
-        sinθ
+        -sinθ
     };
 }
 
@@ -531,7 +536,7 @@ constexpr auto expimθ<2> ( float2 θ ) {
 
     return std::complex<float>{
         (cosθ-sinθ)*(cosθ+sinθ),    // cos2θ = cosθ^2 - sinθ^2
-        2 * sinθ * cosθ             // sin2θ = 2 sinθ cosθ
+        -2 * sinθ * cosθ             // sin2θ = 2 sinθ cosθ
     };
 }
 

@@ -369,9 +369,18 @@ inline void dep_current_seg(
     const auto θm = float2{ xif/rm2, yif/rm2 };
 
     // Complex coefficients for initial, mid and final angular positions
+    
+/*
     auto cm = expimθ<m>( θm );
     auto c0 = expimθ<m>( θ0 ) - cm;
     auto c1 = expimθ<m>( θ1 ) - cm;
+*/
+
+    static_assert( m == 1, "only mode m = 1 is currently supported" );
+    auto cm = std::complex<float>{ θm.x, -θm.y };
+    auto c0 = std::complex<float>{ θ0.x, -θ0.y } - cm;
+    auto c1 = std::complex<float>{ θ1.x, -θ1.y } - cm;
+
 
     const auto S0z0 = 0.5f - z0;
     const auto S0z1 = 0.5f + z0;

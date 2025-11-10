@@ -137,12 +137,15 @@ void test_laser( void ) {
 
     uint2 ntiles{ 16, 8 };
     uint2 nx{ 64, 32 };
-
     float2 box{ 20.48, 25.6 };
-    double dt = 0.01;
 
-    EMF emf( 4, ntiles, nx, box, dt );
+    // double dt = 0.01;
+    auto dt = 0.9 * zpic::courant( 2, ntiles, nx, box );
 
+    std::cout << "Using dt = " << dt << '\n';
+
+    // Create simulation
+    Simulation sim( 2, ntiles, nx, box, dt );
 
 //    Laser::PlaneWave laser;
 
@@ -151,35 +154,37 @@ void test_laser( void ) {
     laser.focus = 20.48;
 
     // Common laser parameters
-    laser.start = 10.2;
+    laser.start = 15.36;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
-    laser.sin_pol = 1;
-    laser.cos_pol = 0;
 
+//    laser.sin_pol = 1; laser.cos_pol = 0;
+//    laser.sin_pol = 0; laser.cos_pol = 1;
+    laser.sin_pol = sqrt(2.)/2; laser.cos_pol = sqrt(2.)/2;
 
-    laser.add( emf );
+    laser.add( sim.emf );
 
-    auto save_emf = [& emf ]( ) {
-        emf.save( emf::e, fcomp::r, 1 );
-        emf.save( emf::e, fcomp::θ, 1 );
-        emf.save( emf::e, fcomp::z, 1 );
+    sim.set_moving_window();
 
-        emf.save( emf::b, fcomp::r, 1 );
-        emf.save( emf::b, fcomp::θ, 1 );
-        emf.save( emf::b, fcomp::z, 1 );
+    auto diag = [& sim ]( ) {
+        sim.emf.save( emf::e, fcomp::r, 1 );
+        sim.emf.save( emf::e, fcomp::θ, 1 );
+        sim.emf.save( emf::e, fcomp::z, 1 );
+
+        sim.emf.save( emf::b, fcomp::r, 1 );
+        sim.emf.save( emf::b, fcomp::θ, 1 );
+        sim.emf.save( emf::b, fcomp::z, 1 );
     };
 
-    save_emf();
+    diag();
 
-    auto niter = 700;
-    for( int i = 0; i < niter; i ++) {
-        emf.advance();
+    auto niter = 1000;
+    for( int i = 0; i <= niter; i ++) {
+        if ( sim.get_iter() % 10 == 0 ) diag();
+        sim.advance_mov_window();
     }
  
-    save_emf( );
-
     std::cout << ansi::bold
               << "Completed " << __func__ << "()\n"
               << ansi::reset;
@@ -269,35 +274,64 @@ void test_current( void ) {
     
     auto dt = 0.06;
 
-    Current current( 2, ntiles, nx, box, dt );
+    // Create simulation
+    Simulation sim( 2, ntiles, nx, box, dt );
 
     uint3 ppc{ 2, 2, 8 };
     Species electrons( "electrons", -1.0f, ppc );
-
     electrons.set_density( Density::Sphere(1.0, float2{6.4,6.4}, 3.2)); 
+//    electrons.set_density( Density::Sphere(1.0, float2{6.4,0.0}, 3.2)); 
 
-    electrons.set_udist( UDistribution::Cold( float3{ 1e6, 1e6, 1.e6 } ) );
+//    electrons.set_udist( UDistribution::Cold( float3{ 1e6, 1e6, 1.e6 } ) );
 //    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1e6 } ) );
 
-    electrons.initialize( 2, box, ntiles, nx, dt, 0 );
+    // ux, uy, uz
+    // electrons.set_udist( UDistribution::Cold( float3{ 1e6, 0, 0 } ) );
+    // electrons.set_udist( UDistribution::Cold( float3{ 0, 1e6, 0 } ) );
+    electrons.set_udist( UDistribution::Cold( float3{ -1e6, 1e6, -1.e6 } ) );
 
-    electrons.save_charge(0);
+    electrons.set_udist( UDistribution::Cold( float3{ -1e-1, 1e-1, -1e-1 } ) );
 
-    current.zero();
+    sim.add_species( electrons );
 
-    electrons.advance( current );
-    
-    current.advance();
 
-    // Save mode 0
-    current.save( fcomp::z, 0 );
-    current.save( fcomp::r, 0 );
-    current.save( fcomp::θ, 0 );
+    auto diag = [& sim, & electrons ]( ) {
+        // Save mode 0
+        electrons.save_charge(0);
 
-    // Save mode 1
-    current.save( fcomp::z, 1 );
-    current.save( fcomp::r, 1 );
-    current.save( fcomp::θ, 1 );
+        // Save mode 0
+        sim.current.save( fcomp::z, 0 );
+        sim.current.save( fcomp::r, 0 );
+        sim.current.save( fcomp::θ, 0 );
+
+        // Save mode 1
+        sim.current.save( fcomp::z, 1 );
+        sim.current.save( fcomp::r, 1 );
+        sim.current.save( fcomp::θ, 1 );
+
+        sim.emf.save(emf::e, fcomp::z, 0);
+        sim.emf.save(emf::e, fcomp::r, 0);
+        sim.emf.save(emf::e, fcomp::θ, 0);
+
+        sim.emf.save(emf::b, fcomp::z, 0);
+        sim.emf.save(emf::b, fcomp::r, 0);
+        sim.emf.save(emf::b, fcomp::θ, 0);
+
+        sim.emf.save(emf::e, fcomp::z, 1);
+        sim.emf.save(emf::e, fcomp::r, 1);
+        sim.emf.save(emf::e, fcomp::θ, 1);
+
+        sim.emf.save(emf::b, fcomp::z, 1);
+        sim.emf.save(emf::b, fcomp::r, 1);
+        sim.emf.save(emf::b, fcomp::θ, 1);
+    };
+
+    diag();
+    for (int i = 0; i < 50 ; i++ ) {
+        sim.advance();
+        diag();
+    }
+
 
     std::cout << ansi::bold
               << "Completed " << __func__ << "()\n"
@@ -449,7 +483,7 @@ void test_lwfa() {
     auto dt = zpic::courant( 2, dims, box ) * 0.9f;
 
     // Create simulation
-    Simulation sim( 2, ntiles, nx, box, dt);
+    Simulation sim( 2, ntiles, nx, box, dt );
 
     // Add electrons
     Species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
@@ -558,8 +592,7 @@ int main( void ) {
    // test_mov();
    // test_current();
 
-
    // test_beam();
-   test_pwfa();
-   // test_lwfa();
+   // test_pwfa();
+   test_lwfa();
 }

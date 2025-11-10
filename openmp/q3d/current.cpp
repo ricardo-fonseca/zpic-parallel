@@ -224,22 +224,19 @@ void current_norm_0(
     // Fold values for r < 0 back into simulation domain
     if ( ir0 == 0 ) {
 
-        // alternative, signθ = -(-1)^m
-        const auto signθ = -1.f;
-
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
 
             current[ i + 1 * jstride ].r -= current[ i + (-1) * jstride ].r;
 
-            current[ i + 1 * jstride ].θ += signθ * current[ i +   0  * jstride ].θ;
-            current[ i + 2 * jstride ].θ += signθ * current[ i + (-1) * jstride ].θ;
+            current[ i + 1 * jstride ].θ -= current[ i +   0  * jstride ].θ;
+            current[ i + 2 * jstride ].θ -= current[ i + (-1) * jstride ].θ;
 
             // The following values are used for diagnostic output only
             current[ i + 0 * jstride ].z  = current[ i + 1 * jstride ].z;
-            current[ i + 0 * jstride ].r  = 0;
-            current[ i + 0 * jstride ].θ  = signθ * current[ i +   1  * jstride ].θ;
+            current[ i + 0 * jstride ].r  = current[ i + 1 * jstride ].r;
+            current[ i + 0 * jstride ].θ  = current[ i + 1 * jstride ].θ;
         }
     }
 }
@@ -279,17 +276,17 @@ void current_norm_m(
     float const dr_dt = dx.y / dt; 
 
     ///@brief Normalization for jθ
-    const std::complex<float> norm_θ{0,-2/(m*static_cast<float>(dt))};
+    const std::complex<float> norm_θ{0,2/(m*static_cast<float>(dt))};
 
     int ir0 = tile_idx.y * nx.y;
     for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
         /// @brief r at center of cell
         float rc   = abs( ir0 + j        ) * dr;
         /// @brief r at lower edge of cell
-        float rm   = abs( ir0 + j - 0.5f ) * dr;
+        float rl   = abs( ir0 + j - 0.5f ) * dr;
         
         float norm_r  = ( ir0 + j == 0 )? 0 : 2.f / rc;
-        float norm_z  = 2.f / rm;
+        float norm_z  = 2.f / rl;
 
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
             current[ i + j * jstride ].z *= dz_dt * norm_z;
@@ -303,7 +300,12 @@ void current_norm_m(
     if ( ir0 == 0 ) {
 
         // alternative, signθ = -(-1)^m
-        const auto signθ = ( m & 1 ) ? 1.f : -1.f;
+        // const auto signθ = ( m & 1 ) ? 1.f : -1.f;
+
+        if ( m != 1 ) {
+            std::cerr << "Only mode m = 1 supported, aborting..." << '\n';
+            std::exit(1);
+        }
 
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
@@ -311,13 +313,13 @@ void current_norm_m(
 
             current[ i + 1 * jstride ].r -= current[ i + (-1) * jstride ].r;
 
-            current[ i + 1 * jstride ].θ += signθ * current[ i +   0  * jstride ].θ;
-            current[ i + 2 * jstride ].θ += signθ * current[ i + (-1) * jstride ].θ;
+            current[ i + 1 * jstride ].θ -= current[ i +   0  * jstride ].θ;
+            current[ i + 2 * jstride ].θ -= current[ i + (-1) * jstride ].θ;
 
             // The following values are used for diagnostic output only
             current[ i + 0 * jstride ].z  = current[ i + 1 * jstride ].z;
-            current[ i + 0 * jstride ].r  = 0;
-            current[ i + 0 * jstride ].θ  = signθ * current[ i +   1  * jstride ].θ;
+            current[ i + 0 * jstride ].r  = current[ i + 1 * jstride ].r;
+            current[ i + 0 * jstride ].θ  = current[ i + 1 * jstride ].θ;
         }
     }
 }
