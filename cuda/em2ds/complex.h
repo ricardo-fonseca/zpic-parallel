@@ -78,8 +78,10 @@ class complex64 : public float2 {
 
     __host__ __device__
     inline constexpr complex64& operator*= ( const complex64& rhs ) { 
-        float re = x * rhs.x - y * rhs.y;
-        float im = x * rhs.y + y * rhs.x;
+//        float re = x * rhs.x - y * rhs.y;
+//        float im = x * rhs.y + y * rhs.x;
+        float re = fma( x , rhs.x , - y * rhs.y );
+        float im = fma( x , rhs.y , + y * rhs.x );
 
         x = re;
         y = im;

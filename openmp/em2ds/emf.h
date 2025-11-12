@@ -66,7 +66,7 @@ class EMF {
 
     /// @brief Fourier transform of Electric field
     basic_grid3<std::complex<float>> * fE;
-    /// @brief Fourier transform of trasnverse Electric field
+    /// @brief Fourier transform of transverse Electric field
     basic_grid3<std::complex<float>> * fEt;
     /// @brief Fourier transform of Magnetic field
     basic_grid3<std::complex<float>> * fB;

@@ -74,6 +74,13 @@ def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = N
     title = None, xtitle = None, ytitle = None, vtitle = None,
     show = True ):
 
+    # Linearly scale data if requested
+    if ( scale ):
+        data = data * scale[0] + scale[1]
+    
+    if ( shift ):
+        data = np.roll( data, shift, axis=(1,0) )
+
     if ( range is None ):
         range = [
             [0,data.shape[0]],
@@ -287,8 +294,7 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.show()
 
-def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+def complex_grid2d( filename : str, part = 'real', **kwargs ):
     """Generates a colormap plot from a 2D complex grid zdf file
 
     Args:
@@ -298,28 +304,8 @@ def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, gri
             Part of the complex number to plot. Must be one of 'real' (real part),
             'imag' (imaginary part), 'mag' (magnitude), or 'angle' (angle of the
              complex argument). Defaults to 'real'. 
-        xlim (tuple, optional):
-            Lower and upper limits of x axis. Defaults to the x limits of the
-            grid data.
-        ylim (tuple, optional):
-            Lower and upper limits of y axis. Defaults to the y limits of the
-            grid data.
-        grid (bool, optional):
-            Display a grid on top of colormap. Defaults to False.
-        cmap (str, optional):
-            Name of the colormap to use. Defaults to the matplotlib imshow() 
-            colormap.
-        vsim (bool, optional):
-            Setup a symmetric value scale [ -max(|val|), max(|val|) ]. Defaults to setting
-            the value scale to [ min, max ]
-        vmin (number, optional):
-            Minimum value for the color scale. Defaults to setting the value to min(val)
-        vmax (number, optional):
-            Maximum value for the color scale. Defaults to setting the value to max(val)
-        scale (tuple, optional):
-            Linearly scale values i.e. data = scale[0] * data + scale[1]
-        shift (tuple, optional):
-            Shifts data spatially
+        **kwargs
+            Additional keyword arguments to be passed on to visxd.plot2d()
     """
 
     if ( not os.path.exists(filename) ):
@@ -367,71 +353,59 @@ def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, gri
         print("(*error*) Invalid part option, must be one of 'real', 'imag', 'abs' or 'angle'")
         return
 
-    # Linearly scale data if requested
-    if ( scale ):
-        data = data * scale[0] + scale[1]
-    
-    if ( shift ):
-        data = np.roll( data, shift, axis=(1,0) )
-
-    if ( vsim ):
-        amax = np.amax( np.abs(data) )
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = -amax, vmax = +amax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-    else:
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = vmin, vmax = vmax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-
-    if ( info.grid.label and info.grid.units ):
-        zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
-        plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
-    elif ( info.grid.label ):
-        plt.colorbar().set_label(r'$\sf{' + info.grid.label.replace(" ","\\;") + r'}$')
-    else:
-        plt.colorbar()
-
+    # Get x-y axis labels
     if ( info.grid.axis ):
         if ( info.grid.axis[0].units ):
-            xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
+            xlabel = "${}\\,[\\sf {:s}]$".format( info.grid.axis[0].label, info.grid.axis[0].units )
         else:
-            xlabel = info.grid.axis[0].label
+            xlabel = "${}$".format(info.grid.axis[0].label)
 
         if ( info.grid.axis[1].units ):
-            ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
+            ylabel = "${}\\,[\\sf {:s}]$".format( info.grid.axis[1].label, info.grid.axis[1].units )
         else:
-            ylabel = info.grid.axis[1].label
+            ylabel = "${}$".format(info.grid.axis[1].label)
 
-        plt.xlabel(r'$\sf{' + xlabel + r'}$')
-        plt.ylabel(r'$\sf{' + ylabel + r'}$')
+    # Color axis label
+    if ( info.grid.label and info.grid.units ):
+        zlabel = "${}\\,[\\sf {:s}]$".format( info.grid.label, info.grid.units )
+    elif ( info.grid.label ):
+        zlabel = "${}$".format( info.grid.label )
+
+    # Plot title
+    if ( info.grid.label ):
+        title = info.grid.label.replace(" ","\\;")
+    else:
+        title = info.grid.name    
+
+    if ( part == 'real' ):
+        title = "\\Re \\; {:s}".format(title)
+    elif ( part == 'imag' ):
+        title = "\\Im \\; {:s}".format(title)
+    elif ( part == 'abs'):
+        title = "\\left| {:s} \\right|".format(title)
+    elif ( part == 'angle' ):
+        title = "Arg \\; \\,{:s}".format(title)
 
     if ( info.iteration ):
         if ( info.iteration.tunits ):
-            plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
-                info.grid.label.replace(" ","\\;"),
+            title ="$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
+                title,
                 info.iteration.t,
-                info.iteration.tunits))
+                info.iteration.tunits)
         else:
-            plt.title("$\\sf {} $\nt = ${:g}$".format(
-                info.grid.label.replace(" ","\\;"),
-                info.iteration.t ))
+            title = "$\\sf {} $\nt = ${:g}$".format(
+                title,
+                info.iteration.t )
     else:
-        if ( info.grid.label ):
-            plt.title("$\\sf {}".format( info.grid.label))
-        else:
-            plt.title( info.grid.name )
+        title = "$\\st {}$".format( title )
 
-    if ( xlim ):
-        plt.xlim(xlim)
-    if ( ylim ):
-        plt.ylim(ylim)
-
-    plt.grid(grid)
-
-    plt.show()
+    plot2d( data, range = range,
+            title  = title,
+            xtitle = xlabel,
+            ytitle = ylabel,
+            vtitle = zlabel,
+            **kwargs
+    )
 
 def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
     vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
@@ -580,6 +554,29 @@ def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.show()
 
+def cyl_part_quant( particles, info, quant ):
+
+    if ( quant == 'x' or quant == 'y' ):
+        r = particles['r']
+        if ( quant == 'x' ):
+            return particles['cosθ'] * r
+        else:
+            return particles['sinθ'] * r
+    else:
+        return particles[quant]
+
+def cyl_part_label( info, quant ):
+    if ( quant == 'x' or quant == 'y' ):
+        return quant
+    else:
+        return info.particles.qlabels[quant]
+
+def cyl_part_unit( info, quant ):
+    if ( quant == 'x' or quant == 'y' ):
+        return info.particles.qunits['r']
+    else:
+        return info.particles.qunits[quant]
+
 def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True, 
     marker = '.', ms = 1, alpha = 1 ):
     """Generates an (x,y) scatter plot from a ZDF particle file.
@@ -588,9 +585,9 @@ def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True,
         filename (str):
             Name of ZDF file to open
         qx (str):
-            X axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
+            X axis quantity, usually one of "z", "r", "ux", "uy", "uz", etc.
         qy (str): _description_
-            Y axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
+            Y axis quantity, usually one of "z", "r", "ux", "uy", "uz", etc.
         xlim (tuple, optional):
             Lower and upper limits of x axis. Defaults to the limits of the "qx" particle data.
         ylim (tuple, optional):
@@ -616,26 +613,18 @@ def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True,
         print("(*error*) file {} is not a particles file".format(filename))
         return
     
-    if ( not qx in info.particles.quants ):
-        print("(*error*) '{}' quantity (q1) is not present in file".format(qx) )
-        return
-
-    if ( not qy in info.particles.quants ):
-        print("(*error*) '{}' quantity (q2) is not present in file".format(qy) )
-        return
-
-    x = particles[qx]
-    y = particles[qy]
+    x = cyl_part_quant( particles, info, qx )
+    y = cyl_part_quant( particles, info, qy )
 
     plt.plot(x, y, marker, ms=ms, alpha = alpha)
 
-    title = "{}/{}".format( info.particles.qlabels[qy], info.particles.qlabels[qx])
+    title = "{}/{}".format( cyl_part_label(info,qy), cyl_part_label(info,qx))
     timeLabel = "t = {:g}\\,[{:s}]".format(info.iteration.t, info.iteration.tunits)
 
     plt.title(r'$\sf{' + title + r'}$' + '\n' + r'$\sf{' + timeLabel + r'}$')
 
-    xlabel = "{}\\,[{:s}]".format( info.particles.qlabels[qx], info.particles.qunits[qx] )
-    ylabel = "{}\\,[{:s}]".format( info.particles.qlabels[qy], info.particles.qunits[qy] )
+    xlabel = "{}\\,[{:s}]".format( cyl_part_label(info,qx), cyl_part_unit(info,qx) )
+    ylabel = "{}\\,[{:s}]".format( cyl_part_label(info,qy), cyl_part_unit(info,qy) )
 
     plt.xlabel(r'$\sf{' + xlabel + r'}$')
     plt.ylabel(r'$\sf{' + ylabel + r'}$')
@@ -795,7 +784,7 @@ def grid2d_fft( filename : str, xlim = None, ylim = None, grid = False, cmap = N
     plt.show()
 
 
-def plot_part( part, iter = None, qx = "x", qy = "y", xlim = None, ylim = None, grid = True, 
+def plot_part( part, iter = None, qx = "z", qy = "r", xlim = None, ylim = None, grid = True, 
     marker = '.', ms = 1, alpha = 1 ):
     
     file = "{}-{:06d}.zdf".format(part, iter)
@@ -838,3 +827,4 @@ def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = Non
             norm = colors.CenteredNorm()
         print("Plotting {} out of plane field for iteration {}.".format(fld,iter))
         grid2d(filez, xlim = xlim, ylim = ylim, grid = grid, cmap = 'BrBG', norm = norm, shift = shift )
+

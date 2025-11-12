@@ -175,7 +175,6 @@ inline void inject_uniform_kernel(
                     x[ part_idx ] = pos;
                     u[ part_idx ] = make_float3(0,0,0);
                 }
-                ppc_idx ++;
             }
         }
 

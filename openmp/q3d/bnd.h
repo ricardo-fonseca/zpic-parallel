@@ -4,6 +4,14 @@
 #include <ostream>
 
 /**
+ * @brief Edge (lower, upper)
+ * 
+ */
+namespace edge {
+    enum pos { lower = 0, upper };
+}
+
+/**
  * @brief 2D Boundary information
  * 
  * @note Data is to be addressed using e.g. bnd.y.lower
