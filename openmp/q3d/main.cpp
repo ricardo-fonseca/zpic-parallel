@@ -561,6 +561,8 @@ int main( void ) {
               << "quasi-3D tests\n"
               << ansi::reset ;
 
+    zpic::sys_info();
+
     // test_cylgrid();
     // test_vec3_cylgrid();
     // test_pvec3_cylgrid();

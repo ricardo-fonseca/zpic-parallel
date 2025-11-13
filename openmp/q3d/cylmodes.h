@@ -7,6 +7,7 @@
 #include "grid.h"
 
 #include <iostream>
+#include <vector>
 
 /**
  * @brief Scalar cylindrical modes tiled grid object
@@ -59,7 +60,7 @@ class CylGrid {
      * @param nx        Individual tile size (x,y)
      * @param gc        Number of guard cells
      */
-    CylGrid( unsigned nmodes, uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc):
+    CylGrid( int nmodes, uint2 const ntiles, uint2 const nx, bnd<unsigned int> const gc):
         nmodes( nmodes ),
         ntiles( ntiles ),
         periodic( 1 ),
@@ -78,7 +79,7 @@ class CylGrid {
 
         if ( nmodes > 1 ) {
             grid_m.reserve( nmodes - 1 );
-            for ( int i = 0; i < nmodes - 1; i++ ) {
+            for ( auto i = 0; i < nmodes - 1; i++ ) {
                 auto * m = new cG( ntiles, nx, gc );
                 m -> name = name + "-m" + std::to_string(i+1);
                 grid_m.push_back( m );

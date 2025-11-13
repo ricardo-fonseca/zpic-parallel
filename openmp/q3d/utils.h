@@ -104,8 +104,6 @@ inline void print_array( T * __restrict__ buffer, T2 dims ) {
 
 namespace ops {
 
-#define FP_FAST_FMA 1
-
 /**
  * @brief
  * Multiply-add operation: f = (x * y) + z
@@ -123,7 +121,7 @@ namespace ops {
  * @return auto 
  */
 template<typename T>
-auto fma( T const x, T const y, T const z ) {
+constexpr auto fma( T const x, T const y, T const z ) {
 
 #ifdef FP_FAST_FMA
     return std::fma( x, y, z );

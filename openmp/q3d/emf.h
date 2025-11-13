@@ -202,7 +202,7 @@ class EMF {
      * @param ene_b     Magnetic field energy
      * @param m         Mode
      */
-    void get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const unsigned m );
+    void get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m );
 
 };
 

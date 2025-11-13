@@ -2,8 +2,12 @@
 #define ZPIC_H_
 
 #include "utils.h"
-#include "simd/simd.h"
 #include "vec_types.h"
+
+// Not implemented yet
+// #include "simd/simd.h"
+
+
 
 /**
  * @brief Coordinates (x,y)
@@ -32,56 +36,13 @@ namespace coord {
  */
 #include <complex>
 
-/**
- * Add support for (some) mixed precision complex<float> and double / complex<double> operations
- * 
- */
-
-constexpr auto operator*( const std::complex< float > & c, const double & s ) {
-    return std::complex< double > { s * c.real(), s * c.imag() }; 
-}
-
-constexpr auto operator*( const double & s, const std::complex< float > & c ) {
-    return std::complex< double > { s * c.real(), s * c.imag() }; 
-}
-
-constexpr auto operator*( const std::complex< double > & c1, const std::complex< float > & c2 ) {
-    std::complex< double > t { c2.real(), c2.imag() };
-    return c1 * t; 
-}
-
-constexpr auto operator*( const std::complex< float > & c1, const std::complex< double > & c2 ) {
-    std::complex< double > t { c1.real(), c1.imag() };
-    return t * c2; 
-}
-
-constexpr auto operator+( const std::complex< double > & c1, const std::complex< float > & c2 ) {
-    std::complex< double > t { c2.real(), c2.imag() };
-    return c1 + t; 
-}
-
-constexpr auto operator+( const std::complex< float > & c1, const std::complex< double > & c2 ) {
-    std::complex< double > t { c1.real(), c1.imag() };
-    return t + c2; 
-}
-
-constexpr auto operator-( const std::complex< double > & c1, const std::complex< float > & c2 ) {
-    std::complex< double > t { c2.real(), c2.imag() };
-    return c1 - t; 
-}
-
-constexpr auto operator-( const std::complex< float > & c1, const std::complex< double > & c2 ) {
-    std::complex< double > t { c1.real(), c1.imag() };
-    return t - c2; 
-}
-
 namespace zpic {
 
 /**
  * @brief Print information about SIMD and OpenMP support
  * 
  */
-inline void sys_info() {
+static inline void sys_info() {
 #ifdef SIMD
     std::cout << "SIMD support enabled\n";
     std::cout << "  vector unit : " << vecname << '\n';
@@ -111,7 +72,7 @@ inline void sys_info() {
  * @param dx        Cell size
  * @return float    CFL time limit
  */
-inline float courant( const unsigned m, const float2 dx ) {
+static inline float courant( const unsigned m, const float2 dx ) {
     auto dz = dx.x;
     auto dr = dx.y;
 
@@ -131,7 +92,7 @@ inline float courant( const unsigned m, const float2 dx ) {
  * @param box       Simulation box size (global)
  * @return float    CFL time limit
  */
-inline float courant( const unsigned m, const uint2 gnx, const float2 box  ) {
+static inline float courant( const unsigned m, const uint2 gnx, const float2 box  ) {
     auto dx = make_float2( box.x/gnx.x, box.y/gnx.y);
     return courant(m,dx);
 }
@@ -144,7 +105,7 @@ inline float courant( const unsigned m, const uint2 gnx, const float2 box  ) {
  * @param box       Simulation box size (global)
  * @return float    CFL time limit
  */
-inline float courant( const unsigned m, const uint2 ntiles, const uint2 nx, const float2 box ) {
+static inline float courant( const unsigned m, const uint2 ntiles, const uint2 nx, const float2 box ) {
     auto dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
     return courant(m,dx);
 }

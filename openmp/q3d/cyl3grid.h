@@ -47,7 +47,7 @@ class cyl3grid : public grid< cyl3<T> >
         switch( fc ) {
             case( fcomp::z ):
                 #pragma omp parallel for
-                for( int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
+                for( unsigned int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
                     const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
                     const auto tile_off = tid * tile_vol + offset;
 
@@ -69,7 +69,7 @@ class cyl3grid : public grid< cyl3<T> >
                 break;
             case( fcomp::r ):
                 #pragma omp parallel for
-                for( int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
+                for( unsigned int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
                     const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
                     const auto tile_off = tid * tile_vol + offset;
 
@@ -92,7 +92,7 @@ class cyl3grid : public grid< cyl3<T> >
 
             case( fcomp::θ ):
                 #pragma omp parallel for
-                for( int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
+                for( unsigned int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
                     const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
                     const auto tile_off = tid * tile_vol + offset;
 

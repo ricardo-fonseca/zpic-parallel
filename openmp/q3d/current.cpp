@@ -206,12 +206,12 @@ void current_norm_0(
     int ir0 = tile_idx.y * nx.y;
     for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
         /// @brief r at center of cell
-        float rc   = abs( ir0 + j        ) * dr;
+        float rc   = std::abs( ir0 + j        ) * dr;
         /// @brief r at lower edge of cell
-        float rm   = abs( ir0 + j - 0.5f ) * dr;
+        float rl   = std::abs( ir0 + j - 0.5f ) * dr;
         
         float norm_r  = ( ir0 + j == 0 )? 0 : 1.0f / rc;
-        float norm_zθ = 1.0f / rm;
+        float norm_zθ = 1.0f / rl;
 
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
             current[ j * jstride +i ].z *= dz_dt * norm_zθ;
@@ -271,7 +271,6 @@ void current_norm_m(
 
     ///@brief radial cell size
     auto dr = dx.y;
-
     float const dz_dt = dx.x / dt; 
     float const dr_dt = dx.y / dt; 
 
@@ -281,16 +280,16 @@ void current_norm_m(
     int ir0 = tile_idx.y * nx.y;
     for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
         /// @brief r at center of cell
-        float rc   = abs( ir0 + j        ) * dr;
+        float rc   = std::abs( ir0 + j        ) * dr;
         /// @brief r at lower edge of cell
-        float rl   = abs( ir0 + j - 0.5f ) * dr;
+        float rl   = std::abs( ir0 + j - 0.5f ) * dr;
         
-        float norm_r  = ( ir0 + j == 0 )? 0 : 2.f / rc;
-        float norm_z  = 2.f / rl;
+        float norm_r  = ( ir0 + j == 0 )? 0 : (2 * dr_dt) / rc;
+        float norm_z  = ( 2 * dz_dt ) / rl;
 
         for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ i + j * jstride ].z *= dz_dt * norm_z;
-            current[ i + j * jstride ].r *= dr_dt * norm_r;
+            current[ i + j * jstride ].z *= norm_z;
+            current[ i + j * jstride ].r *= norm_r;
             current[ i + j * jstride ].θ *= norm_θ;
         }
     }
@@ -348,7 +347,7 @@ void Current::normalize() {
     #pragma omp parallel for
     for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
         auto tile_idx = uint2{ tid % ntiles.x, tid / ntiles.x };
-        for( unsigned m = 1; m < nmodes; m++ ) {
+        for( int m = 1; m < nmodes; m++ ) {
             auto & Jm = J -> mode(m);
             current_norm_m( m, tile_idx, ntiles, Jm.d_buffer, offset, nx, ext_nx, dx, dt );
         }

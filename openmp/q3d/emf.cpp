@@ -348,6 +348,7 @@ void yeemJ_e(
     cyl_cfloat3 const * const __restrict__ J, int const J_jstride, 
     const double dt, float2 const dx, const int ir0 )
 {
+    
     // cylindrical cell sizes
     const auto dz    = dx.x;
     const auto dr    = dx.y;
@@ -368,25 +369,27 @@ void yeemJ_e(
         /// @brief rΔr at center of j cell
         float rc   = ir0 + j;
         /// @brief Δt/r at the lower edge of j cell
-        float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
+        float dt_rl = dt / ( ( ir0 + j - 0.5 ) * dr );
         /// @brief Δt/r at the center of j cell
         float dt_rc = dt / ( ( ir0 + j ) * dr );
+
+        if ( ir0 + j == 0 ) { std::cout << "critical error, aborting \n"; std::exit(1); }
 
         for( int i = 0; i < static_cast<int>(nx.x) + 2; i++ ) {           
             E[i + j*jstride].r +=  
                 + dt_rc * mI * B[ i + j * jstride ].z                      // (Δt/r) m I Bz
                 - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)   // Δt ∂Bθ/∂z 
-                - dt * J[i + j*J_jstride].r;
+                - static_cast<float>(dt) * J[i + j*J_jstride].r;
 
             E[i + j*jstride].θ += 
                 + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
                 - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) 
-                - dt * J[i + j*J_jstride].θ;
+                - static_cast<float>(dt) * J[i + j*J_jstride].θ;
 
-            E[i + j*jstride].z +=  dt_rm * (                                // Δt/r
+            E[i + j*jstride].z +=  dt_rl * (                                // Δt/r
                 + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ  // ∂(r Bθ)/∂r 
                 - mI * B[i + j * jstride].r                                 // m I Br
-            ) - dt * J[i + j*J_jstride].z;
+            ) - static_cast<float>(dt) * J[i + j*J_jstride].z;
 
         }
     }
@@ -609,7 +612,7 @@ void EMF::advance( Current & current ) {
     }
 
     // Solve for high-order modes
-    for( unsigned m = 1; m < nmodes; m++ ) {
+    for( int m = 1; m < nmodes; m++ ) {
         auto & Em = E -> mode(m);
         auto & Bm = B -> mode(m);
         auto & Jm = current.mode(m);
@@ -757,7 +760,7 @@ void EMF::save( emf::field const field, const fcomp::cyl fc, const unsigned m ) 
 * @param ene_b     Magnetic field energy
 * @param m         Mode
 */
-void EMF::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const unsigned m ) {
+void EMF::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m ) {
 
     // Get tile information from mode0
     auto & E0 = E -> mode0();

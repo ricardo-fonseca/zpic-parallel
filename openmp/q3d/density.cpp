@@ -71,7 +71,7 @@ inline void inject_uniform_kernel(
         posθ[0] = { 1, 0 };
         if ( ppc.z > 1 ) {
             const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = { cos( Δθ ), sin( Δθ ) };
+            posθ[1] = {std::cos( Δθ ),std::sin( Δθ ) };
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
@@ -192,7 +192,7 @@ void Density::Uniform::inject( Particles & part, const float norm,
 {
     auto ntiles = part.ntiles;
 
-    /// @brief Single particle charge
+    /// @briefstd::single particle charge
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
     #pragma omp parallel for
@@ -261,7 +261,7 @@ inline void np_inject_uniform_kernel(
             _np = (rj1-rj0+1) * row * ppc_zθ * ppc_r;
         } else {
             // Tile includes axial boundary
-            // Since no particles will be injected for r <= 0, we only inject
+            //std::since no particles will be injected for r <= 0, we only inject
             // half the particles in the axial cell
             _np = row * ppc_zθ * ( (rj1-rj0) * ppc_r + ppc_r / 2 );
         }
@@ -374,7 +374,7 @@ void inject_step_kernel(
         posθ[0] = { 1, 0 };
         if ( ppc.z > 1 ) {
             const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = { cos( Δθ ), sin( Δθ ) };
+            posθ[1] = {std::cos( Δθ ),std::sin( Δθ ) };
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
@@ -457,7 +457,7 @@ void Density::Step::inject( Particles & part, const float norm,
     float step_pos;
 
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    /// @brief Single particle charge
+    /// @briefstd::single particle charge
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
     switch( dir ) {
@@ -689,7 +689,7 @@ void inject_slab_kernel(
         posθ[0] = { 1, 0 };
         if ( ppc.z > 1 ) {
             const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = { cos( Δθ ), sin( Δθ ) };
+            posθ[1] = {std::cos( Δθ ),std::sin( Δθ ) };
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
@@ -778,7 +778,7 @@ void Density::Slab::inject( Particles & part, const float norm,
 
     const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
-    /// @brief Single particle charge
+    /// @briefstd::single particle charge
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
     switch( dir ) {
@@ -1024,7 +1024,7 @@ inline void inject_sphere_kernel(
         posθ[0] = { 1, 0 };
         if ( ppc.z > 1 ) {
             const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = float2{ cos( Δθ ), sin( Δθ ) };
+            posθ[1] = float2{std::cos( Δθ ),std::sin( Δθ ) };
             // Use recurrence formulas for remaining angles
             for( unsigned i = 2; i < ppc.z; i++ ) {
                 posθ[i] = { 
@@ -1106,7 +1106,7 @@ void Density::Sphere::inject( Particles & part, const float norm,
     sphere_center.y -= ref.y;
     const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
-    /// @brief Single particle charge
+    /// @briefstd::single particle charge
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
     #pragma omp parallel for

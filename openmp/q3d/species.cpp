@@ -1,7 +1,8 @@
 #include "species.h"
 #include <iostream>
 
-#include "simd/simd.h"
+// Not implemented yet
+// #include "simd/simd.h"
 
 /**
  * @brief Memory alignment of local buffers
@@ -302,7 +303,7 @@ inline void dep_current_seg_0(
     const auto Δx  = t1.x - t0.x;
     const auto Δy  = t1.y - t0.y;
 
-    const auto jθ = q * ( ops::fma( - Δx , yif , Δy * xif ) ) / sqrt( ops::fma( xif, xif, yif*yif) );
+    const auto jθ = q * ( ops::fma( - Δx , yif , Δy * xif ) ) / std::sqrt( ops::fma( xif, xif, yif*yif) );
 
     int i = ix.x;
     int j = ix.y;
@@ -356,8 +357,8 @@ inline void dep_current_seg(
     //const auto cr0 = (ir0 + j) + r0;
     //const auto cr1 = (ir0 + j) + r1;
 
-    const auto cr0 = sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
-    const auto cr1 = sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
+    const auto cr0 = std::sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
+    const auto cr1 = std::sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
 
     const auto θ0 = make_float2( t0.x/cr0, t0.y/cr0 );
     const auto θ1 = make_float2( t1.x/cr1, t1.y/cr1 );
@@ -365,7 +366,7 @@ inline void dep_current_seg(
     const auto xif = t0.x + t1.x;
     const auto yif = t0.y + t1.y;
 
-    const auto rm2 = sqrt( ops::fma( xif, xif, yif*yif ) );
+    const auto rm2 = std::sqrt( ops::fma( xif, xif, yif*yif ) );
     const auto θm = float2{ xif/rm2, yif/rm2 };
 
     // Complex coefficients for initial, mid and final angular positions
@@ -475,7 +476,7 @@ inline void split2d_cyl(
     /// @brief r split fraction
     float εr;
 
-    // z-split
+    // z-splitx
     float xz, yz, rz;
     if ( cross.x ) {
         εz = (zs - x0.x) / delta.x;
@@ -483,7 +484,7 @@ inline void split2d_cyl(
         // z-split positions
         xz = t0.x + εz * tdelta.x;
         yz = t0.y + εz * tdelta.y;
-        rz = ( delta.y == 0 ) ? x0.y : sqrt( ops::fma( xz, xz, yz * yz ) ) - (ir0 + ix.y);
+        rz = ( delta.y == 0 ) ? x0.y : std::sqrt( ops::fma( xz, xz, yz * yz ) ) - (ir0 + ix.y);
     }
 
     // r-split
@@ -500,7 +501,7 @@ inline void split2d_cyl(
             auto b = ops::fma( t0.x, tdelta.x, t0.y * tdelta.y );
             auto c = ( x0.y - rs ) * ( 2 * (ir0 + ix.y) + x0.y + rs );
 
-            εr = - ( b + std::copysign( sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
+            εr = - ( b + std::copysign( std::sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
             if ( εr < 0 || εr > 1 ) εr = c / (a * εr);
         }
 #else
@@ -674,7 +675,7 @@ void move_deposit_0(
         // Final positions
 
         /// @brief New radial position
-        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
         // auto Δr = rf - ri;
@@ -818,7 +819,7 @@ void move_deposit_1(
         // Final positions
 
         /// @brief New radial position
-        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
         // auto Δr = rf - ri;
@@ -961,7 +962,7 @@ void move_deposit_0(
         // Final positions
 
         /// @brief New radial position
-        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
         // auto Δr = rf - ri;
@@ -1108,7 +1109,7 @@ void move_deposit_1(
         // Final positions
 
         /// @brief New radial position
-        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
         // auto Δr = rf - ri;
@@ -1341,13 +1342,13 @@ void push_1 (
         auto cosθ = θ[i].x;
         auto sinθ = θ[i].y;
 
-        e.z += ops::fma( cosθ, real( e1.z ), -sinθ * imag( e1.z ) );
-        e.r += ops::fma( cosθ, real( e1.r ), -sinθ * imag( e1.r ) );
-        e.θ += ops::fma( cosθ, real( e1.θ ), -sinθ * imag( e1.θ ) );
+        e.z += ops::fma( cosθ, e1.z.real( ), -sinθ * e1.z.imag( ) );
+        e.r += ops::fma( cosθ, e1.r.real( ), -sinθ * e1.r.imag( ) );
+        e.θ += ops::fma( cosθ, e1.θ.real( ), -sinθ * e1.θ.imag( ) );
 
-        b.z += ops::fma( cosθ, real( b1.z ), -sinθ * imag( b1.z ) );
-        b.r += ops::fma( cosθ, real( b1.r ), -sinθ * imag( b1.r ) );
-        b.θ += ops::fma( cosθ, real( b1.θ ), -sinθ * imag( b1.θ ) );
+        b.z += ops::fma( cosθ, b1.z.real( ), -sinθ * b1.z.imag( ) );
+        b.r += ops::fma( cosθ, b1.r.real( ), -sinθ * b1.r.imag( ) );
+        b.θ += ops::fma( cosθ, b1.θ.real( ), -sinθ * b1.θ.imag( ) );
 
         // Convert to cartesian components
         float3 cart_e = make_float3(
@@ -2027,13 +2028,13 @@ void move_kernel(
         auto yf = ops::fma( ri, sinθ, Δy );
 
         // New radial position
-        auto rf = sqrt( ops::fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
 
         // Protection agains rf == 0
         // This is VERY unlikely
         float Δr;
         if ( rf > 0 ) {
-            Δr = ops::fma( Δx , fma( ri, cosθ, xf ) , Δy * fma( ri, sinθ, yf ) ) / (rf + ri);
+            Δr = ops::fma( Δx , ops::fma( ri, cosθ, xf ) , Δy * ops::fma( ri, sinθ, yf ) ) / (rf + ri);
             cosθ = xf/rf;
             sinθ = yf/rf;
         } else {
@@ -2315,7 +2316,7 @@ void charge_norm(
 
     int ir0 = tile_idx.y * nx.y;
     for( int j = 0; j < static_cast<int>(nx.y+1); j++ ){
-        auto norm = scale/(abs( ir0 + j - 0.5f) * dr);
+        auto norm = scale/(std::abs( ir0 + j - 0.5f) * dr);
         for( int i = 0; i < static_cast<int>(nx.x+1); i++ ){
             charge[ j * jstride +i ] *= norm;
         }
@@ -2339,7 +2340,7 @@ void charge_norm(
 void Species::deposit_charge0( grid<float> &charge0 ) const {
 
     #pragma omp parallel for schedule(dynamic)
-    for( auto tid = 0; tid <  particles -> ntiles.y * particles -> ntiles.x; tid++ ) {
+    for( unsigned int tid = 0; tid <  particles -> ntiles.y * particles -> ntiles.x; tid++ ) {
         const auto tile_idx = make_uint2( 
             tid % particles -> ntiles.x,
             tid / particles -> ntiles.x
@@ -2367,7 +2368,7 @@ void Species::deposit_charge( const unsigned m, grid<std::complex<float>> &charg
     }
 
     #pragma omp parallel for schedule(dynamic)
-    for( auto tid = 0; tid <  particles -> ntiles.y * particles -> ntiles.x; tid++ ) {
+    for( unsigned int tid = 0; tid <  particles -> ntiles.y * particles -> ntiles.x; tid++ ) {
         const auto tile_idx = make_uint2( 
             tid % particles -> ntiles.x,
             tid / particles -> ntiles.x
@@ -2652,7 +2653,7 @@ void Species::dep_phasespace( float * const d_data, phasespace::quant quant,
     // Zero device memory
     memory::zero( d_data, size );
     
-    float norm = fabs(q_ref) * ( dx.x * dx.y ) *
+    float norm = std::abs(q_ref) * ( dx.x * dx.y ) *
                  size / (range.y - range.x) ;
 
     switch(quant) {

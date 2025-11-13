@@ -30,10 +30,10 @@ void div_corr_z( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>
     auto rdim = E.get_dims().y;
 
     /// @brief imaginary unit
-    constexpr std::complex<double> I{0,1};
+    constexpr std::complex<float> I{0,1};
 
     #pragma omp parallel for
-    for( int grid_j = 1; grid_j < rdim; grid_j ++ ) {
+    for( unsigned int grid_j = 1; grid_j < rdim; grid_j ++ ) {
 
         std::complex<double> divEz = 0;
         std::complex<double> divBz = 0;
@@ -45,21 +45,21 @@ void div_corr_z( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>
         int j = grid_j - ty * nx.y;
         
         ///@brief r/Δr at center of cell
-        const double rc  = grid_j;
+        const float rc  = grid_j;
         ///@brief r/Δr at center of lower (j-1) cell
-        const double rcm = grid_j - 1;
+        const float rcm = grid_j - 1;
         ///@brief r/Δr at upper edge of cell
-        const double rp = grid_j + 0.5;
+        const float rp = grid_j + 0.5;
         ///@brief r/Δr at lower edge of cell
-        const double rm = grid_j - 0.5;
+        const float rm = grid_j - 0.5;
 
         ///@brief Δz/r at center of cell
-        const double dz_rc = dz / (rc * dr);
+        const float dz_rc = dz / (rc * dr);
         ///@brief Δz/r at lower edge of cell
-        const double dz_rm = dz / (rm * dr);
+        const float dz_rm = dz / (rm * dr);
 
         // Process tiles right to left
-        for( int tx = ntiles.x-1; tx >=0; tx -- ) {
+        for( int tx = ntiles.x-1; tx >= 0; tx -- ) {
 
             const auto tid      = ty * ntiles.x + tx;
             const auto tile_off = tid * tile_vol;
@@ -94,7 +94,7 @@ void div_corr_z( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>
         auto * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
 
         for( int i = 0; i < nx.x; i++ ) {
-            tile_E[ i + 0 * jstride ].z = - tile_E[ i + 1 * jstride ].z;
+            tile_E[ i + 0 * jstride ].z = tile_E[ i + 1 * jstride ].z;
             tile_B[ i + 0 * jstride ].z = 0;
         }
     }
@@ -198,7 +198,7 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
 
     // Loop over tiles
     #pragma omp parallel for
-    for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
 
         const auto ty = tid / ntiles.x;
         const auto tx = tid % ntiles.x;
@@ -232,7 +232,7 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
         // Correct axial cell values, see field solver
         if ( ty == 0 ) {
             // This is an m = 1 field
-            for( int i = 0; i < nx.x; i++ ) {
+            for( unsigned int i = 0; i < nx.x; i++ ) {
                 tile_E[ i + 0 * jstride ].z = 0;
                 tile_E[ i + 0 * jstride ].r = ( 4.f * tile_E[ i + 1*jstride ].r - tile_E[ i + 2*jstride ].r ) / 3.f;
                 tile_E[ i + 0 * jstride ].θ = tile_E[ i + 1*jstride ].θ;
@@ -243,7 +243,7 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
             }
 
             // values for j < 0 are unused for linear interpolation
-            for( int i = 0; i < nx.x; i++ ) {
+            for( unsigned int i = 0; i < nx.x; i++ ) {
                 tile_E[ i + (-1) * jstride ].z = 0;
                 tile_E[ i + (-1) * jstride ].r = 0;
                 tile_E[ i + (-1) * jstride ].θ = 0;
@@ -260,7 +260,6 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
     B.copy_to_gc();
 
     if ( filter > 0 ) {
-
         Filter::Compensated fcomp( coord::z, filter );
         fcomp.apply(E);
         fcomp.apply(B);
@@ -361,7 +360,7 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
 
     // Loop over tiles
     #pragma omp parallel for
-    for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
 
         const auto tx = tid % ntiles.x;
         const auto ty = tid / ntiles.x;
@@ -398,7 +397,7 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
         // Correct axial cell values, see field solver
         if ( ty == 0 ) {
             // This is an m = 1 field
-            for( int i = 0; i < nx.x; i++ ) {
+            for( int i = 0; i < static_cast<int>(nx.x); i++ ) {
                 tile_E[ i + 0 * jstride ].z = 0;
                 tile_E[ i + 0 * jstride ].r = ( 4.f * tile_E[ i + 1*jstride ].r - tile_E[ i + 2*jstride ].r ) / 3.f;
                 tile_E[ i + 0 * jstride ].θ = tile_E[ i + 1*jstride ].θ;
@@ -409,7 +408,7 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
             }
 
             // values for j < 0 are unused for linear interpolation
-            for( int i = 0; i < nx.x; i++ ) {
+            for( int i = 0; i < static_cast<int>( nx.x ); i++ ) {
                 tile_E[ i + (-1) * jstride ].z = 0;
                 tile_E[ i + (-1) * jstride ].r = 0;
                 tile_E[ i + (-1) * jstride ].θ = 0;
@@ -425,11 +424,10 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
     B.copy_to_gc();
 
     if ( filter > 0 ) {
-
-        Filter::Compensated fcomp( coord::x, filter);
+        Filter::Compensated fcomp( coord::z, filter);
         fcomp.apply(E);
         fcomp.apply(B);
-    }
+    } 
 
     div_corr_z( E, B, dx );
 

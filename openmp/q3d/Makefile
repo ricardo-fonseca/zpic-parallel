@@ -34,7 +34,7 @@ CC = clang
 CFLAGS = -O3
 
 CXX = clang++
-CXXFLAGS = -O3 -g
+CXXFLAGS = -O3
 
 # OpenMP support
 CXXFLAGS += -fopenmp
@@ -60,7 +60,8 @@ CFLAGS += -Wall -std=c11
 CXXFLAGS += -Wall -std=c++17 -Wno-unknown-pragmas
 
 # Disable VLA extension warnings (clang compilers)
-CXXFLAGS += -Wno-vla-cxx-extension
+# CXXFLAGS += -Wno-vla-cxx-extension
+# CXXFLAGS += -Wno-vla-extension
 # --------------------------------------------------------------------------- #
 
 # SOURCE = particles.cpp emf.cpp laser.cpp current.cpp \

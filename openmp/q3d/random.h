@@ -142,7 +142,7 @@ inline double rand_norm( uint2 & state, double & norm ) {
 
         // Use Box-Muller method to generate random deviates with
         // normal (gaussian) distribution
-        fac = sqrt(-2.0 * log(rsq)/rsq);
+        fac = std::sqrt(-2.0 * log(rsq)/rsq);
 
         // store 1 value for future use
         norm = v1*fac;

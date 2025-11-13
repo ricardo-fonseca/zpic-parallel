@@ -9,6 +9,7 @@
 #include "cylmodes.h"
 
 #include <iostream>
+#include <complex>
 
 /**
  * @brief cyl3<> cylindrical modes tiled grid object
@@ -64,7 +65,7 @@ class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > 
      * @param iter          Iteration metadata
      * @param path          Ouput path
      */
-    void save( unsigned m, const enum fcomp::cyl fc, zdf::grid_info &metadata, zdf::iteration &iter, std::string &path ) {
+    void save( const int m, const enum fcomp::cyl fc, zdf::grid_info &metadata, zdf::iteration &iter, std::string &path ) {
 
         if ( m >= nmodes ) {
             std::cerr << "invalid mode (" << m << ") selected.\n";

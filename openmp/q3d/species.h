@@ -509,7 +509,7 @@ public:
  */
 template< int mode >
 constexpr auto expimθ( float2 θ ) { 
-    static_assert( 0, "expimθ not supported for this m value");
+    // static_assert( 0, "expimθ not supported for this m value");
     return std::complex<float>{0};
 }
 
