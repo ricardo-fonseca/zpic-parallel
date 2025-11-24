@@ -298,7 +298,7 @@ void kernel3_x_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Copy data from tile buffer
     for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
-        A[i] = buffer[i];
+        A[i] = B[i] = buffer[i];
 
     // Synchronize 
     block_sync();
@@ -341,7 +341,7 @@ void kernel3_y_kernel( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Copy data from tile buffer
     for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
-        A[i] = buffer[i];
+        A[i] = B[i] = buffer[i];
 
     // Synchronize 
     block_sync();

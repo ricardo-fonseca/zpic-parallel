@@ -1,20 +1,20 @@
+#include "species.h"
+#include <iostream>
+
 /**
- * @file species.cpp
- * @author your name (you@domain.com)
- * @brief 
- * @version 0.1
- * @date 2022-08-06
- * 
- * @copyright Copyright (c) 2022
+ * The following values were determined experimentally using a single
+ * NVIDIA A100 80GB PCIe board
  * 
  */
 
-#define opt_push_block 1024
-#define opt_move_block 256
+/// @brief Optimal block size for push kernel
+int constexpr opt_push_block = 256;  // small tile count
 
-#include "species.h"
+/// @brief Optimal block size for move kernel
+int constexpr opt_move_block = 256;
 
-#include <iostream>
+/// @brief Optimal minimum number of blocks for move/push kernels
+int constexpr opt_min_blocks = 2048;
 
 /**
  * @brief Construct a new Species object
@@ -469,6 +469,21 @@ __device__ __inline__ void dep_current_seg(
 
 #if 0
 __global__
+/**
+ * @brief Kernel for moving particles and depositing current
+ * 
+ * @note This version assigns 1 block per tile. It must be launched with
+ *       grid( ntiles.x, ntiles.y, 1 )
+ * 
+ * @param part              Particle data
+ * @param d_current         Electric current buffer
+ * @param current_offset    Offset to cell 0,0 in electric current tile
+ * @param ext_nx            External tile size (includes guard cells)
+ * @param dt_dx             Ratio between time step and cell size (x/y)
+ * @param q                 Particle charge
+ * @param qnx               Normalization values for in plane current deposition
+ * @param d_nmove           (out) Number of particles pushed (for performance metrics)
+ */
 void __launch_bounds__(opt_move_block) move_deposit(
     ParticleData part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
@@ -646,9 +661,8 @@ void __launch_bounds__(opt_move_block) move_deposit(
         for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
             d_current[tile_off + i] += J_local[i];
 
-
+        // Update total particle pushes counter (for performance metrics)
         if ( block_thread_rank() == 0 ) {
-            // Update total particle pushes counter (for performance metrics)
             unsigned long long np64 = np;
             device::atomic_fetch_add( d_nmove, np64 );
         }
@@ -658,6 +672,22 @@ void __launch_bounds__(opt_move_block) move_deposit(
 
 
 __global__
+/**
+ * @brief Kernel for moving particles and depositing current
+ * 
+ * @note This version allows the use of multiple blocks per tile. It must be
+ *       launched with grid( ntiles.x, ntiles.y, blocks_per_tile )
+ *       
+ * 
+ * @param part              Particle data
+ * @param d_current         Electric current buffer
+ * @param current_offset    Offset to cell 0,0 in electric current tile
+ * @param ext_nx            External tile size (includes guard cells)
+ * @param dt_dx             Ratio between time step and cell size (x/y)
+ * @param q                 Particle charge
+ * @param qnx               Normalization values for in plane current deposition
+ * @param d_nmove           (out) Number of particles pushed (for performance metrics)
+ */
 void __launch_bounds__(opt_move_block) move_deposit(
     ParticleData part,
     float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
@@ -689,12 +719,18 @@ void __launch_bounds__(opt_move_block) move_deposit(
     float2 * __restrict__ x   = &part.x[ offset ];
     float3 * __restrict__ u   = &part.u[ offset ];
 
-    // Select subset of particles to move
-    // We are using multiple blocks per tile (blockIdx.z)
-    const int set_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
-    const int begin = blockIdx.z * set_size;
-    const int end   = ( begin + set_size < tile_np ) ? begin + set_size : tile_np;
+    // Get range of particles to process in block
+    const int min_size = 4 * block_num_threads();
+    int chunk_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
+    if ( chunk_size < min_size ) chunk_size = min_size;
 
+    int begin = blockIdx.z * chunk_size;
+    int end   = begin + chunk_size;
+
+    if ( end > tile_np ) end = tile_np;
+    if ( begin > tile_np ) { begin = 0; end = 0; }
+
+    // Move particles and deposit current
     for( auto i = begin + block_thread_rank(); i < end; i+= block_num_threads() ) {
         float3 pu = u[i];
         float2 const x0 = x[i];
@@ -835,23 +871,28 @@ void __launch_bounds__(opt_move_block) move_deposit(
 
     block_sync();
 
-    // Add current to global buffer
-    const int tile_off = tile_id * tile_vol;
+    // If any particles in block, add current to global buffer
+    if ( end > begin ) {
+        // Add current to global buffer
+        const int tile_off = tile_id * tile_vol;
 
-    if ( gridDim.z > 1 ) {
-        for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
-            device::atomic_fetch_add( & d_current[tile_off + i].x, J_local[i].x );
-            device::atomic_fetch_add( & d_current[tile_off + i].y, J_local[i].y );
-            device::atomic_fetch_add( & d_current[tile_off + i].z, J_local[i].z );
-        }
-    } else {
-        for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
-            d_current[tile_off + i] += J_local[i];
+        if ( gridDim.z > 1 ) {
+            // When using multiple blocks per tile we must add the current
+            // using atomic ops
+            for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
+                device::atomic_fetch_add( & d_current[tile_off + i].x, J_local[i].x );
+                device::atomic_fetch_add( & d_current[tile_off + i].y, J_local[i].y );
+                device::atomic_fetch_add( & d_current[tile_off + i].z, J_local[i].z );
+            }
+        } else {
+            for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
+                d_current[tile_off + i] += J_local[i];
+            }
         }
     }
 
+    // Update total particle pushes counter (for performance metrics)
     if ( block_thread_rank() == 0 && blockIdx.z == 0 ) {
-        // Update total particle pushes counter (for performance metrics)
         unsigned long long np64 = tile_np;
         device::atomic_fetch_add( d_nmove, np64 );
     }
@@ -880,20 +921,41 @@ void Species::move( vec3grid<float3> * J )
         q * dx.y / dt
     );
 
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, 1 );
-    auto block = opt_move_block;
+    int tile_blocks = opt_min_blocks / (particles -> ntiles.x * particles -> ntiles.y);
+    if ( tile_blocks < 1 ) tile_blocks = 1;
+    
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, tile_blocks );
+
     size_t shm_size = J -> tile_vol * sizeof(float3);
 
+    auto block = opt_move_block;
     block::set_shmem_size( kernel::move_deposit, shm_size );
     kernel::move_deposit <<< grid, block, shm_size >>> ( 
         *particles,
         J -> d_buffer, J -> offset, J -> ext_nx,
         dt_dx, q, qnx, d_nmove
     );
+
 }
 
 namespace kernel {
 
+/**
+ * @brief Kernel for moving particles, depositing current and shifting positions
+ * 
+ * @note This version allows the use of multiple blocks per tile. It must be
+ *       launched with grid( ntiles.x, ntiles.y, blocks_per_tile )
+ *  
+ * @param part              Particle data
+ * @param d_current         Electric current buffer
+ * @param current_offset    Offset to cell 0,0 in electric current tile
+ * @param ext_nx            External tile size (includes guard cells)
+ * @param dt_dx             Ratio between time step and cell size (x/y)
+ * @param q                 Particle charge
+ * @param qnx               Normalization values for in plane current deposition
+ * @param shift             Position cell shift
+ * @param d_nmove           (out) Number of particles pushed (for performance metrics)
+ */
 __global__
 void move_deposit_shift(
     ParticleData part,
@@ -921,12 +983,24 @@ void move_deposit_shift(
     const int tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
 
     const int offset          = part.offset[ tile_id ];
-    const int np              = part.np[ tile_id ];
+    const int tile_np         = part.np[ tile_id ];
     int2   * __restrict__ ix  = &part.ix[ offset ];
     float2 * __restrict__ x   = &part.x[ offset ];
     float3 * __restrict__ u   = &part.u[ offset ];
 
-    for( auto i = block_thread_rank(); i < np; i+= block_num_threads() ) {
+    // Get range of particles to process in block
+    const int min_size = 4 * block_num_threads();
+    int chunk_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
+    if ( chunk_size < min_size ) chunk_size = min_size;
+
+    int begin = blockIdx.z * chunk_size;
+    int end   = begin + chunk_size;
+
+    if ( end > tile_np ) end = tile_np;
+    if ( begin > tile_np ) { begin = 0; end = 0; }
+
+    // Move particles and deposit current
+    for( auto i = begin + block_thread_rank(); i < end; i+= block_num_threads() ) {
         float3 pu = u[i];
         float2 const x0 = x[i];
         int2   const ix0 =ix[i];
@@ -1045,7 +1119,7 @@ void move_deposit_shift(
         }
 
         // Deposit vp current
-                        dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
+                       dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
         if ( nvp > 1 ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
         if ( nvp > 2 ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
 
@@ -1055,7 +1129,7 @@ void move_deposit_shift(
                 
         x[i] = x1;
 
-        // Modify cell and store
+        // Modify cell, add shift and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
             ix0.y + deltai.y + shift.y
@@ -1066,16 +1140,27 @@ void move_deposit_shift(
 
     block_sync();
 
-    // Add current to global buffer
-    const int tile_off = tile_id * tile_vol;
+    // If any particles in block, add current to global buffer
+    if ( end > begin ) {
+        // Add current to global buffer
+        const int tile_off = tile_id * tile_vol;
 
-    for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) 
-        d_current[tile_off + i] += J_local[i];
+        if ( gridDim.z > 1 ) {
+            for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
+                device::atomic_fetch_add( & d_current[tile_off + i].x, J_local[i].x );
+                device::atomic_fetch_add( & d_current[tile_off + i].y, J_local[i].y );
+                device::atomic_fetch_add( & d_current[tile_off + i].z, J_local[i].z );
+            }
+        } else {
+            for( auto i =  block_thread_rank(); i < tile_vol; i+= block_num_threads() ) {
+                d_current[tile_off + i] += J_local[i];
+            }
+        }
+    }
 
-
-    if ( block_thread_rank() == 0 ) {
-        // Update total particle pushes counter (for performance metrics)
-        unsigned long long np64 = np;
+    // Update total particle pushes counter (for performance metrics)
+    if ( block_thread_rank() == 0 && blockIdx.z == 0 ) {
+        unsigned long long np64 = tile_np;
         device::atomic_fetch_add( d_nmove, np64 );
     }
 }
@@ -1101,8 +1186,11 @@ void Species::move( vec3grid<float3> * J, const int2 shift )
         q * dx.y / dt
     );
 
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
-    auto block = 1024;
+    int tile_blocks = opt_min_blocks / (particles -> ntiles.x * particles -> ntiles.y);
+    if ( tile_blocks < 1 ) tile_blocks = 1;
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, tile_blocks );
+
+    auto block = opt_move_block;
     size_t shm_size = J -> tile_vol * sizeof(float3);
 
     block::set_shmem_size( kernel::move_deposit_shift, shm_size );
@@ -1116,6 +1204,13 @@ void Species::move( vec3grid<float3> * J, const int2 shift )
 namespace kernel {
 
 __global__
+/**
+ * @brief Kernel for moving particles without depositing current
+ * 
+ * @param part          Particle data
+ * @param dt_dx         Ratio between time step and cell size (x/y)
+ * @param d_nmove       (out) Number of particles pushed (for performance metrics)
+ */
 void move(
     ParticleData part,
     float2 const dt_dx,
@@ -1174,7 +1269,7 @@ void move(
     if ( block_thread_rank() == 0 ) { 
         // Update total particle pushes counter (for performance metrics)
         unsigned long long np64 = np;
-        device::atomic_fetch_add( d_nmove, np64 );
+        device::atomic_fetch_add( (unsigned long long *) d_nmove, np64 );
     }
 }
 
@@ -1195,13 +1290,11 @@ void Species::move( )
         dt / dx.y
     );
 
-    const float2 qnx = make_float2(
-        q * dx.x / dt,
-        q * dx.y / dt
-    );
+    int tile_blocks = opt_min_blocks / (particles -> ntiles.x * particles -> ntiles.y);
+    if ( tile_blocks < 1 ) tile_blocks = 1;
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, tile_blocks );
 
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
-    auto block = 1024;
+    auto block = opt_move_block;
 
     kernel::move <<< grid, block >>> ( 
         *particles, dt_dx, d_nmove
@@ -1303,7 +1396,7 @@ __device__ float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, d
  * @brief Advance memntum using a relativistic Boris pusher for high magnetic fields
  * 
  * @note This is similar to the dudt_boris method above, but the rotation is done using
- * using an exact Euler-Rodriguez method.2
+ * using an exact Euler-Rodriguez method.
  * 
  * @param tem 
  * @param e 
@@ -1442,39 +1535,53 @@ __device__ void interpolate_fld(
 
 }
 
-#if 0
+
 
 /**
- * @brief CUDA kernel for pushing particles
+ * @brief Kernel for accelerating particles
  * 
- * This kernel will interpolate fields and advance particle momentum using a 
- * relativistic Boris pusher
- * 
- * @param d_tiles       Particle tile information
- * @param d_ix          Particle data (cells)
- * @param d_x           Particle data (positions)
- * @param d_u           Particle data (momenta)
- * @param d_E           E field grid
- * @param d_B           B field grid
- * @param field_offset  Tile offset to field position (0,0)
- * @param ext_nx        E,B tile grid external size
- * @param alpha         Force normalization ( 0.5 * q / m * dt )
+ * @tparam type         Template variable to choose pusher type. Must be
+ *                      species::boris or species::euler
+ * @param part          Particle data
+ * @param E_buffer      E-field buffer
+ * @param B_buffer      B-field buffer
+ * @param ext_nx        External E/B tile size (includes guard cells)
+ * @param field_offset  Offset to cell 0,0 in E/B field buffers
+ * @param alpha         Pusher alpha parameter ( 0.5 * dt / m_q )
+ * @param d_energy      (out) Total time-centered particle energy
  */
 template < species::pusher type >
 __global__
-void __launch_bounds__(opt_push_block) push ( 
+void __launch_bounds__(opt_push_block)  push ( 
     ParticleData const part,
     float3 const __restrict__ * E_buffer, float3 const __restrict__ *  B_buffer,
-    uint2 const ntiles, const uint2 ext_nx, const int field_offset,
+    const uint2 ext_nx, const int field_offset,
     float const alpha, double * const __restrict__ d_energy )
 {
+    const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
+    const int tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
+
+    const int part_offset    = part.offset[ tile_id ];
+    const int tile_np        = part.np[ tile_id ];
+    int2   * __restrict__ ix = &part.ix[ part_offset ];
+    float2 * __restrict__ x  = &part.x[ part_offset ];
+    float3 * __restrict__ u  = &part.u[ part_offset ];
+
+    // Get range of particles to process in block
+    const int min_size = 4 * block_num_threads();
+    int chunk_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
+    if ( chunk_size < min_size ) chunk_size = min_size;
+
+    int begin = blockIdx.z * chunk_size;
+    int end   = begin + chunk_size;
+
+    if ( end > tile_np ) end = tile_np;
+    if ( begin > tile_np ) { begin = 0; end = 0; }
+
     const int field_vol = roundup4( ext_nx.x * ext_nx.y );
     extern __shared__ float3 local[];
     float3 * __restrict__ E_local = & local[0];
     float3 * __restrict__ B_local = & local[ field_vol ];
-
-    const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
-    const int tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
 
     const int tile_off = tile_id * field_vol;
 
@@ -1489,80 +1596,8 @@ void __launch_bounds__(opt_push_block) push (
     block_sync();
 
     // Push particles
-    const int part_offset    = part.offset[ tile_id ];
-    const int tile_np        = part.np[ tile_id ];
-    int2   * __restrict__ ix = &part.ix[ part_offset ];
-    float2 * __restrict__ x  = &part.x[ part_offset ];
-    float3 * __restrict__ u  = &part.u[ part_offset ];
-
     double energy = 0;
     const int ystride = ext_nx.x;
-
-    for( int i = block_thread_rank(); i < tile_np; i+= block_num_threads() ) {
-
-        // Interpolate field
-        float3 e, b;
-        interpolate_fld( E, B, ystride, ix[i], x[i], e, b );
-        
-        // Advance momentum
-        float3 pu = u[i];
-        
-        if ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
-        if ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
-    }
-
-    // Add up energy from all threads
-    energy = warp::reduce_add( energy );
-    if ( warp::thread_rank() == 0 ) { 
-        device::atomic_fetch_add( d_energy, energy );
-    }
-}
-
-#else
-
-template < species::pusher type >
-__global__
-void __launch_bounds__(opt_push_block) push ( 
-    ParticleData const part,
-    float3 const __restrict__ * E_buffer, float3 const __restrict__ *  B_buffer,
-    uint2 const ntiles, const uint2 ext_nx, const int field_offset,
-    float const alpha, double * const __restrict__ d_energy )
-{
-    const int field_vol = roundup4( ext_nx.x * ext_nx.y );
-    extern __shared__ float3 local[];
-    float3 * __restrict__ E_local = & local[0];
-    float3 * __restrict__ B_local = & local[ field_vol ];
-
-    const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
-    const int tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
-
-    const int tile_off = tile_id * field_vol;
-
-    // Copy field values into shared memory
-    block::memcpy2 ( E_local, & E_buffer[ tile_off ], 
-                     B_local, & B_buffer[ tile_off ],
-                     field_vol );
-
-    float3 const * const __restrict__ E = & E_local[ field_offset ];
-    float3 const * const __restrict__ B = & B_local[ field_offset ];
-
-    block_sync();
-
-    // Push particles
-    const int part_offset    = part.offset[ tile_id ];
-    const int tile_np        = part.np[ tile_id ];
-    int2   * __restrict__ ix = &part.ix[ part_offset ];
-    float2 * __restrict__ x  = &part.x[ part_offset ];
-    float3 * __restrict__ u  = &part.u[ part_offset ];
-
-    double energy = 0;
-    const int ystride = ext_nx.x;
-
-    // Select subset of particles to move
-    // We are using multiple blocks per tile (blockIdx.z)
-    const int set_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
-    const int begin = blockIdx.z * set_size;
-    const int end   = ( begin + set_size < tile_np ) ? begin + set_size : tile_np;
 
     for( auto i = begin + block_thread_rank(); i < end; i+= block_num_threads() ) {
 
@@ -1573,8 +1608,8 @@ void __launch_bounds__(opt_push_block) push (
         // Advance momentum
         float3 pu = u[i];
         
-        if ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
-        if ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
+        if constexpr ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
+        if constexpr ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
     }
 
     // Add up energy from all threads
@@ -1583,8 +1618,6 @@ void __launch_bounds__(opt_push_block) push (
         device::atomic_fetch_add( d_energy, energy );
     }
 }
-
-#endif
 
 }
 
@@ -1601,7 +1634,10 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
     
     device::zero( d_energy, 1 );
 
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, 1 );
+    int tile_blocks = opt_min_blocks / (particles -> ntiles.x * particles -> ntiles.y);
+    if ( tile_blocks < 1 ) tile_blocks = 1;
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, tile_blocks );
+
     auto block = opt_push_block;
     size_t shm_size = 2 * ( E -> tile_vol * sizeof(float3) );
 
@@ -1610,7 +1646,7 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
         block::set_shmem_size( kernel::push <species::euler>, shm_size );
         kernel::push <species::euler> <<< grid, block, shm_size >>> ( 
             *particles, E->d_buffer, B->d_buffer,
-            E->ntiles, E->ext_nx, E->offset, 
+            E->ext_nx, E->offset, 
             alpha, d_energy
         );
         break;
@@ -1618,7 +1654,7 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
         block::set_shmem_size( kernel::push <species::boris>, shm_size );
         kernel::push <species::boris> <<< grid, block, shm_size >>> ( 
             *particles, E->d_buffer, B->d_buffer,
-            E->ntiles, E->ext_nx, E->offset, 
+            E->ext_nx, E->offset, 
             alpha, d_energy
         );
         break;
@@ -1627,6 +1663,15 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
 
 namespace kernel {
 __global__
+/**
+ * @brief Kernel for charge density deposition
+ * 
+ * @param part              Particle data
+ * @param q                 Particle charge
+ * @param charge_buffer     Charge buffer
+ * @param charge_offset     Offset to cell 0,0 in charge tile
+ * @param ext_nx            External tile size (includes guard cells)
+ */
 void deposit_charge(
     ParticleData const part, const float q,
     float * const __restrict__ charge_buffer,
@@ -1684,7 +1729,7 @@ void deposit_charge(
  */
 void Species::deposit_charge( grid<float> &charge ) const {
 
-    dim3 grid( charge.ntiles.x, charge.ntiles.y );
+    dim3 grid( particles -> ntiles.x, particles -> ntiles.y );
     auto block = 64;
     size_t shm_size = charge.tile_vol * sizeof(float);
 
@@ -1892,15 +1937,16 @@ void dep_pha1(
 
     float const pha_rdx = size / (range.y - range.x);
 
+    const int shiftx = tile_idx.x * tile_nx.x;
+    const int shifty = tile_idx.y * tile_nx.y;
+
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
         float d;
-        switch( quant ) {
-        case( phasespace:: x ): d = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-        case( phasespace:: y ): d = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-        case( phasespace:: ux ): d = u[i].x; break;
-        case( phasespace:: uy ): d = u[i].y; break;
-        case( phasespace:: uz ): d = u[i].z; break;
-        }
+        if constexpr ( quant == phasespace:: x  ) d = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant == phasespace:: y  ) d = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant == phasespace:: ux ) d = u[i].x;
+        if constexpr ( quant == phasespace:: uy ) d = u[i].y;
+        if constexpr ( quant == phasespace:: uz ) d = u[i].z;
 
         float n =  (d - range.x ) * pha_rdx - 0.5f;
         int   k = int( n + 1 ) - 1;
@@ -2070,28 +2116,27 @@ void dep_pha2(
     float const pha_rdx0 = size0 / (range0.y - range0.x);
     float const pha_rdx1 = size1 / (range1.y - range1.x);
 
+    const int shiftx = tile_idx.x * tile_nx.x;
+    const int shifty = tile_idx.y * tile_nx.y;
+
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
         float d0;
-        switch( quant0 ) {
-            case( phasespace:: x ):  d0 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-            case( phasespace:: y ):  d0 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-            case( phasespace:: ux ): d0 = u[i].x; break;
-            case( phasespace:: uy ): d0 = u[i].y; break;
-            case( phasespace:: uz ): d0 = u[i].z; break;
-        }
+        if constexpr ( quant0 == phasespace:: x )  d0 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant0 == phasespace:: y )  d0 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant0 == phasespace:: ux ) d0 = u[i].x;
+        if constexpr ( quant0 == phasespace:: uy ) d0 = u[i].y;
+        if constexpr ( quant0 == phasespace:: uz ) d0 = u[i].z;
 
         float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
         int   k0 = int( n0 + 1 ) - 1;
         float w0 = n0 - k0;
 
         float d1;
-        switch( quant1 ) {
-            //case( phasespace:: x ):  d1 = ( tile_idx.x * tile_nx.x + ix[i].x) + (x[i].x + 0.5f); break;
-            case( phasespace:: y ):  d1 = ( tile_idx.y * tile_nx.y + ix[i].y) + (x[i].y + 0.5f); break;
-            case( phasespace:: ux ): d1 = u[i].x; break;
-            case( phasespace:: uy ): d1 = u[i].y; break;
-            case( phasespace:: uz ): d1 = u[i].z; break;
-        }
+        // if constexpr ( quant1 == phasespace:: x )  d1 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
+        if constexpr ( quant1 == phasespace:: y )  d1 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
+        if constexpr ( quant1 == phasespace:: ux ) d1 = u[i].x;
+        if constexpr ( quant1 == phasespace:: uy ) d1 = u[i].y;
+        if constexpr ( quant1 == phasespace:: uz ) d1 = u[i].z;
 
         float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
         int   k1 = int( n1 + 1 ) - 1;

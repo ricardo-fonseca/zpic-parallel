@@ -1,9 +1,8 @@
-
+#include <unistd.h> // For getopt
 #include <iostream>
 #include <fstream>
 
 #include "utils.h"
-
 #include "grid.h"
 
 __global__
@@ -611,27 +610,179 @@ void benchmark_weibel()
     output.close();
 }
 
-int main( void ) {
+void test_weibel( std::string param ) {
+    
+    // param is expected to be in the form "ppcx, ppcy, ntx, nty"
+    // Where (ppcx,ppcy) are the number of particles per cell
+    // and (ntx,nty) the number of tiles
 
-    print_dev_info( );
+    // Parse parameters
+    uint2 ppc { 0 };
+    uint2 ntiles { 0 };
 
+    if ( std::sscanf( param.c_str(), "%d, %d, %d, %d", 
+        &ppc.x, &ppc.y, 
+        &ntiles.x, &ntiles.y ) != 4 ) {
+        
+        std::cerr << "Invalid test parameters: '" << param << "'\n";
+        std::exit(1);
+    };
+
+    std::cout << ansi::bold;
+    std::cout << "Running Weibel test\n";
+    std::cout << ansi::reset;
+    std::cout << "Particles/cell : " << ppc << '\n';
+    std::cout << "# tiles        : " << ntiles << '\n';
+
+
+    // Create simulation box
+    uint2 nx {32, 32};
+                                                                                                                                                                      
+    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+                    
+    float dt = 0.07;
+                                        
+    Simulation sim(ntiles, nx, box, dt );
+                            
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3(0, 0, 0.6 )
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            make_float3( 0.1, 0.1, 0.1 ),
+            make_float3( 0, 0, -0.6 )
+        )
+    );
+
+    sim.add_species( positrons );
+                     
+    // Run simulation    
+    int const imax = 500;
+                
+    std::cout << "Running test up to n = " << imax << "...\n";
+
+    Timer timer;
+                  
+    timer.start();
+                                 
+    while (sim.get_iter() < imax)
+    {
+        // std::cout << "n = " << sim.get_iter() << '\n';
+        sim.advance();
+    }
+                 
+    timer.stop();
+    
+    std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+                      
+    sim.energy_info();
+                                                              
+    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
+
+    std::cout << "Elapsed time: " << timer.elapsed(timer::s) << " s\n";
+    std::cout << "Performance: " << perf << " GPart/s\n";
+}
+
+/**
+ * @brief Print information about the environment
+ *
+ */
+void info( void ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Environment\n";
+    std::cout << ansi::reset;
+
+    print_gpu_info();
+}
+
+/**
+ * @brief Print command line help
+ * 
+ * @param argv0     Program name (from argv[0])
+ */
+void cli_help( char * argv0 ) {
+    std::cerr << "Usage: " << argv0 << " [-h] [-s] [-t name] [-n parameter]\n";
+
+    std::cerr << '\n';
+    std::cerr << "Options:\n";
+    std::cerr << "  -h                  Display this message and exit\n";
+    std::cerr << "  -s                  Silence information about MPI/CUDA device\n";
+    std::cerr << "  -t <name>           Name of the test to run. Defaults to 'weibel'\n";
+    std::cerr << "  -p <parameters>     Test parameters (string). Purpose will depend on the \n";
+    std::cerr << "                      test chosen. Defaults to '8,8,16,16'\n";
+    std::cerr << '\n';
+}
+
+/**
+ * @brief Initialize GPU device
+ *
+ */
+void gpu_init() {
     deviceReset();
+}
+
+int main( int argc, char *argv[] ) {
+
+    // Initialize the gpu device
+    gpu_init();
+
+    // Process command line arguments
+    int opt;
+    int silent = 0;
+    std::string test = "weibel";
+    std::string param = "8,8,16,16";
+    while ((opt = getopt(argc, argv, "ht:p:s")) != -1) {
+        switch (opt) {
+            case 't':
+            test = optarg;
+            break;
+        case 'p':
+            param = optarg;
+            break;
+        case 's':
+            silent = 1;
+            break;
+        case 'h':
+        case '?':
+            cli_help( argv[0] );
+            std::exit(0);
+            exit(0);
+        default:
+            cli_help( argv[0] );    
+            std::exit(1);
+        }
+    }
+    
+    // Print information about the environment
+    if ( ! silent ) info();
 
     // test_grid( );
     // test_vec3grid( );
     // test_laser( );
     // test_inj( );
-
     // test_mov( );
     // test_current( );
-
     // test_mov_sim( );
-
     // test_weibel( );
-
-    test_weibel_large( );
-
+    // test_weibel_large( );
     // test_warm( );
-
     // benchmark_weibel();
+
+    if ( test == "weibel" ) {
+        test_weibel( param );
+    } else {
+        std::cerr << "Unknonw test '" << test << "', aborting...\n";
+        std::exit(1);
+    }
+
+    deviceReset();
 }
