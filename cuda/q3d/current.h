@@ -201,7 +201,7 @@ class Current {
     /**
      * @brief Save current density to file
      * 
-     * @param jc        Which current component to save (r, θ or z)
+     * @param jc        Which current component to save (z, r, or θ)
      * @param m         Mode
      */
     void save( const fcomp::cyl jc, unsigned m );

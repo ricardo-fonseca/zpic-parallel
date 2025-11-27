@@ -13,10 +13,11 @@ CXXFLAGS += -std=c++17
 CXXFLAGS += --gpu-architecture=compute_80
 CFLAGS   += --gpu-architecture=compute_80
 
-#SOURCE = emf.cpp laser.cpp particles.cpp current.cpp charge.cpp \
+#SOURCE = emf.cpp laser.cpp particles.cpp current.cpp \
 #         udist.cpp density.cpp species.cpp cathode.cpp
 
-SOURCE = emf.cpp laser.cpp
+SOURCE = emf.cpp laser.cpp particles.cpp current.cpp \
+         udist.cpp density.cpp species.cpp
 
 SOURCE += main.cpp
 

@@ -192,7 +192,7 @@ class EMF {
      * @brief Save EM field component to file
      * 
      * @param field     Which field to save (E or B)
-     * @param fc        Which field component to save (r, θ or z)
+     * @param fc        Which field component to save (z, r, or θ)
      * @param m         Mode
      */
     void save( emf::field const field, const fcomp::cyl fc, const int m );

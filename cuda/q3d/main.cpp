@@ -12,6 +12,10 @@
 
 #include "emf.h"
 #include "laser.h"
+#include "species.h"
+
+#include "timer.h"
+#include "simulation.h"
 
 void test_cylgrid( void ) {
 
@@ -166,11 +170,11 @@ void test_laser( void ) {
 
     auto diag = [& emf ]( ) {
         emf.save( emf::e, fcomp::r, 1 );
-        emf.save( emf::e, fcomp::θ, 1 );
+        emf.save( emf::e, fcomp::th, 1 );
         emf.save( emf::e, fcomp::z, 1 );
 
         emf.save( emf::b, fcomp::r, 1 );
-        emf.save( emf::b, fcomp::θ, 1 );
+        emf.save( emf::b, fcomp::th, 1 );
         emf.save( emf::b, fcomp::z, 1 );
     };
 
@@ -182,6 +186,154 @@ void test_laser( void ) {
         emf.advance();
     }
  
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+
+}
+
+void test_inj( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 16, 16 };
+
+    float2 box{ 4, 4 };
+
+    auto dt = 0.99 * zpic::courant( 2, ntiles, nx, box );
+
+    uint3 ppc{ 2, 2, 8 };
+
+    Species electrons( "electrons", -1.0f, ppc );
+
+    // Don't uncomment any of the following for uniform density
+//    electrons.set_density(Density::Step(coord::z, 1.0, 2.0));
+    electrons.set_density( Density::Slab(coord::z, 1.0, 2.0, 3.0)); 
+//    electrons.set_density( Density::Sphere(1.0, float2{2,2}, 1.0)); 
+
+    electrons.initialize( 2, box, ntiles, nx, dt, 0 );
+    electrons.save();
+    electrons.save_charge( 0 );
+
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+
+}
+
+void test_mov( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * zpic::courant( 2, ntiles, nx, box );
+
+    uint3 ppc{ 2, 2, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( Density::Sphere(1.0, float2{2,2}, 1.0)); 
+    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1.e6 } ) );
+
+    electrons.initialize( 2, box, ntiles, nx, dt, 0 );
+
+    electrons.save_charge(0);
+
+    int niter = 100;
+//    int niter = 1;
+    for( auto i = 0; i < niter; i ++ ) {
+        electrons.advance();
+    }
+
+    electrons.save_charge(0);
+    electrons.save();
+
+    std::cout << ansi::bold
+              << "Completed " << __func__ << "()\n"
+              << ansi::reset;
+
+}
+
+void test_current( void ) {
+
+    std::cout << ansi::bold
+            << "Running " << __func__ << "()...\n"
+            << ansi::reset;
+
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+    float2 box{ 12.8, 12.8 };
+
+    // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    
+    auto dt = 0.06;
+
+    // Create simulation
+    Simulation sim( 2, ntiles, nx, box, dt );
+
+    uint3 ppc{ 2, 2, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density( Density::Sphere(1.0, float2{6.4,6.4}, 3.2)); 
+//    electrons.set_density( Density::Sphere(1.0, float2{6.4,0.0}, 3.2)); 
+
+//    electrons.set_udist( UDistribution::Cold( float3{ 1e6, 1e6, 1.e6 } ) );
+//    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1e6 } ) );
+
+    // ux, uy, uz
+    // electrons.set_udist( UDistribution::Cold( float3{ 1e6, 0, 0 } ) );
+    // electrons.set_udist( UDistribution::Cold( float3{ 0, 1e6, 0 } ) );
+    electrons.set_udist( UDistribution::Cold( float3{ -1e6, 1e6, -1.e6 } ) );
+
+    sim.add_species( electrons );
+
+    auto diag = [& sim, & electrons ]( ) {
+
+        // Save mode 0
+        electrons.save_charge(0);
+
+        // Save mode 0
+        sim.current.save( fcomp::z, 0 );
+        sim.current.save( fcomp::r, 0 );
+        sim.current.save( fcomp::th, 0 );
+
+        // Save mode 1
+        sim.current.save( fcomp::z, 1 );
+        sim.current.save( fcomp::r, 1 );
+        sim.current.save( fcomp::th, 1 );
+
+        sim.emf.save(emf::e, fcomp::z, 0);
+        sim.emf.save(emf::e, fcomp::r, 0);
+        sim.emf.save(emf::e, fcomp::th, 0);
+
+        sim.emf.save(emf::b, fcomp::z, 0);
+        sim.emf.save(emf::b, fcomp::r, 0);
+        sim.emf.save(emf::b, fcomp::th, 0);
+
+        sim.emf.save(emf::e, fcomp::z, 1);
+        sim.emf.save(emf::e, fcomp::r, 1);
+        sim.emf.save(emf::e, fcomp::th, 1);
+
+        sim.emf.save(emf::b, fcomp::z, 1);
+        sim.emf.save(emf::b, fcomp::r, 1);
+        sim.emf.save(emf::b, fcomp::th, 1);
+    };
+
+    diag();
+    for (int i = 0; i < 50 ; i++ ) {
+        sim.advance();
+        diag();
+    }
+
+
     std::cout << ansi::bold
               << "Completed " << __func__ << "()\n"
               << ansi::reset;
@@ -292,11 +444,11 @@ int main( int argc, char *argv[] ) {
     // test_pvec3_cylgrid();
 
     // test_emf();
-    test_laser();
+    // test_laser();
 
    // test_inj();
    // test_mov();
-   // test_current();
+   test_current();
 
    // test_beam();
    // test_pwfa();

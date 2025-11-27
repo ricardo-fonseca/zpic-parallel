@@ -122,11 +122,11 @@ void div_corr_z_scan (
             if ( i < nx.x ) {
                 dEz = dz_rm * (
                         ( rc * tile_E[i+1 + j*jstride].r - rcm * tile_E[i+1 + (j-1)*jstride].r) + 
-                        I * tile_E[i+1 + j*jstride].θ
+                        I * tile_E[i+1 + j*jstride].th
                     ) ;
                 dBz = dz_rc * (
                         ( rp * tile_B[i   + (j+1)*jstride].r - rm * tile_B[i + j*jstride].r ) + 
-                        I * tile_B[i + j*jstride].θ
+                        I * tile_B[i + j*jstride].th
                     ) ;
             }
 
@@ -267,7 +267,7 @@ void plane_wave(
     ///@brief exp( I pol )
     const ops::complex<float> pol_r{ laser.cos_pol, -laser.sin_pol };
     ///@brief exp( I (pol-π/2) )
-    const ops::complex<float> pol_θ{ laser.sin_pol, +laser.cos_pol };
+    const ops::complex<float> pol_th{ laser.sin_pol, +laser.cos_pol };
 
     for( unsigned idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
         const auto i = idx % nx.x;
@@ -281,11 +281,11 @@ void plane_wave(
 
         tile_E[ i + j * jstride ].z = 0;
         tile_E[ i + j * jstride ].r = +lenv * std::cos( k * z ) * pol_r;
-        tile_E[ i + j * jstride ].θ = -lenv * std::cos( k * z ) * pol_θ;
+        tile_E[ i + j * jstride ].th = -lenv * std::cos( k * z ) * pol_th;
 
         tile_B[ i + j * jstride ].z = 0;
-        tile_B[ i + j * jstride ].r = lenv_2 * std::cos( k * z_2 ) * pol_θ;
-        tile_B[ i + j * jstride ].θ = lenv_2 * std::cos( k * z_2 ) * pol_r;
+        tile_B[ i + j * jstride ].r = lenv_2 * std::cos( k * z_2 ) * pol_th;
+        tile_B[ i + j * jstride ].th = lenv_2 * std::cos( k * z_2 ) * pol_r;
     }
 
     // Correct axial cell values, see field solver
@@ -294,22 +294,22 @@ void plane_wave(
         for( int i = block_thread_rank(); i < nx.x; i += block_num_threads() ) {
             tile_E[ i + 0 * jstride ].z = 0;
             tile_E[ i + 0 * jstride ].r = ( 4.f * tile_E[ i + 1*jstride ].r - tile_E[ i + 2*jstride ].r ) / 3.f;
-            tile_E[ i + 0 * jstride ].θ = tile_E[ i + 1*jstride ].θ;
+            tile_E[ i + 0 * jstride ].th = tile_E[ i + 1*jstride ].th;
 
             tile_E[ i + 0 * jstride ].z = 0;
             tile_B[ i + 0 * jstride ].r = + tile_B[ i + 1*jstride ].r;  
-            tile_B[ i + 0 * jstride ].θ = 0.125f * I * ( tile_B[ i + 2*jstride ].r - 9.f * tile_B[ i + 2*jstride ].r );
+            tile_B[ i + 0 * jstride ].th = 0.125f * I * ( tile_B[ i + 2*jstride ].r - 9.f * tile_B[ i + 2*jstride ].r );
         }
 
         // values for j < 0 are unused for linear interpolation
         for( int i = block_thread_rank(); i < nx.x; i += block_num_threads() ) {
             tile_E[ i + (-1) * jstride ].z = 0;
             tile_E[ i + (-1) * jstride ].r = 0;
-            tile_E[ i + (-1) * jstride ].θ = 0;
+            tile_E[ i + (-1) * jstride ].th = 0;
 
             tile_B[ i + (-1) * jstride ].z = 0;
             tile_B[ i + (-1) * jstride ].r = 0;
-            tile_B[ i + (-1) * jstride ].θ = 0;
+            tile_B[ i + (-1) * jstride ].th = 0;
         }
     }
 
@@ -440,7 +440,7 @@ void gaussian(
     ///@brief exp( I pol )
     ops::complex<float> pol_r{ beam.cos_pol, -beam.sin_pol };
     ///@brief exp( I (pol-π/2) )
-    ops::complex<float> pol_θ{ beam.sin_pol, +beam.cos_pol };
+    ops::complex<float> pol_th{ beam.sin_pol, +beam.cos_pol };
 
     const auto omega0 = beam.omega0;
     const auto W0 = beam.W0;
@@ -461,11 +461,11 @@ void gaussian(
 
         tile_E[ i + j * jstride ].z = 0;
         tile_E[ i + j * jstride ].r = +lenv * gauss_phase( omega0, W0, z - focus, r_2 ) * pol_r;
-        tile_E[ i + j * jstride ].θ = +lenv * gauss_phase( omega0, W0, z - focus, r   ) * pol_θ;
+        tile_E[ i + j * jstride ].th = +lenv * gauss_phase( omega0, W0, z - focus, r   ) * pol_th;
 
         tile_B[ i + j * jstride ].z = 0;
-        tile_B[ i + j * jstride ].r = -lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r   ) * pol_θ;
-        tile_B[ i + j * jstride ].θ = +lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r_2 ) * pol_r;
+        tile_B[ i + j * jstride ].r = -lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r   ) * pol_th;
+        tile_B[ i + j * jstride ].th = +lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r_2 ) * pol_r;
     }
 
     // Correct axial cell values, see field solver
@@ -474,22 +474,22 @@ void gaussian(
         for( int i = block_thread_rank(); i < static_cast<int>(nx.x); i+=block_num_threads() ) {
             tile_E[ i + 0 * jstride ].z = ops::complex<float> {0,0};
             tile_E[ i + 0 * jstride ].r = ( 4.f * tile_E[ i + 1*jstride ].r - tile_E[ i + 2*jstride ].r ) / 3.f;
-            tile_E[ i + 0 * jstride ].θ = tile_E[ i + 1*jstride ].θ;
+            tile_E[ i + 0 * jstride ].th = tile_E[ i + 1*jstride ].th;
 
             tile_B[ i + 0 * jstride ].z = ops::complex<float> {0,0};
             tile_B[ i + 0 * jstride ].r = + tile_B[ i + 1*jstride ].r;  
-            tile_B[ i + 0 * jstride ].θ = 0.125f * I * ( 9.f * tile_B[ i + 1*jstride ].r - tile_B[ i + 2*jstride ].r );
+            tile_B[ i + 0 * jstride ].th = 0.125f * I * ( 9.f * tile_B[ i + 1*jstride ].r - tile_B[ i + 2*jstride ].r );
         }
 
         // values for j < 0 are unused for linear interpolation
         for( int i = block_thread_rank(); i < static_cast<int>(nx.x); i+=block_num_threads() ) {
             tile_E[ i + (-1) * jstride ].z = 0;
             tile_E[ i + (-1) * jstride ].r = 0;
-            tile_E[ i + (-1) * jstride ].θ = 0;
+            tile_E[ i + (-1) * jstride ].th = 0;
 
             tile_B[ i + (-1) * jstride ].z = 0;
             tile_B[ i + (-1) * jstride ].r = 0;
-            tile_B[ i + (-1) * jstride ].θ = 0;
+            tile_B[ i + (-1) * jstride ].th = 0;
         }
     }
 }

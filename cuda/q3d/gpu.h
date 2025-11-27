@@ -121,7 +121,7 @@
  * @brief Prints GPU device info
  * 
  */
-static inline void print_gpu_info( ) {
+static inline void print_gpu_info( bool verbose = false ) {
 
     int device, nDevices;
     cudaDeviceProp prop;
@@ -136,12 +136,12 @@ static inline void print_gpu_info( ) {
     std::cout << "Device Number           : " << device << " (of " << nDevices << ")\n";
     std::cout << "  Device name           : " << prop.name << '\n';
 
-#if 0
-    std::cout << "  Memory Clock Rate     : " << prop.memoryClockRate << " (KHz) \n";
-    std::cout << "  Memory Bus Width      : " << prop.memoryBusWidth << " (bits) \n";
-    std::cout << "  Peak Memory Bandwidth : " <<
-        2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6 << " (GB/s) \n";
-#endif
+    if ( verbose ) {
+        std::cout << "  Memory Clock Rate     : " << prop.memoryClockRate << " (KHz) \n";
+        std::cout << "  Memory Bus Width      : " << prop.memoryBusWidth << " (bits) \n";
+        std::cout << "  Peak Memory Bandwidth : " <<
+            2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6 << " (GB/s) \n";
+    }
 
     std::cout << "  Max. block size       : " << prop.maxThreadsPerBlock << "\n";
     std::cout << "  Warp size             : " << prop.warpSize << "\n";
@@ -527,6 +527,7 @@ namespace device {
             cudaDeviceReset();
             exit(1);
         }
+
         return buffer;
     }
     

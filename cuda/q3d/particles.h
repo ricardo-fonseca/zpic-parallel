@@ -8,14 +8,43 @@
 #include "zdf-cpp.h"
 #include "bnd.h"
 
+namespace part {
+
 /**
  * @brief Particle quantity identifiers
  * 
  */
-namespace part {
-    enum quant { x, y, ux, uy, uz };
+enum quant { z, r, cos_th, sin_th, q, ux, uy, uz };
+
+namespace bnd_t {
+    enum type { none = 0, periodic };
 }
 
+/**
+ * @brief Local boundary type
+ * 
+ */
+typedef bnd<bnd_t::type> bnd_type;
+
+/**
+ * @brief Total number of tiles
+ * 
+ * @param ntiles    Local number of tiles (x,y)
+ * @return int      Total number of tiles
+ */
+inline constexpr int all_tiles( const uint2 ntiles ) {
+    return ntiles.x * ntiles.y;
+}
+
+}
+
+/**
+ * @brief   Data structure to hold particle sort data
+ * 
+ * @warning This is meant to be used only as a superclass for ParticleSort. The
+ *          struct does not include methods for allocating / deallocating
+ *          memory
+ */
 struct ParticleSortData {
     /// @brief Particle index list [max_part]
     int *idx;
@@ -26,24 +55,45 @@ struct ParticleSortData {
     /// @brief New number of particles per tile
     int * new_np;
     /// @brief Total number of tiles
-    const int ntiles;
+    const uint2 ntiles;
 
-    ParticleSortData( const int ntiles ) : ntiles(ntiles) {};
+    ParticleSortData( const uint2 ntiles ) : 
+        ntiles(ntiles) {};
 };
 
+/**
+ * @brief Class for particle sorting data
+ * 
+ * @note This class does not hold any actual particle data, only particle
+ *       inidices and counts. It should work for any type of particle data.
+ * 
+ */
 class ParticleSort : public ParticleSortData {
     public:
 
+    /**
+     * @brief Construct a new Particle Sort object
+     * 
+     * @param ntiles        Local number of tiles
+     * @param max_part      Maximum number of particles in buffer
+     */
     ParticleSort( uint2 const ntiles, uint32_t const max_part ) :
-        ParticleSortData( ntiles.x * ntiles.y )
+        ParticleSortData( ntiles )
     {
         idx    = device::malloc<int>( max_part );
-        new_np = device::malloc<int>( ParticleSortData::ntiles );
-        nidx   = device::malloc<int>( ParticleSortData::ntiles );
+
+        auto local_tiles = ntiles.x * ntiles.y;
+        new_np = device::malloc<int>( local_tiles );
+        // Number of particles leaving each local tile
+        nidx   = device::malloc<int>( local_tiles );
         // Particles can move in 9 different directions
-        npt    = device::malloc<int>( 9 * ParticleSortData::ntiles );
+        npt    = device::malloc<int>( 9 * local_tiles );
     }
 
+    /**
+     * @brief Destroy the Particle Sort object
+     * 
+     */
     ~ParticleSort() {
         device::free( npt );
         device::free( nidx );
@@ -56,7 +106,7 @@ class ParticleSort : public ParticleSortData {
      * 
      */
     void reset( ) {
-        device::zero( new_np, ntiles );
+        device::zero( new_np, part::all_tiles( ntiles ) );
     }
 };
 
@@ -93,11 +143,19 @@ struct ParticleData {
     /// @brief Particle velocity
     float3 *u;
 
+    /// @brief Individual particle charge
+    float *q;
+
+    /// @brief Angular position stored as { cos(θ), sin(θ) }
+    float2 *th;
+
     /// @brief Maximum number of particles in the buffer
     uint32_t max_part;
 
     ParticleData( const uint2 ntiles, const uint2 nx, const uint32_t max_part ) :
-        ntiles( ntiles ), nx( nx ), max_part( max_part ) {};
+        ntiles( ntiles ),
+        nx( nx ),
+        max_part( max_part ) {};
 };
 
 /**
@@ -105,6 +163,11 @@ struct ParticleData {
  * 
  */
 class Particles : public ParticleData {
+
+    protected:
+
+    /// @brief Grid size
+    uint2 dims;
 
     private:
 
@@ -118,11 +181,8 @@ class Particles : public ParticleData {
 
     public:
 
-    /// @brief Sets periodic boundaries (x,y)
-    int2 periodic;
-
-    /// Global grid size
-    const uint2 gnx;
+    /// @brief Periodic boundaries (z)
+    int periodic_z;
 
     /**
      * @brief Construct a new Particles object
@@ -133,7 +193,7 @@ class Particles : public ParticleData {
      */
     Particles( const uint2 ntiles, const uint2 nx, const uint32_t max_part ) :
         ParticleData( ntiles, nx, max_part ), dev_tmp_uint32(), 
-        periodic( int2{1,1} ), gnx ( uint2{ntiles.x * nx.x, ntiles.y * nx.y} )
+        dims( ntiles * nx ), periodic_z( 1 )
     {
         const size_t bsize = ntiles.x * ntiles.y;
         
@@ -149,9 +209,15 @@ class Particles : public ParticleData {
         ix = device::malloc<int2>  ( max_part );
         x  = device::malloc<float2>( max_part );
         u  = device::malloc<float3>( max_part );
+
+        q  = device::malloc<float>( max_part );
+        th = device::malloc<float2>( max_part );
     }
 
     ~Particles() {
+        device::free( th );
+        device::free( q );
+
         device::free( u );
         device::free( x );
         device::free( ix );
@@ -159,6 +225,20 @@ class Particles : public ParticleData {
         device::free( offset );
         device::free( np );
     }
+
+    /**
+     * @brief Get global periodic boundary settings for z
+     * 
+     * @return int
+     */
+    auto get_periodic_z( ) { return periodic_z; }
+
+    /**
+     * @brief Get the local grid size
+     * 
+     * @return auto
+     */
+    auto get_dims() { return dims; }
 
     /**
      * @brief Sets the number of particles per tile to 0
@@ -179,6 +259,9 @@ class Particles : public ParticleData {
      */
     void grow_buffer( uint32_t new_max ) {
         if ( new_max > max_part ) {
+            device::free( th );
+            device::free( q );
+
             device::free( u );
             device::free( x );
             device::free( ix );
@@ -189,6 +272,10 @@ class Particles : public ParticleData {
             ix = device::malloc<int2>( max_part );
             x  = device::malloc<float2>( max_part );
             u  = device::malloc<float3>( max_part );
+
+            q  = device::malloc<float>( max_part );
+            th  = device::malloc<float2>( max_part );
+
         }
     }
 
@@ -202,6 +289,9 @@ class Particles : public ParticleData {
         swap( a.ix, b.ix );
         swap( a.x,  b.x );
         swap( a.u,  b.u );
+
+        swap( a.q,  b.q );
+        swap( a.th,  b.th );
 
         auto tmp_max_part = b.max_part;
         b.max_part = a.max_part;
@@ -233,14 +323,14 @@ class Particles : public ParticleData {
     uint32_t np_min_tile();
 
     /**
-     * @brief Returns global grid range
+     * @brief Returns local grid range
      * 
      * @return bnd<uint32_t> 
      */
-    bnd<uint32_t> g_range() { 
+    bnd<uint32_t> local_range() { 
         bnd<uint32_t> range;
-        range.x = { .lower = 0, .upper = gnx.x - 1 };
-        range.y = { .lower = 0, .upper = gnx.y - 1 };
+        range.x = pair<uint32_t>( 0, dims.x - 1 );
+        range.y = pair<uint32_t>( 0, dims.y - 1 );
 
         return range;
     };
@@ -253,9 +343,6 @@ class Particles : public ParticleData {
      */
     void gather( part::quant quant, float * const __restrict__ d_data );
 
-    void gather_host( part::quant quant, float * const __restrict__ d_data, float * const __restrict__ h_data,
-    uint32_t const np );
-
     /**
      * @brief Gather data from a specific particle quantity, scaling values
      * 
@@ -265,7 +352,7 @@ class Particles : public ParticleData {
      * @param d_data    Output data buffer, assumed to have size >= np
      * @param scale     Scale factor for data
      */
-    void gather( part::quant quant, float * const __restrict__ d_data, const float2 scale );
+    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data );
 
     /**
      * @brief Validates particle data
@@ -334,6 +421,39 @@ class Particles : public ParticleData {
      */
     void save( zdf::part_info &metadata, zdf::iteration &iter, std::string path );
 
+    /**
+     * @brief Print information on the number of particles per tile
+     * 
+     * @warning Used for debug purposes only
+     * 
+     * @param msg   (optional) Message to print before printing particle information
+     */
+    void info_np( std::string msg = "" ) {
+        
+        int * tmp_np = host::malloc<int>( part::all_tiles( ntiles ) );
+        device::memcpy_tohost( tmp_np, np, 6 );
+
+        if ( ! msg.empty() ) {
+            std::cout << "-------------[info]> " << msg << '\n';
+        }
+
+        std::cout << '\n';
+        std::cout << "#particles per tile:\n";
+
+        uint32_t total = 0;
+
+        for( unsigned j = 0; j < ntiles.y; j++ ) {
+            std::cout << j << ':';
+            for( unsigned i = 0; i < ntiles.x; i++ ) {
+                int tid = j * ntiles.x + i;
+                std::cout << " " << tmp_np[tid];
+                total += tmp_np[tid];
+            }
+            std::cout << '\n';
+        }
+
+        std::cout << "#particles total: " << total << '\n';
+    }
 };
 
 #endif

@@ -406,20 +406,20 @@ __device__ void yee0_b(
         /// @brief Δt/r at the center of j cell
         float dt_rc   = dt / ( ( ir0 + j ) * dr );
 
-        B[ i + j*jstride ].r += (   dt_dz * ( E[(i+1) + j*jstride].θ - E[i + j*jstride].θ ) );  
+        B[ i + j*jstride ].r += (   dt_dz * ( E[(i+1) + j*jstride].th - E[i + j*jstride].th ) );  
 
-        B[ i + j*jstride ].θ += ( - dt_dz * ( E[(i+1) + j*jstride].r - E[i + j*jstride].r ) + 
+        B[ i + j*jstride ].th += ( - dt_dz * ( E[(i+1) + j*jstride].r - E[i + j*jstride].r ) + 
                                     dt_dr * ( E[i + (j+1)*jstride].z - E[i + j*jstride].z ) );  
 
-        B[ i + j*jstride ].z += ( - dt_rc * ( rp * E[i + (j+1)*jstride].θ - rm * E[i + j*jstride].θ ) );  
+        B[ i + j*jstride ].z += ( - dt_rc * ( rp * E[i + (j+1)*jstride].th - rm * E[i + j*jstride].th ) );  
     }
 
     if ( ir0 == 0 ) {
         block_sync();
         for( int i = block_thread_rank() - 1; i < static_cast<int>(nx.x) + 1; i += block_num_threads() ) {
             B[ i +   0 * jstride ].r = - B[ i + 1*jstride ].r;  
-            B[ i +   0 * jstride ].θ = 0;
-            B[ i +   0 * jstride ].z += - 4 * dt_dr * E[ i + 1*jstride ].θ;  
+            B[ i +   0 * jstride ].th = 0;
+            B[ i +   0 * jstride ].z += - 4 * dt_dr * E[ i + 1*jstride ].th;  
         }
     }
 }
@@ -465,12 +465,12 @@ __device__ void yee0_e(
         /// @brief Δt/r at the lower edge of j cell
         float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
 
-        E[i + j*jstride].r += ( - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ) );
+        E[i + j*jstride].r += ( - dt_dz * ( B[i + j*jstride].th - B[(i-1) + j*jstride].th ) );
 
-        E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r) - 
+        E[i + j*jstride].th += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r ) - 
                                     dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) );
 
-        E[i + j*jstride].z += ( + dt_rm * ( rc * B[i + j*jstride].θ - rcm * B[i + (i-1)*jstride].θ) );
+        E[i + j*jstride].z += ( + dt_rm * ( rc * B[i + j*jstride].th - rcm * B[i + (i-1)*jstride].th ) );
 
     }
 
@@ -478,7 +478,7 @@ __device__ void yee0_e(
         block_sync();
         for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
             E[i +   0 *jstride].r = 0;
-            E[i +   0 *jstride].θ = -E[i + 1*jstride].θ;
+            E[i +   0 *jstride].th = -E[i + 1*jstride].th;
             E[i +   0 *jstride].z = E[i + 1*jstride].z;
         }
     }
@@ -504,10 +504,8 @@ __global__ __launch_bounds__(opt_yee_block) void yee0(
     auto * const __restrict__ B_local = & shm[ tile_vol ];
 
     // Copy E and B into shared memory
-    for( unsigned i = block_thread_rank(); i < tile_vol; i += block_num_threads() ) {
-        E_local[i] = E[ tile_off + i ];
-        B_local[i] = B[ tile_off + i ];
-    }
+    block::memcpy( E_local, & E[ tile_off ], tile_vol );
+    block::memcpy( B_local, & B[ tile_off ], tile_vol );
 
     auto * const __restrict__ tile_E = & E_local[ offset ];
     auto * const __restrict__ tile_B = & B_local[ offset ];
@@ -524,10 +522,8 @@ __global__ __launch_bounds__(opt_yee_block) void yee0(
     block_sync();
 
     // Copy data to global memory
-    for( unsigned i = block_thread_rank(); i < tile_vol; i += block_num_threads() ) {
-        E[ tile_off + i ] = E_local[i];
-        B[ tile_off + i ] = B_local[i];
-    }
+    block::memcpy( & E[ tile_off ], E_local, tile_vol );
+    block::memcpy( & B[ tile_off ], B_local, tile_vol );
 }
 
 /**
@@ -583,14 +579,14 @@ __device__ void yeem_b(
 
         B[ i + j*jstride ].r += 
             - dt_rl * mI * E[ i + j * jstride ].z                       // (Δt/r) m I Ez
-            + dt_dz * ( E[(i+1) + j*jstride].θ - E[i + j*jstride].θ );  // Δt ∂Eθ/∂z
+            + dt_dz * ( E[(i+1) + j*jstride].th - E[i + j*jstride].th );  // Δt ∂Et/∂z
 
-        B[ i + j*jstride ].θ += 
+        B[ i + j*jstride ].th += 
             - dt_dz * ( E[(i+1) + j*jstride].r - E[i + j*jstride].r )   // Δt ∂Er/∂z
             + dt_dr * ( E[i + (j+1)*jstride].z - E[i + j*jstride].z );  // Δt ∂Ez/∂r
 
         B[ i + j*jstride ].z += - dt_rc * (                             // Δt/r
-            + ( ru * E[i + (j+1)*jstride].θ - rl * E[i + j*jstride].θ ) // ∂(r Eθ)/∂r 
+            + ( ru * E[i + (j+1)*jstride].th - rl * E[i + j*jstride].th ) // ∂(r Eth)/∂r 
             - mI * E[ i + j * jstride ].r                               // m I Er
         );  
     }
@@ -601,13 +597,13 @@ __device__ void yeem_b(
             // Mode m = 1 is a special case
             for( int i = block_thread_rank() - 1; i < static_cast<int>(nx.x) + 1; i += block_num_threads() ) {
                 B[ i + 0 *jstride ].r = B[ i + 1*jstride ].r;
-                B[ i + 0 *jstride ].θ = 0.125f * I * (9.f * B[ i + 1*jstride ].r - B[ i + 2*jstride ].r );
+                B[ i + 0 *jstride ].th = 0.125f * I * (9.f * B[ i + 1*jstride ].r - B[ i + 2*jstride ].r );
                 B[ i + 0 *jstride ].z = 0;
             }
         } else {
             for( int i = block_thread_rank() - 1; i < static_cast<int>(nx.x) + 1; i += block_num_threads() ) {
                 B[ i + 0 *jstride ].r = - B[ i + 1*jstride ].r;  // Br(r=0) = 0
-                B[ i + 0 *jstride ].θ = 0;
+                B[ i + 0 *jstride ].th= 0;
                 B[ i + 0 *jstride ].z = 0;
             }
         }
@@ -663,15 +659,15 @@ __device__ void yeem_e(
         float dt_rc = dt / ( ( ir0 + j ) * dr );
 
         E[i + j*jstride].r += ( 
-            - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)   // Δt ∂Bθ/∂z 
+            - dt_dz * ( B[i + j*jstride].th - B[(i-1) + j*jstride].th )   // Δt ∂Bt/∂z 
             + dt_rc * mI * B[ i + j * jstride ].z                      // (Δt/r) m I Bz
         );
 
-        E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
+        E[i + j*jstride].th += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
                                 - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) );
 
         E[i + j*jstride].z +=  dt_rl * (                                // Δt/r
-            + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ  // ∂(r Bθ)/∂r 
+            + rc * B[i + j * jstride].th - rcm * B[i + (j-1)*jstride].th  // ∂(r Bt)/∂r 
             - mI * B[i + j * jstride].r                                 // - m I Br
         );
 
@@ -683,13 +679,13 @@ __device__ void yeem_e(
             // Mode m = 1 is a special case
             for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
                 E[ i + 0 *jstride ].r = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;  
-                E[ i + 0 *jstride ].θ =  E[ i + 1 * jstride ].θ;  // ∂Bθ/∂r(r=0) = 0
+                E[ i + 0 *jstride ].th =  E[ i + 1 * jstride ].th;  // ∂Bt/∂r(r=0) = 0
                 E[ i + 0 *jstride ].z = -E[ i + 1 * jstride ].z;  // Ez(r=0) = 0
             }
         } else {
             for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
                 E[ i + 0 *jstride ].r = 0;
-                E[ i + 0 *jstride ].θ = - E[ i + 1 *jstride ].θ;    // Eθ(r=0) = 0
+                E[ i + 0 *jstride ].th = - E[ i + 1 *jstride ].th;    // Et(r=0) = 0
                 E[ i + 0 *jstride ].z = - E[ i + 1 *jstride ].z;    // Ez(r=0) = 0;  
             }
         }
@@ -717,10 +713,8 @@ __global__ __launch_bounds__(opt_yee_block) void yeem(
     cyl_cfloat3 * const __restrict__ B_local = & shm[ tile_vol ];
 
     // Copy E and B into shared memory
-    for( unsigned i = block_thread_rank(); i < tile_vol; i += block_num_threads() ) {
-        E_local[i] = E[ tile_off + i ];
-        B_local[i] = B[ tile_off + i ];
-    }
+    block::memcpy( E_local, & E[ tile_off ], tile_vol );
+    block::memcpy( B_local, & B[ tile_off ], tile_vol );
 
     auto * const __restrict__ tile_E = & E_local[ offset ];
     auto * const __restrict__ tile_B = & B_local[ offset ];
@@ -737,10 +731,8 @@ __global__ __launch_bounds__(opt_yee_block) void yeem(
     block_sync();
 
     // Copy data to global memory
-    for( unsigned i = block_thread_rank(); i < tile_vol; i += block_num_threads() ) {
-        E[ tile_off + i ] = E_local[i];
-        B[ tile_off + i ] = B_local[i];
-    }
+    block::memcpy( & E[ tile_off ], E_local, tile_vol );
+    block::memcpy( & B[ tile_off ], B_local, tile_vol );
 }
 
 }
@@ -846,14 +838,14 @@ __device__ void yee0J_e(
         /// @brief Δt/r at the lower edge of j cell
         float dt_rm = dt / ( ( ir0 + j - 0.5 ) * dr );
 
-        E[i + j*jstride].r += - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)
+        E[i + j*jstride].r += - dt_dz * ( B[i + j*jstride].th - B[(i-1) + j*jstride].th)
                                 - dt * J[i + j*J_jstride].r;
 
-        E[i + j*jstride].θ += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r) - 
+        E[i + j*jstride].th += ( + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r) - 
                                     dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) )
-                                - dt * J[i + j*J_jstride].θ;
+                                - dt * J[i + j*J_jstride].th;
 
-        E[i + j*jstride].z += ( + dt_rm * ( rc * B[i + j*jstride].θ - rcm * B[i + (j-1)*jstride].θ) )
+        E[i + j*jstride].z += ( + dt_rm * ( rc * B[i + j*jstride].th - rcm * B[i + (j-1)*jstride].th ) )
                                 - dt * J[i + j*J_jstride].z;
     }
 
@@ -861,7 +853,7 @@ __device__ void yee0J_e(
         block_sync();
         for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
             E[i +   0 *jstride].r = 0;
-            E[i +   0 *jstride].θ = -E[i + 1*jstride].θ;
+            E[i +   0 *jstride].th = -E[i + 1*jstride].th;
             E[i +   0 *jstride].z = E[i + 1*jstride].z;
         }
     }
@@ -959,16 +951,16 @@ __device__ void yeemJ_e(
 
         E[i + j*jstride].r +=  
             + dt_rc * mI * B[ i + j * jstride ].z                      // (Δt/r) m I Bz
-            - dt_dz * ( B[i + j*jstride].θ - B[(i-1) + j*jstride].θ)   // Δt ∂Bθ/∂z 
+            - dt_dz * ( B[i + j*jstride].th - B[(i-1) + j*jstride].th)   // Δt ∂Bth/∂z 
             - dt * J[i + j*J_jstride].r;
 
-        E[i + j*jstride].θ += 
+        E[i + j*jstride].th += 
             + dt_dz * ( B[i + j*jstride].r - B[(i-1) + j*jstride].r)
             - dt_dr * ( B[i + j*jstride].z - B[i + (j-1)*jstride].z) 
-            - dt * J[i + j*J_jstride].θ;
+            - dt * J[i + j*J_jstride].th;
 
         E[i + j*jstride].z +=  dt_rl * (                                // Δt/r
-            + rc * B[i + j * jstride].θ - rcm * B[i + (j-1)*jstride].θ  // ∂(r Bθ)/∂r 
+            + rc * B[i + j * jstride].th - rcm * B[i + (j-1)*jstride].th  // ∂(r Bt)/∂r 
             - mI * B[i + j * jstride].r                                 // m I Br
         ) - dt * J[i + j*J_jstride].z;
     }
@@ -977,20 +969,20 @@ __device__ void yeemJ_e(
         block_sync();
         for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
             E[i +   0 *jstride].r = 0;
-            E[i +   0 *jstride].θ = -E[i + 1*jstride].θ;
+            E[i +   0 *jstride].th = -E[i + 1*jstride].th;
             E[i +   0 *jstride].z = E[i + 1*jstride].z;
         }
         if ( m == 1 ) {
             // Mode m = 1 is a special case
             for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
                 E[ i + 0 *jstride ].r = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;
-                E[ i + 0 *jstride ].θ =  E[ i + 1 * jstride ].θ;   // ∂Bθ/∂r(r=0) = 0
+                E[ i + 0 *jstride ].th =  E[ i + 1 * jstride ].th;   // ∂Bt/∂r(r=0) = 0
                 E[ i + 0 *jstride ].z = -E[ i + 1 * jstride ].z;  // Ez(r=0) = 0
             }
         } else {
             for( int i = block_thread_rank(); i < static_cast<int>(nx.x) + 2; i += block_num_threads() ) {
                 E[ i + 0 *jstride ].r = 0;
-                E[ i + 0 *jstride ].θ = - E[ i + 1 *jstride ].θ;    // Eθ(r=0) = 0
+                E[ i + 0 *jstride ].th = - E[ i + 1 *jstride ].th;    // Eth(r=0) = 0
                 E[ i + 0 *jstride ].z = - E[ i + 1 *jstride ].z;    // Ez(r=0) = 0;  
             }
         }
@@ -1088,7 +1080,7 @@ void EMF::advance( Current & current ) {
         auto & Jm = current.mode( m );
 
         size_t shm_size = 2 * field_vol * sizeof(cyl_cfloat3);
-        block::set_shmem_size( kernel::yeem, shm_size );
+        block::set_shmem_size( kernel::yeemJ, shm_size );
         kernel::yeemJ <<< grid, block, shm_size >>> (
             m, Em.d_buffer, Bm.d_buffer, 
             Em.ntiles, Em.nx, Em.ext_nx, Em.offset,
@@ -1115,7 +1107,7 @@ void EMF::advance( Current & current ) {
  * @brief Save EM field component to file
  * 
  * @param field     Which field to save (E or B)
- * @param fc        Which field component to save (r, θ or z)
+ * @param fc        Which field component to save (r, t or z)
  * @param m         Mode
  */
 void EMF::save( emf::field const field, const fcomp::cyl fc, const int m ) {
@@ -1146,7 +1138,7 @@ void EMF::save( emf::field const field, const fcomp::cyl fc, const int m ) {
             vfname  += "r";
             vflabel += "r";
             break;
-        case( fcomp::θ ) :
+        case( fcomp::th ) :
             vfname  += "θ";
             vflabel += "\\theta";
             break;
@@ -1238,30 +1230,30 @@ void get_energy(
         auto bfld = tile_B[ j * jstride + i ];
 
         tile_ene_E.r += rc * efld.r * efld.r;
-        tile_ene_E.θ += rm * efld.θ * efld.θ;
+        tile_ene_E.th += rm * efld.th * efld.th;
         tile_ene_E.z += rm * efld.z * efld.z;
 
         tile_ene_B.r += rm * bfld.r * bfld.r;
-        tile_ene_B.θ += rc * bfld.θ * bfld.θ;
+        tile_ene_B.th += rc * bfld.th * bfld.th;
         tile_ene_B.z += rc * bfld.z * bfld.z;
     }
 
     // Add up energy from all warps
     tile_ene_E.r = warp::reduce_add( tile_ene_E.r );
-    tile_ene_E.θ = warp::reduce_add( tile_ene_E.θ );
+    tile_ene_E.th = warp::reduce_add( tile_ene_E.th );
     tile_ene_E.z = warp::reduce_add( tile_ene_E.z );
 
     tile_ene_B.r = warp::reduce_add( tile_ene_B.r );
-    tile_ene_B.θ = warp::reduce_add( tile_ene_B.θ );
+    tile_ene_B.th = warp::reduce_add( tile_ene_B.th );
     tile_ene_B.z = warp::reduce_add( tile_ene_B.z );
 
     if ( warp::thread_rank() == 0 ) {
         device::atomic_fetch_add( &(d_energy[0]), tile_ene_E.r );
-        device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.θ );
+        device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.th );
         device::atomic_fetch_add( &(d_energy[2]), tile_ene_E.z );
 
         device::atomic_fetch_add( &(d_energy[3]), tile_ene_B.r );
-        device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.θ );
+        device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.th );
         device::atomic_fetch_add( &(d_energy[5]), tile_ene_B.z );
     }
 }
@@ -1304,30 +1296,30 @@ void get_energy(
         auto bfld = tile_B[ j * jstride + i ];
 
         tile_ene_E.r += rc * norm( efld.r );
-        tile_ene_E.θ += rm * norm( efld.θ );
+        tile_ene_E.th += rm * norm( efld.th );
         tile_ene_E.z += rm * norm( efld.z );
 
         tile_ene_B.r += rm * norm( bfld.r );
-        tile_ene_B.θ += rc * norm( bfld.θ );
+        tile_ene_B.th += rc * norm( bfld.th );
         tile_ene_B.z += rc * norm( bfld.z );
     }
 
     // Add up energy from all warps
     tile_ene_E.r = warp::reduce_add( tile_ene_E.r );
-    tile_ene_E.θ = warp::reduce_add( tile_ene_E.θ );
+    tile_ene_E.th = warp::reduce_add( tile_ene_E.th );
     tile_ene_E.z = warp::reduce_add( tile_ene_E.z );
 
     tile_ene_B.r = warp::reduce_add( tile_ene_B.r );
-    tile_ene_B.θ = warp::reduce_add( tile_ene_B.θ );
+    tile_ene_B.th = warp::reduce_add( tile_ene_B.th );
     tile_ene_B.z = warp::reduce_add( tile_ene_B.z );
 
     if ( warp::thread_rank() == 0 ) {
         device::atomic_fetch_add( &(d_energy[0]), tile_ene_E.r );
-        device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.θ );
+        device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.th );
         device::atomic_fetch_add( &(d_energy[2]), tile_ene_E.z );
 
         device::atomic_fetch_add( &(d_energy[3]), tile_ene_B.r );
-        device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.θ );
+        device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.th );
         device::atomic_fetch_add( &(d_energy[5]), tile_ene_B.z );
     }
 }

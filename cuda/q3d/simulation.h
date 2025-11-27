@@ -92,17 +92,21 @@ class Simulation {
 
         // Zero global current
         current.zero();
+        deviceCheck();
 
         // Advance all species
         for ( auto & sp : species ) {
             sp -> advance( emf, current );
+            deviceCheck();
         }
 
         // Update current edge values and guard cells
         current.advance();
+        deviceCheck();
         
         // Advance EM fields
         emf.advance( current );
+        deviceCheck();
 
         iter++;
     }
@@ -166,8 +170,8 @@ class Simulation {
         for( int i = 0; i < nmodes; i++ ) {
             std::cout << "(*info*) Mode " << i << '\n';
             emf.get_energy( ene_E, ene_B, i );
-            std::cout << "(*info*) Electric field("<< i << ") = " << ene_E.z + ene_E.r + ene_E.θ << '\n';
-            std::cout << "(*info*) Magnetic field("<< i << ") = " << ene_B.z + ene_B.r + ene_B.θ << '\n';
+            std::cout << "(*info*) Electric field("<< i << ") = " << ene_E.z + ene_E.r + ene_E.th << '\n';
+            std::cout << "(*info*) Magnetic field("<< i << ") = " << ene_B.z + ene_B.r + ene_B.th << '\n';
 
             total_E += ene_E;
             total_B += ene_B;
@@ -175,13 +179,13 @@ class Simulation {
 
         if ( nmodes > 1 ) {
             std::cout << "(*info*) Total (all modes)\n";
-            std::cout << "(*info*) Electric field " << total_E.z + total_E.r + total_E.θ << '\n';
-            std::cout << "(*info*) Magnetic field " << total_B.z + total_B.r + total_B.θ << '\n';
+            std::cout << "(*info*) Electric field " << total_E.z + total_E.r + total_E.th << '\n';
+            std::cout << "(*info*) Magnetic field " << total_B.z + total_B.r + total_B.th << '\n';
         }
 
         double total = part_ene + 
-                       total_E.z + total_E.r + total_E.θ +
-                       total_B.z + total_B.r + total_B.θ;
+                       total_E.z + total_E.r + total_E.th +
+                       total_B.z + total_B.r + total_B.th;
         std::cout << "(*info*) total = " << total << '\n';
     }
 

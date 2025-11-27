@@ -783,8 +783,6 @@ class grid {
      */
     void save( zdf::grid_info &info, zdf::iteration &iter, std::string path ) {
 
-        std::cout << "grid::save()\n";
-
         // Fill in grid dimensions
         info.ndims = 2;
         info.count[0] = dims.x;

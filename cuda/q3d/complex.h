@@ -2,6 +2,7 @@
 #define COMPLEX_H_
 
 #include "vec_types.h"
+#include "gpu.h"
 
 namespace ops {
 
@@ -328,10 +329,16 @@ class complex : public vec2<S> {
     }
 
     __host__ __device__
-    inline friend complex polar( const S& r, const S& θ ) {
-        return complex( r * std::cos(θ), r * std::sin(θ));
+    /**
+     * @brief Build a complex number from polar values (r,θ)
+     * 
+     * @param r 
+     * @param t 
+     * @return complex 
+     */
+    inline friend complex polar( const S& r, const S& t ) {
+        return complex( r * std::cos(t), r * std::sin(t));
     }
-
 };
 
 //  complex I{0,1};
@@ -340,6 +347,42 @@ class complex : public vec2<S> {
 using complex64  = complex< float >;
 using complex128 = complex< double >;
 
+namespace device {
+/**
+ * @brief Atomic add operation - device level
+ * 
+ * @note This is implemented using 2 separate atomic_fetch_add operations
+ *       for the real and complex parts
+ * 
+ * @param address 
+ * @param val 
+ */
+template< typename T >
+ __device__
+inline void atomic_add( complex<T> * address, const complex<T> val ) {
+    atomicAdd( &( address -> x ), val.x );
+    atomicAdd( &( address -> y ), val.y );
+}
+
+}
+
+namespace block {
+/**
+ * @brief Atomic add operation - block level
+ * 
+ * @note This is implemented using 2 separate atomic_fetch_add operations
+ *       for the real and complex parts
+ * 
+ * @param address 
+ * @param val 
+ */
+template< typename T >
+ __device__
+inline void atomic_add( complex<T> * address, const complex<T> val ) {
+    atomicAdd_block( &( address -> x ), val.x );
+    atomicAdd_block( &( address -> y ), val.y );
+}
+}
 
 }
 

@@ -41,7 +41,7 @@ void gather_kernel(
 
         if constexpr ( fc == 0 ) d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].z;
         if constexpr ( fc == 1 ) d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].r;
-        if constexpr ( fc == 2 ) d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].θ;
+        if constexpr ( fc == 2 ) d_out[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].th;
     }
 }
 
@@ -107,7 +107,7 @@ class cyl3grid : public grid< cyl3<T> >
                     ntiles, nx, ext_nx );
                 break;
 
-            case( fcomp::θ ):
+            case( fcomp::th ):
                 gather_kernel<2> <<< grid, block >>> (
                     d_out, &d_buffer[ offset ],
                     ntiles, nx, ext_nx );
@@ -123,7 +123,7 @@ class cyl3grid : public grid< cyl3<T> >
      *        contiguous grid
      * 
      * @note The output array will be organized in 3 sequential blocks (i.e. SoA):
-     *       z components, r components and θ components
+     *       z components, r components and t components
      * 
      * @param out               Scalar output buffer
      * @return unsigned int     Total number of cells * 3
@@ -132,7 +132,7 @@ class cyl3grid : public grid< cyl3<T> >
 
         T * const __restrict__ out_z = & d_out[                   0 ];
         T * const __restrict__ out_r = & d_out[     dims.x * dims.y ];
-        T * const __restrict__ out_θ = & d_out[ 2 * dims.x * dims.y ];
+        T * const __restrict__ out_t = & d_out[ 2 * dims.x * dims.y ];
 
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
@@ -154,7 +154,7 @@ class cyl3grid : public grid< cyl3<T> >
 
                         out_z[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].z;
                         out_r[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].r;
-                        out_θ[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].θ;
+                        out_t[ out_idx ] = tile_data[ iy * ext_nx.x + ix ].t;
                     }
                 }
             }
@@ -219,7 +219,7 @@ class cyl3grid : public grid< cyl3<T> >
                 }
                 break;
 
-            case( fcomp::θ ):
+            case( fcomp::t ):
                 #pragma omp parallel for
                 for( int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
                     const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
@@ -236,7 +236,7 @@ class cyl3grid : public grid< cyl3<T> >
 
                             auto const in_idx = giy * dims.x + gix;
 
-                            tile_data[ iy * ext_nx.x + ix ].θ = d_in[ in_idx ];
+                            tile_data[ iy * ext_nx.x + ix ].t = d_in[ in_idx ];
                         }
                     }
                 }
@@ -261,7 +261,7 @@ class cyl3grid : public grid< cyl3<T> >
 
         T const * const __restrict__ in_z = d_in[                   0 ];
         T const * const __restrict__ in_r = d_in[     dims.x * dims.y ];
-        T const * const __restrict__ in_θ = d_in[ 2 * dims.x * dims.y ];
+        T const * const __restrict__ in_t = d_in[ 2 * dims.x * dims.y ];
 
         #pragma omp parallel for
         for( int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
@@ -281,7 +281,7 @@ class cyl3grid : public grid< cyl3<T> >
 
                     tile_data[ iy * ext_nx.x + ix ].z = in_z[ in_idx ];
                     tile_data[ iy * ext_nx.x + ix ].r = in_r[ in_idx ];
-                    tile_data[ iy * ext_nx.x + ix ].θ = in_θ[ in_idx ];
+                    tile_data[ iy * ext_nx.x + ix ].t = in_t[ in_idx ];
                 }
             }
         }
@@ -301,7 +301,7 @@ class cyl3grid : public grid< cyl3<T> >
 
         T const * const __restrict__ in_z = & d_in[                   0 ];
         T const * const __restrict__ in_r = & d_in[     dims.x * dims.y ];
-        T const * const __restrict__ in_θ = & d_in[ 2 * dims.x * dims.y ];
+        T const * const __restrict__ in_t = & d_in[ 2 * dims.x * dims.y ];
 
         #pragma omp parallel for
         for( int tid = 0; tid < ntiles.x * ntiles.y; tid++ )  {
@@ -321,7 +321,7 @@ class cyl3grid : public grid< cyl3<T> >
 
                     tile_data[ iy * ext_nx.x + ix ].z = in_z[ in_idx ] * scale;
                     tile_data[ iy * ext_nx.x + ix ].r = in_r[ in_idx ] * scale;
-                    tile_data[ iy * ext_nx.x + ix ].θ = in_θ[ in_idx ] * scale;
+                    tile_data[ iy * ext_nx.x + ix ].t = in_t[ in_idx ] * scale;
                 }
             }
         }

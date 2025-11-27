@@ -11,6 +11,34 @@
 #define opt_copy_out_block 32
 #define opt_copy_in_block 1024
 
+
+namespace kernel {
+/**
+ * @brief Gets tile id from coordinates
+ * 
+ * @param coords        Tile coordinates
+ * @param ntiles        Tile grid dimensions
+ * @param periodic_z    Periodic boundary (along z) information
+ * @return int          Tile id on success, -1 on out of bounds
+ */
+__device__
+inline int tid_coords( int2 coords, int2 const ntiles, int const periodic_z ) {
+
+    // x periodic
+    if ( periodic_z ) {
+        if      ( coords.x < 0 )         coords.x += ntiles.x; 
+        else if ( coords.x >= ntiles.x ) coords.x -= ntiles.x;
+    }
+
+    // Out of bounds (non-periodic boundary)
+    int outx = ( coords.x >= ntiles.x ) || ( coords.x < 0 );
+    int outy = ( coords.y >= ntiles.y ) || ( coords.y < 0 );
+
+    return ( outx || outy ) ? -1 : coords.y * ntiles.x + coords.x;
+}
+
+}
+
 namespace kernel {
 
 __global__
@@ -169,23 +197,32 @@ void gather(
     float * const __restrict__ d_data
 ) {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
-    const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
-    
-    const auto  tile_off = part.offset[ tile_id ];
-    const auto  tile_np  = part.np[ tile_id ];
+    const int tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    int2   * const __restrict__ ix       = & part.ix[ tile_off ];
-    float2 const * __restrict__ const x  = & part.x[ tile_off ];
-    float3 const * __restrict__ const u  = & part.u[ tile_off ];
+    // Global spatial offsets of local tile
+    const int offx = tile_idx.x * part.nx.x;
+    const int offy = tile_idx.y * part.nx.y;
 
-    for( int idx = block_thread_rank(); idx < tile_np; idx += block_num_threads() ) {
+    const auto  offset = part.offset[ tile_id ];
+    const auto  np     = part.np[ tile_id ];
+
+    auto const * __restrict__ const ix = &part.ix[ offset ];
+    auto const * __restrict__ const x  = &part.x[ offset ];
+    auto const * __restrict__ const u  = &part.u[ offset ];
+    auto const * __restrict__ const q  = &part.q[ offset ];
+    auto const * __restrict__ const th  = &part.th[ offset ];
+
+    for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
-        if ( quant == part::x )  val = (tile_idx.x * part.nx.x + ix[idx].x) + (0.5f + x[idx].x);
-        if ( quant == part::y )  val = (tile_idx.y * part.nx.y + ix[idx].y) + (0.5f + x[idx].y);
-        if ( quant == part::ux ) val = u[idx].x;
-        if ( quant == part::uy ) val = u[idx].y;
-        if ( quant == part::uz ) val = u[idx].z;
-        d_data[ tile_off + idx ] = val;
+        if constexpr( quant == part::z      ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
+        if constexpr( quant == part::r      ) val = ( offy + ix[idx].y ) + x[idx].y;
+        if constexpr( quant == part::q      ) val = q[idx];
+        if constexpr( quant == part::cos_th ) val = th[idx].x;
+        if constexpr( quant == part::sin_th ) val = th[idx].y;
+        if constexpr( quant == part::ux     ) val = u[idx].x;
+        if constexpr( quant == part::uy     ) val = u[idx].y;
+        if constexpr( quant == part::uz     ) val = u[idx].z;
+        d_data[ offset + idx ] = val;
     }
 }
 
@@ -194,11 +231,8 @@ void gather(
 /**
  * @brief Gather data from a specific particle quantity in a device buffer
  * 
- * @warning The output will use the same offset as the data buffer, so the
- *          particle buffer must be compact
- * 
- * @param quant         Quantity to gather
- * @param d_data        Output data buffer (assumed to have sufficient size)
+ * @param quant     Quantity to gather
+ * @param d_data    Output data buffer, assumed to have size >= np
  */
 void Particles::gather( part::quant quant, float * const __restrict__ d_data )
 {
@@ -207,11 +241,20 @@ void Particles::gather( part::quant quant, float * const __restrict__ d_data )
     
     // Gather data on device
     switch (quant) {
-    case part::x : 
-        kernel::gather<part::x> <<<grid,block>>>( *this, d_data );
+    case part::z : 
+        kernel::gather<part::z> <<<grid,block>>>( *this, d_data );
         break;
-    case part::y:
-        kernel::gather<part::y> <<<grid,block>>>( *this, d_data );
+    case part::r:
+        kernel::gather<part::r> <<<grid,block>>>( *this, d_data );
+        break;
+    case part::q : 
+        kernel::gather<part::q> <<<grid,block>>>( *this, d_data );
+        break;
+    case part::cos_th : 
+        kernel::gather<part::cos_th> <<<grid,block>>>( *this, d_data );
+        break;
+    case part::sin_th:
+        kernel::gather<part::sin_th> <<<grid,block>>>( *this, d_data );
         break;
     case part::ux:
         kernel::gather<part::ux> <<<grid,block>>>( *this, d_data );
@@ -224,6 +267,7 @@ void Particles::gather( part::quant quant, float * const __restrict__ d_data )
         break;
     }
 }
+
 
 namespace kernel {
 
@@ -238,68 +282,82 @@ template < part::quant quant >
 __global__
 void gather( 
     ParticleData part,
-    float * const __restrict__ d_data,
-    const float2 scale
+    const float2 scale,
+    float * const __restrict__ d_data
 ) {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
-    const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
-    
-    const auto  tile_off = part.offset[ tile_id ];
-    const auto  tile_np  = part.np[ tile_id ];
+    const int tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    int2   * const __restrict__ ix       = & part.ix[ tile_off ];
-    float2 const * __restrict__ const x  = & part.x[ tile_off ];
-    float3 const * __restrict__ const u  = & part.u[ tile_off ];
+    const auto  offset = part.offset[ tile_id ];
+    const auto  np     = part.np[ tile_id ];
 
-    for( int idx = block_thread_rank(); idx < tile_np; idx += block_num_threads() ) {
+    // Global spatial offsets of local tile
+    const int offx = tile_idx.x * part.nx.x;
+    const int offy = tile_idx.y * part.nx.y;
+
+    auto const * __restrict__ const ix = &part.ix[ offset ];
+    auto const * __restrict__ const x  = &part.x[ offset ];
+    auto const * __restrict__ const u  = &part.u[ offset ];
+    auto const * __restrict__ const q  = &part.q[ offset ];
+    auto const * __restrict__ const th  = &part.th[ offset ];
+
+    for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
-        if ( quant == part::x )  val = (tile_idx.x * part.nx.x + ix[idx].x) + (0.5f + x[idx].x);
-        if ( quant == part::y )  val = (tile_idx.y * part.nx.y + ix[idx].y) + (0.5f + x[idx].y);
-        if ( quant == part::ux ) val = u[idx].x;
-        if ( quant == part::uy ) val = u[idx].y;
-        if ( quant == part::uz ) val = u[idx].z;
-        d_data[ tile_off + idx ] = fma( scale.x, val, scale.y );
+        if constexpr( quant == part::z      ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
+        if constexpr( quant == part::r      ) val = ( offy + ix[idx].y ) + x[idx].y;
+        if constexpr( quant == part::q      ) val = q[idx];
+        if constexpr( quant == part::cos_th ) val = th[idx].x;
+        if constexpr( quant == part::sin_th ) val = th[idx].y;
+        if constexpr( quant == part::ux     ) val = u[idx].x;
+        if constexpr( quant == part::uy     ) val = u[idx].y;
+        if constexpr( quant == part::uz     ) val = u[idx].z;
+        d_data[ offset + idx ] = fma( scale.x, val, scale.y );
     }
 }
 
 }
 
 /**
- * @brief Gather particle data, scaling values
+ * @brief Gather data from a specific particle quantity in a device buffer
  * 
- * @note Data (val) will be returned as `scale.x * val + scale.y`
- * 
- * @warning The output will use the same offset as the data buffer, so the
- *          particle buffer must be compact
- * 
- * @param quant         Quantity to gather
- * @param d_data        Output data buffer (assumed to have sufficient size)
+ * @param quant     Quantity to gather
+ * @param d_data    Output data buffer, assumed to have size >= np
  * @param scale     Scale factor for data
  */
-void Particles::gather( part::quant quant, float * const __restrict__ d_data, const float2 scale )
+void Particles::gather( part::quant quant, const float2 scale, float * const __restrict__ d_data )
 {
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
     
     // Gather data on device
     switch (quant) {
-    case part::x : 
-        kernel::gather<part::x> <<<grid,block>>>( *this, d_data, scale );
+    case part::z : 
+        kernel::gather<part::z> <<<grid,block>>>( *this, scale, d_data );
         break;
-    case part::y:
-        kernel::gather<part::y> <<<grid,block>>>( *this, d_data, scale );
+    case part::r:
+        kernel::gather<part::r> <<<grid,block>>>( *this, scale, d_data );
+        break;
+    case part::q: 
+        kernel::gather<part::q> <<<grid,block>>>( *this, scale, d_data );
+        break;
+    case part::cos_th: 
+        kernel::gather<part::cos_th> <<<grid,block>>>( *this, scale, d_data );
+        break;
+    case part::sin_th:
+        kernel::gather<part::sin_th> <<<grid,block>>>( *this, scale, d_data );
         break;
     case part::ux:
-        kernel::gather<part::ux> <<<grid,block>>>( *this, d_data, scale );
+        kernel::gather<part::ux> <<<grid,block>>>( *this, scale, d_data );
         break;
     case part::uy:
-        kernel::gather<part::uy> <<<grid,block>>>( *this, d_data, scale );
+        kernel::gather<part::uy> <<<grid,block>>>( *this, scale, d_data );
         break;
     case part::uz:
-        kernel::gather<part::uz> <<<grid,block>>>( *this, d_data, scale );
+        kernel::gather<part::uz> <<<grid,block>>>( *this, scale, d_data );
         break;
     }
 }
+
 
 /**
  * @brief Save particle data to disk
@@ -311,8 +369,24 @@ void Particles::gather( part::quant quant, float * const __restrict__ d_data, co
  */
 void Particles::save( zdf::part_info &metadata, zdf::iteration &iter, std::string path ) {
 
-    uint32_t np = np_total();
-    metadata.np = np;
+    uint32_t out_np = np_total();
+    metadata.np = out_np;
+
+    const int nquants = 8;
+
+    const part::quant quants[] = {
+        part::quant::z, part::quant::r,
+        part::quant::q,
+        part::quant::cos_th, part::quant::sin_th,
+        part::quant::ux, part::quant::uy, part::quant::uz 
+    };
+
+    const char * qnames[] = {
+        "z","r",
+        "q",
+        "cosθ","sinθ",
+        "ux","uy","uz"
+    };
 
     // Open file
     zdf::file part_file;
@@ -321,46 +395,24 @@ void Particles::save( zdf::part_info &metadata, zdf::iteration &iter, std::strin
     // Gather and save each quantity
     float *d_data = nullptr;
     float *h_data = nullptr;
-    if( np > 0 ) {
-        d_data = device::malloc<float>( np );
-        h_data = host::malloc<float>( np );
+    if( out_np > 0 ) {
+        d_data = device::malloc<float>( out_np );
+        h_data = host::malloc<float>( out_np );
     }
 
-    if ( np > 0 ) {
-        gather( part::quant::x, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
+    for( int i = 0; i < nquants; i++ ) {
+        if ( out_np > 0 ) {
+            gather( quants[i], d_data );
+            device::memcpy_tohost( h_data, d_data, out_np );
+        }
+        zdf::add_quant_part_file( part_file, qnames[i], h_data, out_np );
     }
-    zdf::add_quant_part_file( part_file, "x", h_data, np );
-
-    if ( np > 0 ) {
-        gather( part::quant::y, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "y", h_data, np );
-
-    if ( np > 0 ) {
-        gather( part::quant::ux, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "ux", h_data, np );
-
-    if ( np > 0 ) {
-        gather( part::quant::uy, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "uy", h_data, np );
-
-    if ( np > 0 ) {
-        gather( part::quant::uz, d_data );
-        device::memcpy_tohost( h_data, d_data, np );
-    }
-    zdf::add_quant_part_file( part_file, "uz", h_data, np );
 
     // Close the file
     zdf::close_file( part_file );
 
     // Cleanup
-    if ( np > 0 ) {
+    if ( out_np > 0 ) {
         device::free( d_data );
         host::free( h_data );
     }
@@ -383,10 +435,10 @@ __global__
  */
 void __launch_bounds__(opt_bnd_check_block) bnd_check( 
     ParticleData part, ParticleSortData sort, 
-    int2 const periodic
+    const int periodic_z
 ) {
-    int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    int2 lim = make_int2( part.nx.x, part.nx.y );
+    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    const int2 lim = make_int2( part.nx.x, part.nx.y );
 
     /// @brief [shared] Number of particles moving in each direction
     __shared__ int _npt[9];
@@ -441,23 +493,14 @@ void __launch_bounds__(opt_bnd_check_block) bnd_check(
         // Add number of particles to target neighboring node
 
         // Find target node
-        int target_tx = tile_idx.x + ( i % 3 - 1 );
-        int target_ty = tile_idx.y + ( i / 3 - 1 );
+        int2 target = make_int2( 
+                tile_idx.x + i % 3 - 1,
+                tile_idx.y + i / 3 - 1
+            );
 
-        // Correct for periodic boundaries
-        if ( periodic.x ) {
-            if ( target_tx < 0 )         target_tx += ntiles.x; 
-            if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-        }
-        
-        if ( periodic.y ) {
-            if ( target_ty < 0 )         target_ty += ntiles.y;
-            if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-        }
-        
-        if ( ( target_tx >= 0 ) && ( target_tx < ntiles.x ) &&
-                ( target_ty >= 0 ) && ( target_ty < ntiles.y ) ) {
-            int target_tid = target_ty * ntiles.x + target_tx;
+        int target_tid = tid_coords( target, ntiles, periodic_z );
+
+        if ( target_tid >= 0 ) {
             device::atomic_fetch_add( & sort.new_np[ target_tid ], _npt[i] );
         }
     }
@@ -469,7 +512,7 @@ void Particles::bnd_check( ParticleSort & sort ) {
 
     dim3 grid( ntiles.x, ntiles.y );
     auto block = opt_bnd_check_block;    
-    kernel::bnd_check <<<grid,block>>> ( *this, sort, periodic );
+    kernel::bnd_check <<<grid,block>>> ( *this, sort, periodic_z );
 }
 
 
@@ -665,13 +708,10 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
     ParticleData part, 
     ParticleData tmp,
     const ParticleSortData sort,
-    const int2 periodic
+    const int periodic_z
 ) {
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
     const int2 lim = make_int2( part.nx.x, part.nx.y );
-
-    /// @brief [shared] offsets in target buffer
-    __shared__ int _dir_offset[9];
 
     /// @brief [shared] index of particle used to fill hole
     __shared__ int _c;
@@ -682,21 +722,28 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
     int const old_offset      = part.offset[ tile_id ];
     int * __restrict__ npt    = &sort.npt[ 9*tile_id ];
 
-    int2   * __restrict__ ix  = &part.ix[ old_offset ];
-    float2 * __restrict__ x   = &part.x[ old_offset ];
-    float3 * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ ix  = &part.ix[ old_offset ];
+    auto * __restrict__ x   = &part.x[ old_offset ];
+    auto * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ q   = &part.q[ old_offset ];
+    auto * __restrict__ th  = &part.th[ old_offset ];
 
-    int * __restrict__ idx    = &sort.idx[ old_offset ];
-    uint32_t const nidx       = sort.nidx[ tile_id ];
+    auto * __restrict__ idx = &sort.idx[ old_offset ];
+    uint32_t const nidx     = sort.nidx[ tile_id ];
 
     int const new_offset = tmp.offset[ tile_id ];
     int const new_np     = sort.new_np[ tile_id ];
 
+    /// @brief [shared] offsets in target buffer
+    __shared__ int _dir_offset[9];
+
     // The _dir_offset variable holds the offset for each of the 9 target
     // tiles so the tmp_* variables just point to the beggining of the buffers
-    int2* __restrict__  tmp_ix  = tmp.ix;
-    float2* __restrict__ tmp_x  = tmp.x;
-    float3* __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_ix  = tmp.ix;
+    auto * __restrict__ tmp_x  = tmp.x;
+    auto * __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_q  = tmp.q;
+    auto * __restrict__ tmp_th  = tmp.th;
 
     // Number of particles staying in tile
     const int n0 = npt[4];
@@ -729,30 +776,14 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
         
         if ( i != 4 ) {
             // Find target node
-            int target_tx = tile_idx.x + i % 3 - 1;
-            int target_ty = tile_idx.y + i / 3 - 1;
+            int dx = i % 3 - 1;
+            int dy = i / 3 - 1;
 
-            bool valid = true;
+            int2 target = make_int2( tile_idx.x + dx, tile_idx.y + dy);
+            int target_tid = tid_coords( target, ntiles, periodic_z );
 
-            // Correct for periodic boundaries
-            if ( periodic.x ) {
-                if ( target_tx < 0 )         target_tx += ntiles.x; 
-                if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-            } else {
-                valid &= ( target_tx >= 0 ) && ( target_tx < ntiles.x ); 
-            }
-
-            if ( periodic.y ) {
-                if ( target_ty < 0 )         target_ty += ntiles.y;
-                if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-            } else {
-                valid &= ( target_ty >= 0 ) && ( target_ty < ntiles.y ); 
-            }
-
-            if ( valid ) {
+            if ( target_tid >= 0 ) {
                 // If valid neighbour tile reserve space on tmp. array
-                int target_tid = target_ty * ntiles.x + target_tx;
-
                 _dir_offset[i] = tmp.offset[ target_tid ] + 
                                 device::atomic_fetch_add( &tmp.np[ target_tid ], npt[ i ] );
             } else {
@@ -772,9 +803,11 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
         
         int k = idx[i];
 
-        int2 nix  = ix[k];
-        float2 nx = x[k];
-        float3 nu = u[k];
+        auto nix  = ix[k];
+        auto nx   = x[k];
+        auto nu   = u[k];
+        auto nq   = q[k];
+        auto nth  = th[k];
         
         int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
         int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
@@ -793,6 +826,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             tmp_ix[ l ] = nix;
             tmp_x[ l ] = nx;
             tmp_u[ l ] = nu;
+            tmp_q[ l ] = nq;
+            tmp_th[ l ] = nth;
         }
 
         // Fill hole if needed
@@ -808,6 +843,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             ix[ k ] = ix[ c ];
             x [ k ] = x [ c ];
             u [ k ] = u [ c ];
+            q [ k ] = q [ c ];
+            th[ k ] = th[ c ];
         }
     }
 
@@ -825,6 +862,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             tmp_ix[ new_idx + i ] = ix[ i ];
             tmp_x[ new_idx + i ]  = x [ i ];
             tmp_u[ new_idx + i ]  = u [ i ];
+            tmp_q[ new_idx + i ]  = q [ i ];
+            tmp_th[ new_idx + i ] = th[ i ];
         }
 
     } else {
@@ -835,6 +874,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             tmp_ix[ new_idx + i ] = ix[ old_idx + i ];
             tmp_x[ new_idx + i ]  = x [ old_idx + i ];
             tmp_u[ new_idx + i ]  = u [ old_idx + i ];
+            tmp_q[ new_idx + i ]  = q [ old_idx + i ];
+            tmp_th[ new_idx + i ] = th[ old_idx + i ];
         }
     }
 
@@ -860,7 +901,7 @@ void Particles::copy_out( ParticleData & tmp, const ParticleSortData & sort )
     dim3 grid( ntiles.x, ntiles.y );
     auto block = opt_copy_out_block;
 
-    kernel::copy_out <<< grid, block >>> ( *this, tmp, sort, periodic );
+    kernel::copy_out <<< grid, block >>> ( *this, tmp, sort, periodic_z );
 }
 
 
@@ -889,21 +930,27 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
     const int tmp_np           =  tmp.np[ tile_id ];
 
     // Notice that we are already working with the new offset
-    int2   * __restrict__ ix  = &part.ix[ new_offset ];
-    float2 * __restrict__ x   = &part.x [ new_offset ];
-    float3 * __restrict__ u   = &part.u [ new_offset ];
+    auto * __restrict__ ix  = &part.ix[ new_offset ];
+    auto * __restrict__ x   = &part.x [ new_offset ];
+    auto * __restrict__ u   = &part.u [ new_offset ];
+    auto * __restrict__ q   = &part.q [ new_offset ];
+    auto * __restrict__ th  = &part.th[ new_offset ];
 
-    int2   * __restrict__ tmp_ix = &tmp.ix[ new_offset ];
-    float2 * __restrict__ tmp_x  = &tmp.x [ new_offset ];
-    float3 * __restrict__ tmp_u  = &tmp.u [ new_offset ];
+    auto * __restrict__ tmp_ix = &tmp.ix[ new_offset ];
+    auto * __restrict__ tmp_x  = &tmp.x [ new_offset ];
+    auto * __restrict__ tmp_u  = &tmp.u [ new_offset ];
+    auto * __restrict__ tmp_q  = &tmp.q [ new_offset ];
+    auto * __restrict__ tmp_th = &tmp.th[ new_offset ];
 
     if ( new_offset >= old_offset ) {
 
         // Add particles to the end of the buffer
         for( int i = block_thread_rank(); i < tmp_np; i += block_num_threads() ) {
             ix[ old_np + i ] = tmp_ix[ i ];
-            x[ old_np + i ]  = tmp_x[ i ];
-            u[ old_np + i ]  = tmp_u[ i ];
+            x [ old_np + i ] = tmp_x[ i ];
+            u [ old_np + i ] = tmp_u[ i ];
+            q [ old_np + i ] = tmp_q[ i ];
+            th[ old_np + i ] = tmp_th[ i ];
         }
 
     } else {
@@ -914,15 +961,19 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
         
         for( int i = block_thread_rank(); i < np0; i += block_num_threads() ) {
             ix[ i ] = tmp_ix[ i ];
-            x[ i ]  = tmp_x[ i ];
-            u[ i ]  = tmp_u[ i ];
+            x [ i ] = tmp_x [ i ];
+            u [ i ] = tmp_u [ i ];
+            q [ i ] = tmp_q [ i ];
+            th[ i ] = tmp_th[ i ];
         }
 
         // If any particles left, add particles to the end of the buffer
         for( int i = np0 + block_thread_rank(); i < tmp_np; i += block_num_threads() ) {
             ix[ old_np + i ] = tmp_ix[ i ];
-            x[ old_np + i ]  = tmp_x[ i ];
-            u[ old_np + i ]  = tmp_u[ i ];
+            x [ old_np + i ] = tmp_x [ i ];
+            u [ old_np + i ] = tmp_u [ i ];
+            q [ old_np + i ] = tmp_q [ i ];
+            th[ old_np + i ] = tmp_th[ i ];
         }
 
     }
@@ -968,16 +1019,10 @@ void copy_sorted(
     ParticleData part,
     ParticleData tmp,
     const ParticleSortData sort,
-    const int2 periodic
+    const int periodic_z
 ) {
     const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
     const int2 lim = make_int2( part.nx.x, part.nx.y );
-
-    /// @brief [shared] offsets in target buffer
-    __shared__ int _dir_offset[9];
-
-    /// @brief [shared] index of particle used to fill hole
-    __shared__ int _c;
 
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
     const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
@@ -986,47 +1031,39 @@ void copy_sorted(
     int const old_offset      = part.offset[ tile_id ];
     int * __restrict__ npt    = &sort.npt[ 9*tile_id ];
 
-    int2   * __restrict__ ix  = &part.ix[ old_offset ];
-    float2 * __restrict__ x   = &part.x[ old_offset ];
-    float3 * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ ix  = &part.ix[ old_offset ];
+    auto * __restrict__ x   = &part.x[ old_offset ];
+    auto * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ q   = &part.q[ old_offset ];
+    auto * __restrict__ th  = &part.th[ old_offset ];
 
     int * __restrict__ idx    = &sort.idx[ old_offset ];
     uint32_t const nidx       = sort.nidx[ tile_id ];
 
+    /// @brief [shared] offsets in target buffer
+    __shared__ int _dir_offset[9];
+
+    /// @brief [shared] index of particle used to fill hole
+    __shared__ int _c;
+
     // The _dir_offset variables hold the offset for each of the 9 target
     // tiles so the tmp_* variables just point to the beggining of the buffers
-    int2* __restrict__  tmp_ix  = tmp.ix;
-    float2* __restrict__ tmp_x  = tmp.x;
-    float3* __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_ix = tmp.ix;
+    auto * __restrict__ tmp_x  = tmp.x;
+    auto * __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_q  = tmp.q;
+    auto * __restrict__ tmp_th = tmp.th;
 
     // Find offsets on new buffer
     for( int i = block_thread_rank(); i < 9; i += block_num_threads() ) {
         
         // Find target node
-        int target_tx = tile_idx.x + i % 3 - 1;
-        int target_ty = tile_idx.y + i / 3 - 1;
+        int2 target = make_int2( tile_idx.x + i % 3 - 1, tile_idx.y + i / 3 - 1 );
 
-        bool valid = true;
+        int target_tid = tid_coords( target, ntiles, periodic_z );
 
-        // Correct for periodic boundaries
-        if ( periodic.x ) {
-            if ( target_tx < 0 )         target_tx += ntiles.x; 
-            if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-        } else {
-            valid &= ( target_tx >= 0 ) && ( target_tx < ntiles.x ); 
-        }
-
-        if ( periodic.y ) {
-            if ( target_ty < 0 )         target_ty += ntiles.y;
-            if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-        } else {
-            valid &= ( target_ty >= 0 ) && ( target_ty < ntiles.y ); 
-        }
-
-        if ( valid ) {
+        if ( target_tid >= 0 ) {
             // If valid neighbour tile reserve space on tmp. array
-            int target_tid = target_ty * ntiles.x + target_tx;
-
             _dir_offset[i] = tmp.offset[ target_tid ] + 
                 device::atomic_fetch_add( & tmp.np[ target_tid ], npt[ i ] );
         
@@ -1049,9 +1086,11 @@ void copy_sorted(
         
         int k = idx[i];
 
-        int2 nix  = ix[k];
-        float2 nx = x[k];
-        float3 nu = u[k];
+        auto nix = ix[k];
+        auto nx  = x[k];
+        auto nu  = u[k];
+        auto nq  = q[k];
+        auto nth = th[k];
         
         int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
         int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
@@ -1068,8 +1107,10 @@ void copy_sorted(
             nix.y -= ycross * lim.y;
 
             tmp_ix[ l ] = nix;
-            tmp_x[ l ] = nx;
-            tmp_u[ l ] = nu;
+            tmp_x[ l ]  = nx;
+            tmp_u[ l ]  = nu;
+            tmp_q[ l ]  = nq;
+            tmp_th[ l ] = nth;
         }
 
         // Fill hole if needed
@@ -1085,6 +1126,8 @@ void copy_sorted(
             ix[ k ] = ix[ c ];
             x [ k ] = x [ c ];
             u [ k ] = u [ c ];
+            q [ k ] = q [ c ];
+            th[ k ] = th[ c ];
         }
     }
 
@@ -1097,6 +1140,8 @@ void copy_sorted(
         tmp_ix[ start + i ] = ix[i];
         tmp_x [ start + i ] = x[i];
         tmp_u [ start + i ] = u[i];
+        tmp_q [ start + i ] = q[i];
+        tmp_th[ start + i ] = th[i];
     }
 }
 
@@ -1116,7 +1161,7 @@ void Particles::copy_sorted( ParticleData & tmp, const ParticleSortData & sort )
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 1024 );
 
-    kernel::copy_sorted <<< grid, block >>> ( *this, tmp, sort, periodic );
+    kernel::copy_sorted <<< grid, block >>> ( *this, tmp, sort, periodic_z );
 }
 
 
@@ -1242,9 +1287,11 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
 
     int const offset = part.offset[ tile_id ];
     int const np     = part.np[ tile_id ];
-    int2   const * const __restrict__ ix = &part.ix[ offset ];
-    float2 const * const __restrict__ x  = &part.x[ offset ];
-    float3 const * const __restrict__ u  = &part.u[ offset ];
+    auto * const __restrict__ ix = &part.ix[ offset ];
+    auto * const __restrict__ x  = &part.x[ offset ];
+    auto * const __restrict__ u  = &part.u[ offset ];
+    auto * const __restrict__ q  = &part.q[ offset ];
+    auto * const __restrict__ th = &part.th[ offset ];
 
     __shared__ int _err;
     _err = 0;
@@ -1288,6 +1335,21 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
 
         if ( isnan(u[i].z) || isinf(u[i].z) || fabsf(u[i].x) >= __ULIM ) {
             printf("[%d,%d] Invalid u[%d].z gen. velocity (%f)\n", tile_idx.x, tile_idx.y, i, u[i].z );
+            err = 1;
+        }
+
+        if ( q[i] == 0 || isnan(q[i]) || isinf(q[i]) || abs(q[i]) >= __ULIM ) {
+            printf("[%d,%d] Invalid q[%d] charge (%f)\n", tile_idx.x, tile_idx.y, i, q[i] );
+            err = 1;
+        }
+
+        if ( th[i].x < -1 || th[i].x > 1 ) {
+            printf("[%d,%d] Invalid cosθ[%d] value (%f)\n", tile_idx.x, tile_idx.y, i, th[i].x );
+            err = 1;
+        }
+
+        if ( th[i].y < -1 || th[i].y > 1 ) {
+            printf("[%d,%d] Invalid sinθ[%d] value (%f)\n", tile_idx.x, tile_idx.y, i, th[i].y );
             err = 1;
         }
 
