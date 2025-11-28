@@ -1338,7 +1338,7 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
             err = 1;
         }
 
-        if ( q[i] == 0 || isnan(q[i]) || isinf(q[i]) || abs(q[i]) >= __ULIM ) {
+        if ( q[i] == 0 || isnan(q[i]) || isinf(q[i]) || std::abs(q[i]) >= __ULIM ) {
             printf("[%d,%d] Invalid q[%d] charge (%f)\n", tile_idx.x, tile_idx.y, i, q[i] );
             err = 1;
         }

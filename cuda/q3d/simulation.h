@@ -92,21 +92,17 @@ class Simulation {
 
         // Zero global current
         current.zero();
-        deviceCheck();
 
         // Advance all species
         for ( auto & sp : species ) {
             sp -> advance( emf, current );
-            deviceCheck();
         }
 
         // Update current edge values and guard cells
         current.advance();
-        deviceCheck();
         
         // Advance EM fields
         emf.advance( current );
-        deviceCheck();
 
         iter++;
     }

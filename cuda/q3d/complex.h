@@ -275,7 +275,7 @@ class complex : public vec2<S> {
     __host__
     inline friend std::ostream& operator<<(std::ostream& os, const complex z) {
         if ( z.y < 0 ) {
-            os << '(' << z.x << " - " << std::fabs(z.y) << "𝑖)";
+            os << '(' << z.x << " - " << std::abs(z.y) << "𝑖)";
         } else {
             os << '(' << z.x << " + " << z.y << "𝑖)";
         }

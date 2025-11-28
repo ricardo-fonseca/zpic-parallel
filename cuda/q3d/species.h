@@ -322,24 +322,17 @@ public:
     void push( EMF const &emf );
 
     /**
-     * @brief Move particles (advance positions) and deposit current
-     * 
-     * @param current   Electric current density
-     */
-    void move( Current & current );
-
-    /**
      * @brief Move particles (advance positions), deposit current and shift positions
      * 
      * @param current   Electric current density
      */
-    void move( Current & current, int2 const shift );
+    void move( Current & current, int2 const shift = int2{0,0} );
 
     /**
      * @brief Move particles (advance positions) without depositing current
      * 
      */
-    void move();
+    void move( int2 const shift = int2{0,0} );
 
     /**
      * @brief Free stream particles 1 timestep

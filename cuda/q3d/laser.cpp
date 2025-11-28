@@ -26,7 +26,7 @@ float lon_env( Laser::Pulse & laser, float z ) {
     } else if ( z > laser.start - laser.rise ) {
         // Laser rise
         float csi = z - laser.start;
-        float e = sin( M_PI_2 * csi / laser.rise );
+        float e = std::sin( M_PI_2 * csi / laser.rise );
         return e*e;
     } else if ( z > laser.start - (laser.rise + laser.flat) ) {
         // Flat-top
@@ -34,7 +34,7 @@ float lon_env( Laser::Pulse & laser, float z ) {
     } else if ( z > laser.start - (laser.rise + laser.flat + laser.fall) ) {
         // Laser fall
         float csi = z - (laser.start - laser.rise - laser.flat - laser.fall);
-        float e = sin( M_PI_2 * csi / laser.fall );
+        float e = std::sin( M_PI_2 * csi / laser.fall );
         return e*e;
     }
 
@@ -63,101 +63,108 @@ void div_corr_z_scan (
 {
     int grid_j = blockIdx.x;
 
-    if ( grid_j == 0 ) return;
+    if ( grid_j > 0 ) { // non-axial values
 
-    const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
-    const int jstride = ext_nx.x;
+        const int tile_vol = roundup4( ext_nx.x * ext_nx.y );
+        const int jstride = ext_nx.x;
 
-    /// @brief longitudinal (z) cell size
-    const auto dz = dx.x;
+        /// @brief longitudinal (z) cell size
+        const auto dz = dx.x;
 
-    /// @brief transverse (r) cell size
-    const auto dr = dx.y;
+        /// @brief transverse (r) cell size
+        const auto dr = dx.y;
 
-    ///@brief y tile index
-    int ty = blockIdx.x / nx.y;
+        ///@brief y tile index
+        int ty = blockIdx.x / nx.y;
 
-    ///@brief j coordinate inside tile
-    int j = grid_j - ty * nx.y;
+        ///@brief j coordinate inside tile
+        int j = grid_j - ty * nx.y;
 
-    /// @brief imaginary unit
-    constexpr ops::complex<float> I{0,1};
+        /// @brief imaginary unit
+        constexpr ops::complex<float> I{0,1};
 
-    ///@brief r/Δr at center of cell
-    const float rc  = grid_j;
-    ///@brief r/Δr at center of lower (j-1) cell
-    const float rcm = grid_j - 1;
-    ///@brief r/Δr at upper edge of cell
-    const float rp = grid_j + 0.5;
-    ///@brief r/Δr at lower edge of cell
-    const float rm = grid_j - 0.5;
+        ///@brief r/Δr at center of cell
+        const float rc  = grid_j;
+        ///@brief r/Δr at center of lower (j-1) cell
+        const float rcm = grid_j - 1;
+        ///@brief r/Δr at upper edge of cell
+        const float rp = grid_j + 0.5;
+        ///@brief r/Δr at lower edge of cell
+        const float rm = grid_j - 0.5;
 
-    ///@brief Δz/r at center of cell
-    const float dz_rc = dz / (rc * dr);
-    ///@brief Δz/r at lower edge of cell
-    const float dz_rm = dz / (rm * dr);
+        ///@brief Δz/r at center of cell
+        const float dz_rc = dz / (rc * dr);
+        ///@brief Δz/r at lower edge of cell
+        const float dz_rm = dz / (rm * dr);
 
-    __shared__ ops::complex<double> divEz; divEz = 0;
-    __shared__ ops::complex<double> divBz; divBz = 0;
+        __shared__ ops::complex<double> divEz; divEz = 0;
+        __shared__ ops::complex<double> divBz; divBz = 0;
 
-    block_sync();
+        block_sync();
 
-    // Process tiles right to left
-    for( int tx = ntiles.x-1; tx >=0; tx-- ) {
+        // Process tiles right to left
+        for( int tx = ntiles.x-1; tx >=0; tx-- ) {
 
-        const auto tile_idx = make_uint2( tx, ty );
-        const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-        const auto tile_off = tid * tile_vol;
+            const auto tile_idx = make_uint2( tx, ty );
+            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
+            const auto tile_off = tid * tile_vol;
 
-        auto * const __restrict__ tile_E = & E_buffer[ tile_off ];
-        auto * const __restrict__ tile_B = & B_buffer[ tile_off ];
+            auto * const __restrict__ tile_E = & E_buffer[ tile_off ];
+            auto * const __restrict__ tile_B = & B_buffer[ tile_off ];
 
-        int start = ( nx.x / WARP_SIZE ) * WARP_SIZE; 
-        for( int i = start + block_thread_rank(); i >= 0; i -= WARP_SIZE ) {
+            int start = ( nx.x / WARP_SIZE ) * WARP_SIZE; 
+            for( int i = start + block_thread_rank(); i >= 0; i -= WARP_SIZE ) {
 
-            ops::complex<double> dEz = 0;
-            ops::complex<double> dBz = 0;
+                ops::complex<double> dEz = 0;
+                ops::complex<double> dBz = 0;
 
-            // If inside tile read x divergence
-            if ( i < nx.x ) {
-                dEz = dz_rm * (
-                        ( rc * tile_E[i+1 + j*jstride].r - rcm * tile_E[i+1 + (j-1)*jstride].r) + 
-                        I * tile_E[i+1 + j*jstride].th
-                    ) ;
-                dBz = dz_rc * (
-                        ( rp * tile_B[i   + (j+1)*jstride].r - rm * tile_B[i + j*jstride].r ) + 
-                        I * tile_B[i + j*jstride].th
-                    ) ;
-            }
+                // If inside tile read x divergence
+                if ( i < nx.x ) {
+                    dEz = dz_rm * (
+                            ( rc * tile_E[i+1 + j*jstride].r - rcm * tile_E[i+1 + (j-1)*jstride].r) + 
+                            I * tile_E[i+1 + j*jstride].th
+                        ) ;
+                    dBz = dz_rc * (
+                            ( rp * tile_B[i   + (j+1)*jstride].r - rm * tile_B[i + j*jstride].r ) + 
+                            I * tile_B[i + j*jstride].th
+                        ) ;
+                }
 
-            // Do a right to left inclusive scan
-            {
-                const int laneId = threadIdx.x & ( WARP_SIZE - 1 );
-                #pragma unroll
-                for( int k = 1; k < WARP_SIZE; k <<= 1 ) {
-                    double re1 = __shfl_down_sync( 0xffffffff, real(dEz), k );
-                    double im1 = __shfl_down_sync( 0xffffffff, imag(dEz), k );
-                    double re2 = __shfl_down_sync( 0xffffffff, real(dBz), k );
-                    double im2 = __shfl_down_sync( 0xffffffff, imag(dBz), k );
-                    if ( laneId < WARP_SIZE - k ) {
-                        dEz += ops::complex<double>{ re1, im1 };
-                        dBz += ops::complex<double>{ re2, im2 };
+                // Do a right to left inclusive scan
+                {
+                    const int laneId = threadIdx.x & ( WARP_SIZE - 1 );
+                    #pragma unroll
+                    for( int k = 1; k < WARP_SIZE; k <<= 1 ) {
+                        double re1 = __shfl_down_sync( 0xffffffff, real(dEz), k );
+                        double im1 = __shfl_down_sync( 0xffffffff, imag(dEz), k );
+                        double re2 = __shfl_down_sync( 0xffffffff, real(dBz), k );
+                        double im2 = __shfl_down_sync( 0xffffffff, imag(dBz), k );
+                        if ( laneId < WARP_SIZE - k ) {
+                            dEz += ops::complex<double>{ re1, im1 };
+                            dBz += ops::complex<double>{ re2, im2 };
+                        }
                     }
                 }
-            }
 
-            // If inside tile store longitudinal components
-            if ( i < nx.x ) {
-                tile_E[i + j * jstride].z = divEz + dEz;
-                tile_B[i + j * jstride].z = divBz + dBz;
-            }
+                // If inside tile store longitudinal components
+                if ( i < nx.x ) {
+                    tile_E[i + j * jstride].z = divEz + dEz;
+                    tile_B[i + j * jstride].z = divBz + dBz;
+                }
 
-            // Accumulate results for next loop
-            if ( block_thread_rank() == 0 ) {
-                divEz += dEz;
-                divBz += dBz;
+                // If processing first cell, also take care of axial cell
+                if ( grid_j == 1 ) {
+                    tile_E[ i + 0 * jstride ].z = divEz + dEz;
+                    tile_B[ i + 0 * jstride ].z = 0;
+                }
+
+                // Accumulate results for next loop
+                if ( block_thread_rank() == 0 ) {
+                    divEz += dEz;
+                    divBz += dBz;
+                }
+                block_sync();
             }
-            block_sync();
         }
     }
 }
@@ -333,8 +340,8 @@ int Laser::PlaneWave::launch( cyl3grid<ops::complex<float>>& E, cyl3grid<ops::co
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = cos( polarization );
-        sin_pol = sin( polarization );
+        cos_pol = std::cos( polarization );
+        sin_pol = std::sin( polarization );
     }
 
     uint2 g_nx = E.dims;
@@ -403,9 +410,9 @@ __device__ float gauss_phase( const float omega0, const float W0, const float z,
     const float rWl2 = (z0*z0)/(z0*z0 + z*z);
     const float gouy_shift = atan2( z, z0 );
 
-    return sqrt( sqrt(rWl2) ) * 
-           exp( - rho2 * rWl2/( W0 * W0 ) ) * 
-           cos( omega0*( z + curv ) - gouy_shift );
+    return std::sqrt( sqrt(rWl2) ) * 
+           std::exp( - rho2 * rWl2/( W0 * W0 ) ) * 
+           std::cos( omega0*( z + curv ) - gouy_shift );
 }
 
 __global__
@@ -513,8 +520,8 @@ int Laser::Gaussian::launch(cyl3grid<ops::complex<float>>& E, cyl3grid<ops::comp
     if ( validate() < 0 ) return -1;
 
     if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = cos( polarization );
-        sin_pol = sin( polarization );
+        cos_pol = std::cos( polarization );
+        sin_pol = std::sin( polarization );
     }
 
     uint2 g_nx = E.dims;

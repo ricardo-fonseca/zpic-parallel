@@ -94,9 +94,9 @@ struct cyl3 {
 
     __host__ __device__
     auto friend abs( cyl3 v ) {
-        auto z = abs( v.z );
-        auto r = abs( v.r );
-        auto th = abs( v.th );
+        auto z  = std::abs( v.z );
+        auto r  = std::abs( v.r );
+        auto th = std::abs( v.th );
         return cyl3< decltype(r) > { z, r, th };
     }
 

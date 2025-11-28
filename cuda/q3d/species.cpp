@@ -26,9 +26,7 @@ int constexpr opt_min_blocks = 2048;
  */
 __host__ __device__ __inline__
 float rgamma( const float3 u ) {
-
     return rsqrt( fma( u.z, u.z, fma( u.y, u.y, fma( u.x, u.x, 1.0f ) ) ) );
-
 }
 
 namespace block {
@@ -187,7 +185,7 @@ __device__ float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, d
 
     {
         const float utsq = fma( ut.z, ut.z, fma( ut.y, ut.y, ut.x * ut.x ) );
-        const float gamma = sqrt( 1.0f + utsq );
+        const float gamma = std::sqrt( 1.0f + utsq );
         
         // Get time centered energy
         energy += utsq / (gamma + 1.0f);
@@ -263,7 +261,7 @@ __device__ float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float
 
     {
         const float utsq = fma( ut.z, ut.z, fma( ut.y, ut.y, ut.x * ut.x ) );
-        const float gamma = sqrt( 1.0f + utsq );
+        const float gamma = std::sqrt( 1.0f + utsq );
         
         // Get time centered energy
         energy += utsq / (gamma + 1.0f);
@@ -277,10 +275,10 @@ __device__ float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float
     }
 
     {
-        float const bnorm = sqrt(fma( b.x, b.x, fma( b.y, b.y, b.z * b.z ) ));
-        float const s = -(( bnorm > 0 ) ? sin( bnorm / 2 ) / bnorm : 1 );
+        float const bnorm = std::sqrt(fma( b.x, b.x, fma( b.y, b.y, b.z * b.z ) ));
+        float const s = -(( bnorm > 0 ) ? std::sin( bnorm / 2 ) / bnorm : 1 );
 
-        float const ra = cos( bnorm / 2 );
+        float const ra = std::cos( bnorm / 2 );
         float const rb = b.x * s;
         float const rc = b.y * s;
         float const rd = b.z * s;
@@ -412,8 +410,8 @@ __device__ __inline__ void dep_current_seg(
     //const auto cr0 = (ir0 + j) + r0;
     //const auto cr1 = (ir0 + j) + r1;
 
-    const auto cr0 = sqrt( fma( t0.x, t0.x, t0.y*t0.y ) );
-    const auto cr1 = sqrt( fma( t1.x, t1.x, t1.y*t1.y ) );
+    const auto cr0 = std::sqrt( fma( t0.x, t0.x, t0.y*t0.y ) );
+    const auto cr1 = std::sqrt( fma( t1.x, t1.x, t1.y*t1.y ) );
 
     /// @brief Initial θ
     const auto th0 = make_float2( t0.x/cr0, t0.y/cr0 );
@@ -423,7 +421,7 @@ __device__ __inline__ void dep_current_seg(
     const auto xif = t0.x + t1.x;
     const auto yif = t0.y + t1.y;
 
-    const auto rm2 = sqrt( fma( xif, xif, yif*yif ) );
+    const auto rm2 = std::sqrt( fma( xif, xif, yif*yif ) );
     const auto thm = float2{ xif/rm2, yif/rm2 };
 
     // Complex coefficients for initial, mid and final angular positions
@@ -541,7 +539,7 @@ __device__ __inline__ void split2d_cyl(
         // z-split positions
         xz = t0.x + εz * tdelta.x;
         yz = t0.y + εz * tdelta.y;
-        rz = ( delta.y == 0 ) ? x0.y : sqrt( fma( xz, xz, yz * yz ) ) - (ir0 + ix.y);
+        rz = ( delta.y == 0 ) ? x0.y : std::sqrt( fma( xz, xz, yz * yz ) ) - (ir0 + ix.y);
     }
 
     // r-split
@@ -668,7 +666,7 @@ void __launch_bounds__(opt_move_block) move_deposit_0(
     ParticleData const part,
     cyl3<float> * const __restrict__ current_m0, 
     unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
-    float2 const dt_dx,
+    float2 const dt_dx, const int2 shift, 
     unsigned long long * const __restrict__ d_nmove
 ) {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
@@ -746,7 +744,7 @@ void __launch_bounds__(opt_move_block) move_deposit_0(
         // Final positions
 
         /// @brief New radial position
-        auto rf = sqrt( fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = fma( Δx , xif , Δy * yif ) / (rf + ri);
         // auto Δr = rf - ri;
@@ -784,8 +782,8 @@ void __launch_bounds__(opt_move_block) move_deposit_0(
 
         // Modify cell and store
         ix[i] = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
         );
 
         /// @brief store new angular position
@@ -843,7 +841,7 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
     cyl_float3 * const __restrict__ current_m0, 
     cyl_cfloat3 * const __restrict__ current_m1, 
     unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
-    float2 const dt_dx, 
+    float2 const dt_dx, const int2 shift,
     unsigned long long * const __restrict__ d_nmove
 ) {
     const int2 tile_idx  = make_int2( blockIdx.x, blockIdx.y );
@@ -926,7 +924,7 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
         // Final positions
 
         /// @brief New radial position
-        auto rf = sqrt( fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( fma( xf, xf, yf*yf ) );
         /// @brief radial motion
         auto Δr = fma( Δx , xif , Δy * yif ) / (rf + ri);
         // auto Δr = rf - ri;
@@ -970,8 +968,8 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
 
         // Modify cell and store
         ix[i] = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
         );
 
         /// @brief store new angular position
@@ -1622,18 +1620,15 @@ void Species::advance( EMF const &emf, Current &current ) {
 
     // Advance momenta
     push( emf );
-    deviceCheck();
 
     // Advance positions and deposit current
     move( current );
-    deviceCheck();
 
     // Process physical boundary conditions
     // process_bc();
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
-    deviceCheck();
 
     // Increase internal iteration number
     iter++;
@@ -1744,14 +1739,14 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
 }
 
 /**
- * @brief Moves particles and deposit current
+ * @brief Move particles (advance positions), deposit current and shift positions
  * 
- * Current will be accumulated on existing data
- * 
- * @param current   Current grid
+ * @param current   Electric current density
+ * @param shift     Cell shift
  */
-void Species::move( Current & current )
+void Species::move( Current & current, const int2 shift )
 {
+
     ///@brief timestep to cell size ratio
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -1780,7 +1775,7 @@ void Species::move( Current & current )
         kernel::move_deposit_0 <<< grid, block, shm_size >>> ( 
             *particles,
             J0.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
-            dt_dx, d_nmove.ptr()
+            dt_dx, shift, d_nmove.ptr()
         );
     } break;
     case 2: {
@@ -1790,67 +1785,12 @@ void Species::move( Current & current )
         kernel::move_deposit_1 <<< grid, block, shm_size >>> ( 
             *particles,
             J0.d_buffer, J1.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
-            dt_dx, d_nmove.ptr()
+            dt_dx, shift, d_nmove.ptr()
         );
     }
     default:
         break;
     }
-    
-}
-
-/**
- * @brief Move particles (advance positions), deposit current and shift positions
- * 
- * @param current   Electric current density
- * @param shift     Cell shift
- */
-void Species::move( Current & current, const int2 shift )
-{
-
-// Shift variant is not set
-// Consider always doing shift
-
-#if 0
-    ///@brief timestep to cell size ratio
-    const float2 dt_dx = make_float2(
-        dt / dx.x,
-        dt / dx.y
-    );
-
-    ///@brief Mode 0 current
-    auto & J0 = current.mode0();
-
-    int tile_blocks = opt_min_blocks / (particles -> ntiles.x * particles -> ntiles.y);
-    if ( tile_blocks < 1 ) tile_blocks = 1;   
-    dim3 grid( particles -> ntiles.x, particles -> ntiles.y, tile_blocks );
-    auto block = opt_move_block;
-    
-    switch (nmodes) {
-    case 1: {
-        size_t shm_size = J0.tile_vol * sizeof(cyl3<float>);
-        block::set_shmem_size( kernel::move_deposit_0, shm_size );
-        kernel::move_deposit_0 <<< grid, block, shm_size >>> ( 
-            *particles,
-            J0.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
-            dt_dx, shift, d_nmove
-        );
-    } break;
-    case 2: {
-        auto & J1 = current.mode(1);
-        size_t shm_size = J0.tile_vol * sizeof(cyl3<float>) + 
-                          J1.tile_vol * sizeof(cyl3<ops::complex<float>>);;
-        block::set_shmem_size( kernel::move_deposit_1, shm_size );
-        kernel::move_deposit_1 <<< grid, block, shm_size >>> ( 
-            *particles,
-            J0.d_buffer, J1.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
-            dt_dx, shift, d_nmove
-        );
-    }
-    default:
-        break;
-    }
-#endif
 }
 
 namespace kernel {
@@ -1865,7 +1805,7 @@ __global__
  */
 void move(
     ParticleData part,
-    float2 const dt_dx,
+    float2 const dt_dx, int2 const shift,
     unsigned long long * const __restrict__ d_nmove
 ) {
 
@@ -1904,7 +1844,7 @@ void move(
         auto yf = fma( ri, sin_th, Δy );
 
         // New radial position
-        auto rf = sqrt( fma( xf, xf, yf*yf ) );
+        auto rf = std::sqrt( fma( xf, xf, yf*yf ) );
 
         // Protection agains rf == 0
         // This is VERY unlikely
@@ -1941,8 +1881,8 @@ void move(
 
         // Modify cell and store
         int2 ix1 = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
@@ -1964,7 +1904,7 @@ void move(
  * 
  * @param current   Current grid
  */
-void Species::move( )
+void Species::move( const int2 shift )
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -1975,7 +1915,7 @@ void Species::move( )
     auto block = 512;
 
     kernel::move <<< grid, block >>> ( 
-        *particles, dt_dx, d_nmove.ptr()
+        *particles, dt_dx, shift, d_nmove.ptr()
     );
 }
 
@@ -2223,23 +2163,16 @@ void Species::deposit_charge0( grid<float> & charge0 ) const {
     auto block = 64;
     auto shm_size = charge0.tile_vol * sizeof(float);
 
-    deviceCheck();
-
     block::set_shmem_size( kernel::dep_charge_0, shm_size );
     kernel::dep_charge_0 <<< grid, block, shm_size >>> (
         *particles,
         charge0.d_buffer, charge0.offset, charge0.ext_nx
     );
 
-    deviceCheck();
-
     kernel::charge_norm <<< grid, block >>> (
         charge0.get_ntiles(), charge0.d_buffer, charge0.offset, 
         charge0.nx, charge0.ext_nx, dx.y
     );
-
-    deviceCheck();
-
 }
 
 /**

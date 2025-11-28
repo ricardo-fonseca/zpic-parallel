@@ -179,8 +179,7 @@ void current_norm_0(
     // Fold values for r < 0 back into simulation domain
     if ( ir0 == 0 ) {
 
-        for( int idx = block_thread_rank(); idx < range_z; idx += block_num_threads() ) {
-            int i = range_z - 1;
+        for( int i = block_thread_rank() - 1; i < nx.x + 2; i += block_num_threads() ) {
 
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
@@ -263,9 +262,7 @@ void current_norm_m(
         // alternative, signt = -(-1)^m
         // const auto signt = ( m & 1 ) ? 1.f : -1.f;
 
-        for( int idx = block_thread_rank(); idx < range_z; idx += block_num_threads() ) {
-            int i = range_z - 1;
-
+        for( int i = block_thread_rank() - 1; i < nx.x + 2; i += block_num_threads() ) {
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
 
