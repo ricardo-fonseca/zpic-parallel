@@ -1049,7 +1049,7 @@ void move_deposit_1(
     alignas(local_align) cyl3<float>               tile_buffer_0[tile_size];
     alignas(local_align) cyl3<std::complex<float>> tile_buffer_1[tile_size];
 
-    // Zero local current buffer
+    // Zero local current buffers
     for( auto i = 0; i < tile_size; i++ ) {
         tile_buffer_0[i] = cyl3<float>{0};
         tile_buffer_1[i] = cyl3<std::complex<float>>{0};
@@ -1215,12 +1215,12 @@ void push_0 (
     cyl3<float> const * const __restrict__ B_m0 = & B_local_m0[ field_offset ];
 
     // Push particles
-    const int part_offset = part.offset[ tid ];
-    const int np          = part.np[ tid ];
-    int2   * __restrict__ ix = &part.ix[ part_offset ];
-    float2 * __restrict__ x  = &part.x[ part_offset ];
-    float3 * __restrict__ u  = &part.u[ part_offset ];
-    float2 * __restrict__ θ  = &part.θ[ part_offset ];
+    const int part_offset  = part.offset[ tid ];
+    const int np           = part.np[ tid ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ θ  = &part.θ[ part_offset ];
 
     double energy = 0;
 
@@ -1410,6 +1410,7 @@ Species::Species( std::string const name, float const m_q, uint3 const ppc ):
     particles = nullptr;
     tmp = nullptr;
     sort = nullptr;
+    np_inj = nullptr;
 
     // Set nmodes to invalid value, will be set by initialize
     nmodes = 0;
@@ -1731,12 +1732,12 @@ void Species::advance( Current & current ) {
 
     // Process physical boundary conditions
     // process_bc();
-
-    // Increase internal iteration number
-    iter++;
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
+
+    // Increase internal iteration number
+    iter++;
 
 }
 
@@ -1762,12 +1763,12 @@ void Species::advance( EMF const &emf, Current &current ) {
 
     // Process physical boundary conditions
     // process_bc();
-
-    // Increase internal iteration number
-    iter++;
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
+
+    // Increase internal iteration number
+    iter++;
 }
 
 void Species::advance_mov_window( Current &current ) {
@@ -1991,10 +1992,8 @@ void move_kernel(
     ParticleData const part,
     float2 const dt_dx ) 
 {
-    const uint2 ntiles  = part.ntiles;
-
     // Move particles and deposit current
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
+    const int tid = tile_idx.y * part.ntiles.x + tile_idx.x;
 
     const int part_offset    = part.offset[ tid ];
     const int np             = part.np[ tid ];
@@ -2418,8 +2417,8 @@ void Species::save_charge( const unsigned m ) const {
 
     axis[1] = (zdf::grid_axis) {
         .name = (char *) "r",
-        .min = -0.5,
-        .max = box.y-.5,
+        .min = -dx.y/2,
+        .max = box.y-dx.y/2,
         .label = (char *) "r",
         .units = (char *) "c/\\omega_n"
     };

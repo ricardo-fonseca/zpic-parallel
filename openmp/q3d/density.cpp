@@ -1,5 +1,7 @@
 #include "density.h"
 
+namespace kernel {
+
 /**
  * @brief kernel for injecting a uniform plasma density 
  * 
@@ -9,7 +11,7 @@
  * @param dr            Radial cell size
  * @param part          Particle data
  */
-inline void inject_uniform_kernel( 
+inline void inject_uniform( 
     uint2 const tile_idx, 
     bnd<unsigned int> range,
     uint3 const ppc,
@@ -18,11 +20,10 @@ inline void inject_uniform_kernel(
     ParticleData const part )
 {
 
-    const uint2 ntiles = part.ntiles;
-    const uint2 nx     = part.nx;
+    const int2 nx     = make_int2( part.nx.x, part.nx.y );
     
     // Tile ID
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
+    int const tid = tile_idx.y * part.ntiles.x + tile_idx.x;
 
     // Store number of particles before injection
     const int np = part.np[ tid ];
@@ -36,19 +37,15 @@ inline void inject_uniform_kernel(
     int rj0 = range.y.lower - tile_idx.y * nx.y;
     int rj1 = range.y.upper - tile_idx.y * nx.y;
 
-    // Use signed integers for the calculations below
-    int const nxx = nx.x;
-    int const nxy = nx.y;
-
     // If range overlaps with tile
-    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
-        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
+        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
 
         // Limit to range inside this tile
         if (ri0 < 0) ri0 = 0;
         if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nxx ) ri1 = nxx-1;
-        if (rj1 >= nxy ) rj1 = nxy-1;
+        if (ri1 >= nx.x ) ri1 = nx.x-1;
+        if (rj1 >= nx.y ) rj1 = nx.y-1;
 
         int const row = (ri1-ri0+1);
 
@@ -131,10 +128,10 @@ inline void inject_uniform_kernel(
             // see notes
             double α, roff;
             if ( ppc.y % 2 == 0) {
-                α = ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) );
+                α = q0 * ( 2. * ( ppc.y*ppc.y - 1) ) / ( 3 * ( ppc.y * ppc.y ) );
                 roff = 0.5;
             } else {
-                α    = (2. / 3.);
+                α  = q0 * (2. / 3.);
                 roff = 1;
             }
 
@@ -154,12 +151,10 @@ inline void inject_uniform_kernel(
 
                             int part_idx = np + tile_np + row * ppc_idx + grid_idx;
 
-                            float qnorm = α * pos.y * dr / ( ppc.z * ppc.y * ppc.x );
-
                             ix[ part_idx ] = cell;
                             x [ part_idx ] = pos;
                             u [ part_idx ] = make_float3(0,0,0);
-                            q [ part_idx ] = qnorm;
+                            q [ part_idx ] = α * pos.y * dr;
                             θ [ part_idx ] = posθ[ iθ ];
                         }
                     }
@@ -173,6 +168,80 @@ inline void inject_uniform_kernel(
             part.np[ tid ] = np + tile_np;
         }
     }
+}
+
+
+/**
+ * @brief Kernel for counting how many particles will be injected
+ * 
+ * @note Uses only 1 thread per tile
+ * 
+ * @param range     Cell range to inject particles in
+ * @param ppc       Number of particles per cell
+ * @param nx        Number of cells in tile
+ * @param d_tiles   Particle tile information
+ * @param np        Number of particles to inject (out)
+ */
+inline void np_inject_uniform( 
+    uint2 const tile_idx, 
+    bnd<unsigned int> range,
+    uint3 const ppc,
+    ParticleData const part,
+    int * np )
+{
+
+    const uint2 ntiles  = part.ntiles;
+    const uint2 nx = part.nx;
+
+    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
+
+        // Find injection range in tile coordinates
+    int ri0 = range.x.lower - tile_idx.x * nx.x;
+    int ri1 = range.x.upper - tile_idx.x * nx.x;
+
+    int rj0 = range.y.lower - tile_idx.y * nx.y;
+    int rj1 = range.y.upper - tile_idx.y * nx.y;
+
+    // Comparing signed and unsigned integers does not work here
+    int const nxx = nx.x;
+    int const nxy = nx.y;
+
+    int local_np;
+
+    const auto ppc_zθ = ppc.x * ppc.z;
+    const auto ppc_r  = ppc.y;
+
+    // If range overlaps with tile
+    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
+        ( rj0 < nxy ) && ( rj1 >= 0 )) {
+        
+        // Limit to range inside this tile
+        if (ri0 < 0) ri0 = 0;
+        if (rj0 < 0) rj0 = 0;
+        if (ri1 >= nxx ) ri1 = nxx-1;
+        if (rj1 >= nxy ) rj1 = nxy-1;
+
+        int const row = (ri1-ri0+1);
+
+        if ( tile_idx.y * nx.y + rj0 > 0 ) {
+            // Tile does not include axial boundary
+            local_np = (rj1-rj0+1) * row * ppc_zθ * ppc_r;
+        } else {
+            // Tile includes axial boundary
+            //std::since no particles will be injected for r <= 0, we only inject
+            // half the particles in the axial cell
+            local_np = row * ppc_zθ * ( (rj1-rj0) * ppc_r + ppc_r / 2 );
+        }
+    } else {
+        local_np = 0;
+    }
+
+    np[ tid ] = local_np;
+
+    // std::cout << __func__ << " np[" << tid << "] = " << np[tid] << '\n';
+
+}
+
 }
 
 /**
@@ -200,79 +269,8 @@ void Density::Uniform::inject( Particles & part, const float norm,
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
         const uint2 tile_idx = make_uint2( tx, ty );
-        inject_uniform_kernel( tile_idx, range, ppc, q0, dx.y, part );
+        kernel::inject_uniform( tile_idx, range, ppc, q0, dx.y, part );
     }
-}
-
-/**
- * @brief Kernel for counting how many particles will be injected
- * 
- * @note Uses only 1 thread per tile
- * 
- * @param range     Cell range to inject particles in
- * @param ppc       Number of particles per cell
- * @param nx        Number of cells in tile
- * @param d_tiles   Particle tile information
- * @param np        Number of particles to inject (out)
- */
-inline void np_inject_uniform_kernel( 
-    uint2 const tile_idx, 
-    bnd<unsigned int> range,
-    uint3 const ppc,
-    ParticleData const part,
-    int * np )
-{
-
-    const uint2 ntiles  = part.ntiles;
-    const uint2 nx = part.nx;
-
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-        // Find injection range in tile coordinates
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // Comparing signed and unsigned integers does not work here
-    int const nxx = nx.x;
-    int const nxy = nx.y;
-
-    int _np;
-
-    const auto ppc_zθ = ppc.x * ppc.z;
-    const auto ppc_r  = ppc.y;
-
-    // If range overlaps with tile
-    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
-        ( rj0 < nxy ) && ( rj1 >= 0 )) {
-        
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nxx ) ri1 = nxx-1;
-        if (rj1 >= nxy ) rj1 = nxy-1;
-
-        int const row = (ri1-ri0+1);
-
-        if ( tile_idx.y * nx.y + rj0 > 0 ) {
-            // Tile does not include axial boundary
-            _np = (rj1-rj0+1) * row * ppc_zθ * ppc_r;
-        } else {
-            // Tile includes axial boundary
-            //std::since no particles will be injected for r <= 0, we only inject
-            // half the particles in the axial cell
-            _np = row * ppc_zθ * ( (rj1-rj0) * ppc_r + ppc_r / 2 );
-        }
-    } else {
-        _np = 0;
-    }
-
-    np[ tid ] = _np;
-
-    // std::cout << __func__ << " np[" << tid << "] = " << np[tid] << '\n';
-
 }
 
 /**
@@ -297,13 +295,14 @@ void Density::Uniform::np_inject( Particles & part,
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
         const auto tile_idx = make_uint2( tx, ty );
-        np_inject_uniform_kernel(
+        kernel::np_inject_uniform(
             tile_idx, range, ppc,
             part, np
         );
     }
 }
 
+namespace kernel {
 
 /**
  * @brief Kernel for injecting step profile
@@ -317,7 +316,7 @@ void Density::Uniform::np_inject( Particles & part,
  * @param part      Particle data
  */
 template < coord::cyl dir >
-void inject_step_kernel( 
+void inject_step( 
     uint2 const tile_idx, 
     bnd<unsigned int> range,
     const float step, const uint3 ppc, const float q0,
@@ -406,7 +405,7 @@ void inject_step_kernel(
 
                         int inj;
                         if constexpr ( dir == coord::z ) inj = ((shiftz + cell.x) + (pos.x + 0.5) > step ) && (r > 0);
-                        if constexpr ( dir == coord::r ) inj = r > step;
+                        if constexpr ( dir == coord::r ) inj = r > step && r > 0;
                         
                         // int off = device::block_exscan_add( inj );
                         int off = 0; // always 0 with 1 thread
@@ -440,50 +439,6 @@ void inject_step_kernel(
     }
 }
 
-/**
- * @brief Injects a step density profile
- * 
- * @param part      Particle data object
- * @param ppc       Number of particles per cell
- * @param dx        Cell size
- * @param ref       Position of local grid on global simulation box in simulation
- *                  units
- * @param range     Cell range in which to inject
- */
-void Density::Step::inject( Particles & part, const float norm,
-    uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
-{    
-    /// @brief Step position (normalized to node grid coordinates)
-    float step_pos;
-
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    /// @briefstd::single particle charge
-    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
-
-    switch( dir ) {
-    case( coord::z ):
-        step_pos = (pos - ref.x) / dx.x;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            inject_step_kernel <coord::z> (
-                tile_idx, range, step_pos, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    case( coord::r ):
-        step_pos = (pos - ref.y) / dx.y;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            inject_step_kernel <coord::r> (
-                tile_idx, range, step_pos, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    break;
-    }
-}
 
 /**
  * @brief Kernel for counting how many particles will be injected by a step
@@ -500,7 +455,7 @@ void Density::Step::inject( Particles & part, const float norm,
  * @param np            (out) Number of particles per tile to inject
  */
 template < coord::cyl dir >
-void np_inject_step_kernel( 
+void np_inject_step( 
     uint2 const tile_idx, 
     bnd<unsigned int> range,
     float step, const uint3 ppc,
@@ -577,6 +532,53 @@ void np_inject_step_kernel(
     }
 }
 
+}
+
+/**
+ * @brief Injects a step density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
+void Density::Step::inject( Particles & part, const float norm,
+    uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
+{    
+    /// @brief Step position (normalized to node grid coordinates)
+    float step_pos;
+   /// @brief single particle charge
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
+
+    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+ 
+    switch( dir ) {
+    case( coord::z ):
+        step_pos = (pos - ref.x) / dx.x;
+        #pragma omp parallel for
+        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
+            kernel::inject_step <coord::z> (
+                tile_idx, range, step_pos, ppc, q0, dx.y,
+                part );
+        }
+        break;
+    case( coord::r ):
+        step_pos = (pos - ref.y) / dx.y;
+        #pragma omp parallel for
+        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
+            kernel::inject_step <coord::r> (
+                tile_idx, range, step_pos, ppc, q0, dx.y,
+                part );
+        }
+        break;
+    break;
+    }
+}
+
 /**
  * @brief Returns number of particles per tile that a step profile would inject
  * 
@@ -603,7 +605,7 @@ void Density::Step::np_inject( Particles & part,
         #pragma omp parallel for
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            np_inject_step_kernel <coord::z> (
+            kernel::np_inject_step <coord::z> (
                 tile_idx, range, step_pos, ppc,
                 part, np );
         }
@@ -613,7 +615,7 @@ void Density::Step::np_inject( Particles & part,
         #pragma omp parallel for
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            np_inject_step_kernel <coord::r> (
+            kernel::np_inject_step <coord::r> (
                 tile_idx, range, step_pos, ppc,
                 part, np );
         }
@@ -621,6 +623,8 @@ void Density::Step::np_inject( Particles & part,
     break;
     }
 }
+
+namespace kernel {
 
 /**
  * @brief Kernel for injecting slab profile
@@ -635,7 +639,7 @@ void Density::Step::np_inject( Particles & part,
  * @param part          Particle data
  */
 template < coord::cyl dir >
-void inject_slab_kernel( 
+void inject_slab( 
     uint2 const tile_idx,
     bnd<unsigned int> range,
     const float start, const float finish, uint3 ppc, const float q0, 
@@ -757,56 +761,6 @@ void inject_slab_kernel(
     }
 }
 
-/**
- * @brief Injects a slab density profile
- * 
- * @param part      Particle data object
- * @param ppc       Number of particles per cell
- * @param dx        Cell size
- * @param ref       Position of local grid on global simulation box in simulation
- *                  units
- * @param range     Cell range in which to inject
- */
-void Density::Slab::inject( Particles & part, const float norm,
-    uint3 const ppc,float2 const dx, float2 const ref,
-    bnd<unsigned int> range ) const
-{
-    /// @brief Slab start position (normalized to node grid coordinates) 
-    float slab_begin;
-    /// @brief Slab end position (normalized to node grid coordinates) 
-    float slab_end;
-
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-
-    /// @briefstd::single particle charge
-    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
-
-    switch( dir ) {
-    case( coord::z ):
-        slab_begin = (begin - ref.x)/ dx.x;
-        slab_end   = (end - ref.x)/ dx.x;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            inject_slab_kernel < coord::z > (
-                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    case( coord::r ):
-        slab_begin = (begin - ref.y)/ dx.y;
-        slab_end   = (end - ref.y)/ dx.y;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            inject_slab_kernel < coord::r > (
-                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    }
-
-}
 
 /**
  * @brief Kernel for counting how many particles will be injected by slab profie
@@ -821,7 +775,7 @@ void Density::Slab::inject( Particles & part, const float norm,
  * @param np            (out) Number of particles to inject per tile
  */
 template < coord::cyl dir >
-void np_inject_slab_kernel( 
+void np_inject_slab( 
     uint2 const tile_idx,
     bnd<unsigned int> range,
     const float start, const float finish, uint3 ppc,
@@ -837,8 +791,6 @@ void np_inject_slab_kernel(
     // sync
 
     // Find injection range in tile coordinates
-
-
     int ri0 = range.x.lower - tile_idx.x * nx.x;
     int ri1 = range.x.upper - tile_idx.x * nx.x;
 
@@ -904,6 +856,58 @@ void np_inject_slab_kernel(
 
 }
 
+}
+
+/**
+ * @brief Injects a slab density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
+void Density::Slab::inject( Particles & part, const float norm,
+    uint3 const ppc,float2 const dx, float2 const ref,
+    bnd<unsigned int> range ) const
+{
+    /// @brief Slab start position (normalized to node grid coordinates) 
+    float slab_begin;
+    /// @brief Slab end position (normalized to node grid coordinates) 
+    float slab_end;
+    /// @brief single particle charge
+
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
+    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+
+    switch( dir ) {
+    case( coord::z ):
+        slab_begin = (begin - ref.x)/ dx.x;
+        slab_end   = (end - ref.x)/ dx.x;
+        #pragma omp parallel for
+        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
+            kernel::inject_slab < coord::z > (
+                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
+                part );
+        }
+        break;
+    case( coord::r ):
+        slab_begin = (begin - ref.y)/ dx.y;
+        slab_end   = (end - ref.y)/ dx.y;
+        #pragma omp parallel for
+        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
+            kernel::inject_slab < coord::r > (
+                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
+                part );
+        }
+        break;
+    }
+
+}
+
 /**
  * Returns number of particles per tile that a slab profile would inject
  * 
@@ -934,7 +938,7 @@ void Density::Slab::np_inject( Particles & part,
         #pragma omp parallel for
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            np_inject_slab_kernel < coord::z > (
+            kernel::np_inject_slab < coord::z > (
                 tile_idx,
                 range, slab_begin, slab_end, ppc,
                 part, np );
@@ -950,13 +954,15 @@ void Density::Slab::np_inject( Particles & part,
         #pragma omp parallel for
         for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
             const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            np_inject_slab_kernel < coord::r > (
+            kernel::np_inject_slab < coord::r > (
                 tile_idx, range, slab_begin, slab_end, ppc,
                 part, np );
         }
         break;
     }
 }
+
+namespace kernel {
 
 /**
  * @brief Kernel for injecting sphere profile
@@ -969,7 +975,7 @@ void Density::Slab::np_inject( Particles & part,
  * @param ppc           Number of particles per cell
  * @param part          Particle data
  */
-inline void inject_sphere_kernel( 
+inline void inject_sphere( 
     uint2 const tile_idx,
     bnd<unsigned int> range,
     const float2 center, const float radius, const float2 dx, uint3 ppc, const float q0,
@@ -1087,36 +1093,7 @@ inline void inject_sphere_kernel(
     }
 }
 
-/**
- * @brief Injects a sphere density profile
- * 
- * @param part      Particle data object
- * @param ppc       Number of particles per cell
- * @param dx        Cell size
- * @param ref       Position of local grid on global simulation box in simulation
- *                  units
- * @param range     Cell range in which to inject
- */
-void Density::Sphere::inject( Particles & part, const float norm,
-    uint3 const ppc, float2 const dx, float2 const ref,
-    bnd<unsigned int> range ) const
-{
-    float2 sphere_center = center;
-    sphere_center.x -= ref.x;
-    sphere_center.y -= ref.y;
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
 
-    /// @briefstd::single particle charge
-    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
-
-    #pragma omp parallel for
-    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-        const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-        inject_sphere_kernel (
-            tile_idx, range, sphere_center, radius, dx, ppc, q0,
-            part );
-    }
-}
 
 /**
  * @brief Kernel for counting how many particles will be injected by a sphere
@@ -1131,7 +1108,7 @@ void Density::Sphere::inject( Particles & part, const float norm,
  * @param part      Particle data
  * @param np        (out) Number of particles per tile to inject
  */
-void np_inject_sphere_kernel(
+void np_inject_sphere(
     uint2 const tile_idx,
     bnd<unsigned int> range,
     float2 center, float radius, float2 dx, uint3 ppc,
@@ -1213,6 +1190,50 @@ void np_inject_sphere_kernel(
     np[ tile_id ] = np_local * ppc.z;
 }
 
+}
+
+/**
+ * @brief Injects a sphere density profile
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ */
+void Density::Sphere::inject( Particles & part, const float norm,
+    uint3 const ppc, float2 const dx, float2 const ref,
+    bnd<unsigned int> range ) const
+{
+    float2 sphere_center = center;
+    sphere_center.x -= ref.x;
+    sphere_center.y -= ref.y;
+    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+
+    /// @brief single particle charge
+    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
+
+    #pragma omp parallel for
+    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+        const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
+        kernel::inject_sphere (
+            tile_idx, range, sphere_center, radius, dx, ppc, q0,
+            part );
+    }
+}
+
+/**
+ * @brief Returns number of particles per tile that a sphere profile would inject
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ * @param np        (out) Number of particles to inject per tile
+ */
 void Density::Sphere::np_inject( Particles & part, 
     uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
     int * np ) const
@@ -1225,7 +1246,7 @@ void Density::Sphere::np_inject( Particles & part,
     #pragma omp parallel for
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
         const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-        np_inject_sphere_kernel (
+        kernel::np_inject_sphere (
             tile_idx,
             range, sphere_center, radius, dx, ppc,
             part, np );

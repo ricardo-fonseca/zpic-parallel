@@ -1,7 +1,4 @@
-
-// For getopt
-#include <unistd.h>
-
+#include <unistd.h> // For getopt
 #include <iostream>
 #include <fstream>
 
@@ -1230,6 +1227,11 @@ void info( void ) {
     }
 }
 
+/**
+ * @brief Print command line help
+ * 
+ * @param argv0     Program name (from argv[0])
+ */
 void cli_help( char * argv0 ) {
     std::cerr << "Usage: " << argv0 << " [-h] [-s] [-t name] [-n parameter]\n";
 

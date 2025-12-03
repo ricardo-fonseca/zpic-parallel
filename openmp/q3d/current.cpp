@@ -36,9 +36,9 @@ void current_bcz(
                 auto jr1 =  J[ -1 + j ].r + J[ 1 + j ].r;
                 auto jθ1 =  J[ -1 + j ].θ + J[ 1 + j ].θ;
 
-                J[ -1 + j ].z = J[ 0 + J ].z = jz0;
-                J[ -1 + j ].r = J[ 1 + J ].r = jr1;
-                J[ -1 + j ].θ = J[ 1 + J ].θ = jθ1;
+                J[ -1 + j ].z = J[ 0 + j ].z = jz0;
+                J[ -1 + j ].r = J[ 1 + j ].r = jr1;
+                J[ -1 + j ].θ = J[ 1 + j ].θ = jθ1;
             }
             break;
         default:
@@ -55,9 +55,9 @@ void current_bcz(
                 auto jr1 =  J[ nx.x-1 + j ].r + J[ nx.x + 1 + j ].r;
                 auto jθ1 =  J[ nx.x-1 + j ].θ + J[ nx.x + 1 + j ].θ;
 
-                J[ nx.x-1 + j ].z = J[ nx.x + 0 + j ].x = jz0;
-                J[ nx.x-1 + j ].r = J[ nx.x + 1 + j ].y = jr1;
-                J[ nx.x-1 + j ].θ = J[ nx.x + 1 + j ].z = jθ1;
+                J[ nx.x-1 + j ].z = J[ nx.x + 0 + j ].z = jz0;
+                J[ nx.x-1 + j ].r = J[ nx.x + 1 + j ].r = jr1;
+                J[ nx.x-1 + j ].θ = J[ nx.x + 1 + j ].θ = jθ1;
             }
             break;
         default:

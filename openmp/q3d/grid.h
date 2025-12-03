@@ -201,13 +201,6 @@ class grid {
         return val;
     }
 
-    grid<T>& operator+=(const grid<T>& rhs) {
-        size_t const size = buffer_size( );
-
-        #pragma omp parallel for
-        for( size_t i = 0; i < size; i++ ) d_buffer[i] += rhs.d_buffer[i];
-    }
-
     /**
      * @brief Adds another grid object on top of local object
      * 
@@ -219,7 +212,18 @@ class grid {
 
         for( size_t i = 0; i < size; i++ ) d_buffer[i] += rhs.d_buffer[i];
     };
-    
+
+    /**
+     * @brief Operator +=
+     * 
+     * @param rhs           Other grid to add
+     * @return grid<T>& 
+     */
+    grid<T>& operator+=(const grid<T>& rhs) {
+        add( rhs );
+        return *this;
+    }
+
     /**
      * @brief Gather field into a contiguos grid
      * 
@@ -359,7 +363,6 @@ class grid {
 
         // Copy along y direction
         copy_to_gc_y();
-
     };
 
     /**
@@ -603,8 +606,11 @@ class grid {
     /**
      * @brief Save field values to disk
      * 
-     * The field type <T> must be supported by ZDF file format
+     * @note The field type <T> must be supported by ZDF file format
      * 
+     * @param info      Grid metadata
+     * @param iter      Iteration metadata
+     * @param path      Output path (not file name)
      */
     void save( zdf::grid_info &info, zdf::iteration &iter, std::string path ) {
 
@@ -628,10 +634,9 @@ class grid {
      * @param filename      Output file name
      */
     void save( std::string filename ) {
-        // Allocate buffer on host to gather data
+        // Gather data on contiguous grid
         T * h_data = memory::malloc<T>( dims.x * dims.y );
 
-        // Gather data on contiguous grid
         gather( h_data );
 
         uint64_t gdims[] = { dims.x, dims.y };

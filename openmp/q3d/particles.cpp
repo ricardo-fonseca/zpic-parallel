@@ -783,6 +783,8 @@ void copy_sorted(
             tmp_ix[ start + i ] = ix[i];
             tmp_x [ start + i ] = x[i];
             tmp_u [ start + i ] = u[i];
+            tmp_q [ start + i ] = q[i];
+            tmp_θ [ start + i ] = θ[i];
         }
     }
 }

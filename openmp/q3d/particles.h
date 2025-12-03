@@ -68,8 +68,6 @@ inline constexpr int all_tiles( const uint2 ntiles ) {
  * @warning This is meant to be used only as a superclass for ParticleSort. The
  *          struct does not include methods for allocating / deallocating
  *          memory
- *
- * 
  */
 struct ParticleSortData {
     /// @brief Particle index list [max_part]
@@ -173,7 +171,6 @@ struct ParticleData {
     uint2 ntiles;
     /// @brief Tile grid size
     const uint2 nx;
-
     /// @brief Number of particles in tile
     int * np;
     /// @brief Tile particle position on global array
@@ -250,7 +247,6 @@ class Particles : public ParticleData {
     ~Particles() {
         memory::free( θ );
         memory::free( q );
-
 
         memory::free( u );
         memory::free( x );

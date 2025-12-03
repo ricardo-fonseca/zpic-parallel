@@ -25,8 +25,8 @@ void yee0_b(
     const auto dz    = dx.x;
     const auto dr    = dx.y;
 
-    const auto dt_dz = dt / dz;
-    const auto dt_dr = dt / dr;
+    const float dt_dz = dt / dz;
+    const float dt_dr = dt / dr;
 
     // Standard advance away from axial boundary
     const int j0 = ( ir0 > 0 ) ? -1 : 1;
@@ -346,7 +346,7 @@ void yeemJ_e(
     cyl_cfloat3 const * const __restrict__ B, 
     uint2 const nx, int const jstride, 
     cyl_cfloat3 const * const __restrict__ J, int const J_jstride, 
-    const double dt, float2 const dx, const int ir0 )
+    const float dt, float2 const dx, const int ir0 )
 {
     
     // cylindrical cell sizes
@@ -372,8 +372,6 @@ void yeemJ_e(
         float dt_rl = dt / ( ( ir0 + j - 0.5 ) * dr );
         /// @brief Δt/r at the center of j cell
         float dt_rc = dt / ( ( ir0 + j ) * dr );
-
-        if ( ir0 + j == 0 ) { std::cout << "critical error, aborting \n"; std::exit(1); }
 
         for( int i = 0; i < static_cast<int>(nx.x) + 2; i++ ) {           
             E[i + j*jstride].r +=  
@@ -670,7 +668,7 @@ void EMF::advance( Current & current ) {
  * @param fc        Which field component to save (r, θ or z)
  * @param m         Mode
  */
-void EMF::save( emf::field const field, const fcomp::cyl fc, const unsigned m ) {
+void EMF::save( emf::field const field, const fcomp::cyl fc, const int m ) {
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
     std::string path{"EMF"};

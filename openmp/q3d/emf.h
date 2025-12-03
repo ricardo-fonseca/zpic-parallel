@@ -190,7 +190,7 @@ class EMF {
      * @param fc        Which field component to save (r, θ or z)
      * @param m         Mode
      */
-    void save( emf::field const field, const fcomp::cyl fc, const unsigned m );
+    void save( emf::field const field, const fcomp::cyl fc, const int m );
     
     /**
      * @brief Get EM field energy

@@ -8,13 +8,13 @@
 /**
  * @brief Sets the longitudinal field components of E and B to ensure 0 divergence
  * 
- * The algorithm assumes 0 field at the right boundary of the box
+ * @warning The algorithm assumes 0 field at the right boundary of the box
  * 
- * This version only allows parallelism on the outermost (ty) loop
+ * @note This version only allows parallelism on the outermost (ty) loop
  * 
  * @param E     E field (mode 1)
  * @param B     B field (mode 1)
- * @param dx    cell size (z,y)
+ * @param dx    cell size (z,r)
  */
 void div_corr_z( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>& B, const float2 dx ) {
 
