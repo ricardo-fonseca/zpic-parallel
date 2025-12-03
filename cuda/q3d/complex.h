@@ -54,7 +54,7 @@ class complex : public vec2<S> {
      */
     complex( V z ) : V{ z.x, z.y } {}
 
-    __host__ __device__
+    __host__ __device__ __inline__
     /**
      * @brief Access real part
      * 
@@ -62,7 +62,7 @@ class complex : public vec2<S> {
      */
     constexpr S & real() {return x;};
 
-    __host__ __device__
+    __host__ __device__ __inline__
     /**
      * @brief Access imaginary part
      * 

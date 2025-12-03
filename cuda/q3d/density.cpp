@@ -127,11 +127,14 @@ void uniform(
             
             // Additional charge correction for particles on axial cell
             // see notes
-            auto qnorm =  q0 * dr ;
-            qnorm *= ( ppc.y % 2 == 0) ? 
-                ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
-                (2. / 3.);
-            double roff = ( ppc.y % 2 == 0) ? 0.5 : 1.0;
+            double α, roff;
+            if ( ppc.y % 2 == 0) {
+                α = q0 * ( 2. * ( ppc.y*ppc.y - 1) ) / ( 3 * ( ppc.y * ppc.y ) );
+                roff = 0.5;
+            } else {
+                α  = q0 * (2. / 3.);
+                roff = 1;
+            }
 
             for( unsigned ith = 0; ith < ppc.z; ith++ ) {
                 for( unsigned ir = 0; ir < ppc.y/2; ir++ ) {
@@ -152,7 +155,7 @@ void uniform(
                             ix[ part_idx ] = cell;
                             x [ part_idx ] = pos;
                             u [ part_idx ] = make_float3(0,0,0);
-                            q [ part_idx ] = pos.y * dr * qnorm;
+                            q [ part_idx ] = α * pos.y * dr;
                             th[ part_idx ] = pos_th[ ith ];
                         }
                     }
