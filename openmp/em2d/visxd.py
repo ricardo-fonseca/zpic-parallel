@@ -8,6 +8,122 @@ import matplotlib.colors as colors
 
 import numpy as np
 
+
+def plot1d( x, y, marker : str = None, ms = None, alpha = None, c : str = None,
+    xlim : list = None, ylim : list = None, grid = True,
+    yscale : str = None, xscale : str = None,
+    title : str = None, xtitle : str = None, ytitle : str = None,
+    show = True ):
+    """Generate an x-y scatter plot
+
+    Args:
+        x (number): x values to plot
+        y (number): y values to plot
+        marker (str, optional): Marker shape to use for plot. Defaults to None
+            which will use the default Matplotlib marker.
+        ms (int, optional): Marker size to use for plot. Defaults to 1.
+        alpha (int, optional): Marker/line opacity value. Defaults to 1.
+        c (str, optional): Marker color. Defaults to None, which will use
+            the default Matplotlib color.
+        xlim (list, optional): Range of values for x-axis. Defaults to None,
+            which sets the axis range automatically.
+        ylim (list, optional): Range of values for x-axis. Defaults to None,
+            which sets the axis range automatically.
+        grid (bool, optional): Display gridlines on the plot. Defaults to True.
+        title (_type_, optional): Title for the plot. Defaults to None.
+        xtitle (_type_, optional): Title for the x-axis. Defaults to None.
+        ytitle (_type_, optional): Title for the y-axis. Defaults to None.
+        show (bool, optional): Controls if the plot is displayed using
+            `plt.show()`. Disabling this allows user to overplot additional
+             quantities. Defaults to True.
+    """
+
+    if ( marker is None ):
+        plt.plot( x, y, ms = ms, alpha = alpha, c = c )
+    else:
+        plt.plot( x, y, marker, ms = ms, alpha = alpha, c = c )
+
+    if ( xtitle is not None ):
+        plt.xlabel( xtitle )
+    
+    if ( ytitle is not None ):
+        plt.ylabel( ytitle )
+
+    if ( title is not None ):
+        plt.title( title )
+    
+    if ( xlim is not None ):
+        plt.xlim( xlim )
+
+    if ( ylim is not None ):
+        plt.ylim( ylim )
+
+    if ( xscale is not None ):
+        plt.xscale( xscale )
+
+    if ( yscale is not None ):
+        plt.yscale( yscale )
+
+    plt.grid(grid)
+    if ( show ):
+        plt.show()    
+
+
+def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None,
+    title = None, xtitle = None, ytitle = None, vtitle = None,
+    show = True ):
+
+    # Linearly scale data if requested
+    if ( scale ):
+        data = data * scale[0] + scale[1]
+    
+    if ( shift ):
+        data = np.roll( data, shift, axis=(1,0) )
+
+    if ( range is None ):
+        range = [
+            [0,data.shape[0]],
+            [0,data.shape[1]]
+        ]
+
+    if ( vsim ):
+        amax = np.amax( np.abs(data) )
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = -amax, vmax = +amax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )
+    else:
+        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
+            vmin = vmin, vmax = vmax, norm = norm,
+            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
+            aspect = 'auto', cmap=cmap )    
+
+    if ( vtitle is None ):
+        plt.colorbar()
+    else:
+        plt.colorbar().set_label( vtitle )
+
+    if ( xtitle is not None ):
+        plt.xlabel( xtitle )
+    
+    if ( ytitle is not None ):
+        plt.ylabel( ytitle )
+
+    if ( title is not None ):
+        plt.title( title )
+    
+    if ( xlim is not None ):
+        plt.xlim( xlim )
+
+    if ( ylim is not None ):
+        plt.ylim( ylim )
+
+    plt.grid(grid)
+    if ( show ):
+        plt.show()
+
+
 def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     """Generates a line plot from a 1D grid file
 
@@ -60,7 +176,7 @@ def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     plt.show()
 
 def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None, show = True, save = None ):
     """Generates a colormap plot from a 2D grid zdf file
 
     Args:
@@ -176,10 +292,13 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.grid(grid)
 
-    plt.show()
+    if ( save ):
+        plt.savefig(save, format="pdf", bbox_inches="tight")
 
-def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    if ( show ):
+        plt.show()
+
+def complex_grid2d( filename : str, part = 'real', **kwargs ):
     """Generates a colormap plot from a 2D complex grid zdf file
 
     Args:
@@ -189,28 +308,8 @@ def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, gri
             Part of the complex number to plot. Must be one of 'real' (real part),
             'imag' (imaginary part), 'mag' (magnitude), or 'angle' (angle of the
              complex argument). Defaults to 'real'. 
-        xlim (tuple, optional):
-            Lower and upper limits of x axis. Defaults to the x limits of the
-            grid data.
-        ylim (tuple, optional):
-            Lower and upper limits of y axis. Defaults to the y limits of the
-            grid data.
-        grid (bool, optional):
-            Display a grid on top of colormap. Defaults to False.
-        cmap (str, optional):
-            Name of the colormap to use. Defaults to the matplotlib imshow() 
-            colormap.
-        vsim (bool, optional):
-            Setup a symmetric value scale [ -max(|val|), max(|val|) ]. Defaults to setting
-            the value scale to [ min, max ]
-        vmin (number, optional):
-            Minimum value for the color scale. Defaults to setting the value to min(val)
-        vmax (number, optional):
-            Maximum value for the color scale. Defaults to setting the value to max(val)
-        scale (tuple, optional):
-            Linearly scale values i.e. data = scale[0] * data + scale[1]
-        shift (tuple, optional):
-            Shifts data spatially
+        **kwargs
+            Additional keyword arguments to be passed on to visxd.plot2d()
     """
 
     if ( not os.path.exists(filename) ):
@@ -258,74 +357,62 @@ def complex_grid2d( filename : str, part = 'real', xlim = None, ylim = None, gri
         print("(*error*) Invalid part option, must be one of 'real', 'imag', 'abs' or 'angle'")
         return
 
-    # Linearly scale data if requested
-    if ( scale ):
-        data = data * scale[0] + scale[1]
-    
-    if ( shift ):
-        data = np.roll( data, shift, axis=(1,0) )
-
-    if ( vsim ):
-        amax = np.amax( np.abs(data) )
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = -amax, vmax = +amax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-    else:
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = vmin, vmax = vmax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-
-    if ( info.grid.label and info.grid.units ):
-        zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
-        plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
-    elif ( info.grid.label ):
-        plt.colorbar().set_label(r'$\sf{' + info.grid.label.replace(" ","\\;") + r'}$')
-    else:
-        plt.colorbar()
-
+    # Get x-y axis labels
     if ( info.grid.axis ):
         if ( info.grid.axis[0].units ):
-            xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
+            xlabel = "${}\\,[\\sf {:s}]$".format( info.grid.axis[0].label, info.grid.axis[0].units )
         else:
-            xlabel = info.grid.axis[0].label
+            xlabel = "${}$".format(info.grid.axis[0].label)
 
         if ( info.grid.axis[1].units ):
-            ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
-        else:
-            ylabel = info.grid.axis[1].label
+            ylabel = "${}\\,[\\sf {:s}]$".format( info.grid.axis[1].label, info.grid.axis[1].units )
+    else:
+            ylabel = "${}$".format(info.grid.axis[1].label)
 
-        plt.xlabel(r'$\sf{' + xlabel + r'}$')
-        plt.ylabel(r'$\sf{' + ylabel + r'}$')
+    # Color axis label
+    if ( info.grid.label and info.grid.units ):
+        zlabel = "${}\\,[\\sf {:s}]$".format( info.grid.label, info.grid.units )
+    elif ( info.grid.label ):
+        zlabel = "${}$".format( info.grid.label )
+
+    # Plot title
+    if ( info.grid.label ):
+        title = info.grid.label.replace(" ","\\;")
+    else:
+        title = info.grid.name
+
+    if ( part == 'real' ):
+        title = "\\Re \\; {:s}".format(title)
+    elif ( part == 'imag' ):
+        title = "\\Im \\; {:s}".format(title)
+    elif ( part == 'abs'):
+        title = "\\left| {:s} \\right|".format(title)
+    elif ( part == 'angle' ):
+        title = "Arg \\; \\,{:s}".format(title)
 
     if ( info.iteration ):
         if ( info.iteration.tunits ):
-            plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
-                info.grid.label.replace(" ","\\;"),
+            title ="$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
+                title,
                 info.iteration.t,
-                info.iteration.tunits))
+                info.iteration.tunits)
         else:
-            plt.title("$\\sf {} $\nt = ${:g}$".format(
-                info.grid.label.replace(" ","\\;"),
-                info.iteration.t ))
+            title = "$\\sf {} $\nt = ${:g}$".format(
+                title,
+                info.iteration.t )
     else:
-        if ( info.grid.label ):
-            plt.title("$\\sf {}".format( info.grid.label))
-        else:
-            plt.title( info.grid.name )
+        title = "$\\st {}$".format( title )
 
-    if ( xlim ):
-        plt.xlim(xlim)
-    if ( ylim ):
-        plt.ylim(ylim)
-
-    plt.grid(grid)
-
-    plt.show()
+    plot2d( data, range = range,
+            title  = title,
+            xtitle = xlabel,
+            ytitle = ylabel,
+            vtitle = zlabel,
+            **kwargs
+    )
 
 def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None, show = True, save = None ):
     """Generates a plot from 1D or 2D grids.
 
     This works as driver for grid1d and grid2d routines.
@@ -350,7 +437,7 @@ def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = 
         grid1d( filename, xlim = xlim, grid = grid, scale = scale )
     elif ( info.grid.ndims == 2 ):
         grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift )
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift, show = show, save = save )
     else:
         print("(*error*) file {} - unsupported grid dimensions ({}).".format(filename, info.grid.ndims))
 
@@ -700,14 +787,14 @@ def plot_part( part, iter = None, qx = "x", qy = "y", xlim = None, ylim = None, 
 
 
 def plot_data( fld, iter = None, xlim = None, ylim = None, cmap = None, norm = None,
-    vsim = None, vmin = None, vmax = None, scale = None, shift = None ):
+    vsim = None, vmin = None, vmax = None, scale = None, shift = None, show = True, save = None ):
     
     file = "{}-{:06d}.zdf".format(fld, iter)
 
     if ( os.path.exists(file) ):
         print("Plotting {}".format(file))
         grid( file, xlim = xlim, ylim = ylim, grid = False, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift )
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift, show = show, save = save )
     else:
         print("(*error*) file {} not found.".format(file), file = sys.stderr )
 

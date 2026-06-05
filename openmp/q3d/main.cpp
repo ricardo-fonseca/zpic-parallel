@@ -495,7 +495,7 @@ void test_lwfa() {
     Laser::Gaussian laser;
     laser.start   = 20.0;
     laser.fwhm    = 2.0;
-    laser.a0      = 1.0;
+    laser.a0      = 4.0;
     laser.omega0  = 10.0;
     laser.W0      = 4.0;
     laser.focus   = 20.48;
@@ -536,7 +536,7 @@ void test_lwfa() {
     Timer timer;
     timer.start();
 
-    while( sim.get_t() <= 1.05 * box.x ) {
+    while( sim.get_t() <= 10.05 * box.x ) {
         if ( sim.get_iter() % 10 == 0 ) {
             std::cout << "i = " << sim.get_iter() << '\n';
             diag();

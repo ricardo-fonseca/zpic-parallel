@@ -176,7 +176,7 @@ def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     plt.show()
 
 def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None, save = None ):
     """Generates a colormap plot from a 2D grid zdf file
 
     Args:
@@ -291,6 +291,9 @@ def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None,
         plt.ylim(ylim)
 
     plt.grid(grid)
+
+    if ( save ):
+        plt.savefig(save, format="pdf", bbox_inches="tight")
 
     plt.show()
 
@@ -408,7 +411,7 @@ def complex_grid2d( filename : str, part = 'real', **kwargs ):
     )
 
 def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None ):
+    vsim = False, vmin = None, vmax = None, scale = None, shift = None, save = None ):
     """Generates a plot from 1D or 2D grids.
 
     This works as driver for grid1d and grid2d routines.
@@ -433,7 +436,7 @@ def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = 
         grid1d( filename, xlim = xlim, grid = grid, scale = scale )
     elif ( info.grid.ndims == 2 ):
         grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift )
+            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift, save = save )
     else:
         print("(*error*) file {} - unsupported grid dimensions ({}).".format(filename, info.grid.ndims))
 

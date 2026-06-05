@@ -357,17 +357,17 @@ inline void dep_current_seg(
     //const auto cr0 = (ir0 + j) + r0;
     //const auto cr1 = (ir0 + j) + r1;
 
-    const auto cr0 = std::sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
-    const auto cr1 = std::sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
+    const auto rcr0 = 1.0f / std::sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
+    const auto rcr1 = 1.0f / std::sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
 
-    const auto θ0 = make_float2( t0.x/cr0, t0.y/cr0 );
-    const auto θ1 = make_float2( t1.x/cr1, t1.y/cr1 );
+    const auto θ0 = make_float2( t0.x * rcr0, t0.y * rcr0 );
+    const auto θ1 = make_float2( t1.x * rcr1, t1.y * rcr1 );
 
     const auto xif = t0.x + t1.x;
     const auto yif = t0.y + t1.y;
 
-    const auto rm2 = std::sqrt( ops::fma( xif, xif, yif*yif ) );
-    const auto θm = float2{ xif/rm2, yif/rm2 };
+    const auto rrm2 = 1.0f / std::sqrt( ops::fma( xif, xif, yif*yif ) );
+    const auto θm = float2{ xif * rrm2, yif * rrm2 };
 
     // Complex coefficients for initial, mid and final angular positions
     
@@ -504,17 +504,17 @@ inline void split2d_cyl(
             εr = - ( b + std::copysign( std::sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
             if ( εr < 0 || εr > 1 ) εr = c / (a * εr);
         }
+
+        if ( εr < 0 || εr > 1) {
+            std::cerr << "(*error*) Invalid εr: "<< εr << '\n';
+            std::exit(1);
+        }
+
 #else
         // Old splitter (OSIRIS)
         εr = (rs - x0.y) / delta.y;
 #endif
 
-/*
-        if ( εr < 0 || εr > 1) {
-            std::cerr << "(*error*) Invalid εr: "<< εr << '\n';
-            std::exit(1);
-        }
-*/
         // r-split positions
         xr = t0.x + εr * tdelta.x;
         yr = t0.y + εr * tdelta.y;
@@ -592,292 +592,6 @@ inline void split2d_cyl(
         v2_ix = make_int2( ix.x + deltai.x, ix.y + deltai.y );
         v2_x1 = make_float2( x1.x  - deltai.x, x1.y - deltai.y );
         v2_t1 = t1;
-    }
-}
-
-/**
- * @brief Move particles and deposit current (mode 0 only) and shift positions
- * 
- * @param tile_idx          Tile index
- * @param part              Particle data
- * @param current_m0        Current grid (m=0)
- * @param current_offset    Offset to position [0,0] of the current grid
- * @param nx                Current grid size (internal)
- * @param ext_nx            Current grid size (external)
- * @param dt_dx             Ratio between time step and cell size
- */
-void move_deposit_0(
-    uint2 const tile_idx,
-    ParticleData const part,
-    cyl3<float> * const __restrict__ current_m0, 
-    unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
-    float2 const dt_dx ) 
-{
-    const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
-
-    // This is usually in block shared memory
-    alignas(local_align) cyl3<float> tile_buffer_0[tile_size];
-
-    // Zero local current buffer
-    for( auto i = 0; i < tile_size; i++ ) 
-        tile_buffer_0[i] = cyl3<float>{0};
-
-    // sync
-
-    // Move particles and deposit current
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    cyl3<float> * J0 = & tile_buffer_0[ current_offset ];
-    const int jstride = ext_nx.x;
-
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
-    auto * __restrict__ ix = &part.ix[ part_offset ];
-    auto * __restrict__ x  = &part.x[ part_offset ];
-    auto * __restrict__ u  = &part.u[ part_offset ];
-    auto * __restrict__ θ  = &part.θ[ part_offset ];
-    auto * __restrict__ q  = &part.q[ part_offset ];
-    
-    auto const dt_dz = dt_dx.x;
-    auto const dt_dr = dt_dx.y;
-
-    const int ir0 = tile_idx.y * nx.y;
-
-    for( int i = 0; i < np; i++ ) {
-        auto pu  = u[i];
-        auto x0  = x[i];
-        auto ix0 = ix[i];
-        auto θi  = θ[i];
-        auto pq  = q[i];
-
-        // Get 1 / Lorentz gamma
-        float const rg = rgamma( pu );
-
-        // Cartesian motion
-        auto Δx = dt_dr * rg * pu.x;
-        auto Δy = dt_dr * rg * pu.y;
-
-        /// @brief initial radial position
-        auto ri = ( ir0 + ix0.y ) + x0.y;
-        auto xi = ri * θi.x;
-        auto yi = ri * θi.y;
-
-        // New cartesian positions
-        auto xf = ops::fma( ri, θi.x, Δx );
-        auto yf = ops::fma( ri, θi.y, Δy );
-
-        /// @brief xi + xf
-        auto xif = ops::fma( ri, θi.x, xf );
-        /// @brief yi + yf
-        auto yif = ops::fma( ri, θi.y, yf );
-
-        // Final positions
-
-        /// @brief New radial position
-        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
-        /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        // auto Δr = rf - ri;
-
-        // Advance grid (z,r) position
-        auto Δz = dt_dz * rg * pu.z;
-        float2 delta = make_float2( Δz, Δr );
-
-        // Check for cell crossings and split trajectory
-        int2 deltai, cross;
-
-        int2 v0_ix; float2 v0_x0, v0_x1, v0_t0, v0_t1; 
-        int2 v1_ix; float2 v1_x0, v1_x1, v1_t0, v1_t1; 
-        int2 v2_ix; float2 v2_x0, v2_x1, v2_t0, v2_t1; 
-
-        split2d_cyl( 
-            ir0, ix0, x0, delta, deltai,
-            make_float2( xi, yi ), make_float2( Δx, Δy ),
-            v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
-            v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
-            v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
-            cross
-        );
-        
-        // Deposit current (mode 0)
-                                  dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
-        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
-        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
-
-        // Modify cell position and store
-        x[i] = make_float2( 
-            (x0.x + Δz ) - deltai.x,
-            (x0.y + Δr ) - deltai.y
-        );
-
-        // Modify cell and store
-        ix[i] = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
-        );
-
-        /// @brief store new angular position
-        θ[i] = float2{ xf/rf, yf/rf };
-
-    }
-
-    // Current normalization is done in Current::normalize()
-
-    // Add current to global buffer
-    const int tile_off = tid * tile_size;
-
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
-        current_m0[tile_off + i] += tile_buffer_0[i];
-    }
-}
-
-/**
- * @brief Move particles and deposit current (modes 0 and 1)
- * 
- * @param tile_idx          Tile index
- * @param part              Particle data
- * @param d_current         Current grid (global)
- * @param current_offset    Offset to position [0,0] of the current grid
- * @param nx                Current grid size (internal)
- * @param ext_nx            Current grid size (external)
- * @param dt_dx             Ratio between time step and cell size
- */
-void move_deposit_1(
-    uint2 const tile_idx,
-    ParticleData const part,
-    cyl3<float> * const __restrict__ current_m0, 
-    cyl3<std::complex<float>> * const __restrict__ current_m1, 
-    unsigned int const current_offset, uint2 const nx, uint2 const ext_nx,
-    float2 const dt_dx ) 
-{
-    const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
-
-    // This is usually in block shared memory
-    alignas(local_align) cyl3<float>               tile_buffer_0[tile_size];
-    alignas(local_align) cyl3<std::complex<float>> tile_buffer_1[tile_size];
-
-    // Zero local current buffer
-    for( auto i = 0; i < tile_size; i++ ) {
-        tile_buffer_0[i] = cyl3<float>{0};
-        tile_buffer_1[i] = cyl3<std::complex<float>>{0};
-    }
-
-    // sync
-
-    // Move particles and deposit current
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    cyl3<float> *               J0 = & tile_buffer_0[ current_offset ];
-    cyl3<std::complex<float>> * J1 = & tile_buffer_1[ current_offset ];
-
-    const int jstride = ext_nx.x;
-
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
-    auto * __restrict__ ix = &part.ix[ part_offset ];
-    auto * __restrict__ x  = &part.x[ part_offset ];
-    auto * __restrict__ u  = &part.u[ part_offset ];
-    auto * __restrict__ θ  = &part.θ[ part_offset ];
-    auto * __restrict__ q  = &part.q[ part_offset ];
-    
-    auto const dt_dz = dt_dx.x;
-    auto const dt_dr = dt_dx.y;
-
-    const int ir0 = tile_idx.y * nx.y;
-
-    for( int i = 0; i < np; i++ ) {
-        auto pu  = u[i];
-        auto x0  = x[i];
-        auto ix0 = ix[i];
-        auto θi  = θ[i];
-        auto pq  = q[i];
-
-        // Get 1 / Lorentz gamma
-        float const rg = rgamma( pu );
-
-        // Cartesian motion
-        auto Δx = dt_dr * rg * pu.x;
-        auto Δy = dt_dr * rg * pu.y;
-        auto Δz = dt_dz * rg * pu.z;
-
-        /// @brief initial radial position
-        auto ri = ( ir0 + ix0.y ) + x0.y;
-        auto xi = ri * θi.x;
-        auto yi = ri * θi.y;
-
-        // New cartesian positions
-        auto xf = ops::fma( ri, θi.x, Δx );
-        auto yf = ops::fma( ri, θi.y, Δy );
-
-        /// @brief xi + xf
-        auto xif = ops::fma( ri, θi.x, xf );
-        /// @brief yi + yf
-        auto yif = ops::fma( ri, θi.y, yf );
-
-        // Final positions
-
-        /// @brief New radial position
-        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
-        /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        // auto Δr = rf - ri;
-
-        // Advance grid (z,r) position
-        float2 delta = make_float2( Δz, Δr );
-
-        // Check for cell crossings and split trajectory
-        int2 deltai, cross;
-
-        int2 v0_ix; float2 v0_x0, v0_x1, v0_t0, v0_t1; 
-        int2 v1_ix; float2 v1_x0, v1_x1, v1_t0, v1_t1; 
-        int2 v2_ix; float2 v2_x0, v2_x1, v2_t0, v2_t1; 
-
-        split2d_cyl( 
-            ir0, ix0, x0, delta, deltai,
-            make_float2( xi, yi ), make_float2( Δx, Δy ),
-            v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
-            v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
-            v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
-            cross
-        );
-        
-        // Deposit current (mode 0)
-        dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
-        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
-        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
-
-        // Deposit current (mode 1)
-        dep_current_seg<1>( ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
-        if ( cross.x || cross.y ) dep_current_seg<1>( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
-        if ( cross.x && cross.y ) dep_current_seg<1>( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
-
-
-        // Correct cell position and store
-        x[i] = make_float2( 
-            (x0.x + Δz ) - deltai.x,
-            (x0.y + Δr ) - deltai.y
-        );
-
-        // Modify cell and store
-        ix[i] = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
-        );
-
-        /// @brief store new angular position
-        θ[i] = float2{ xf/rf, yf/rf };
-    }
-
-    // Current normalization is done in Current::normalize()
-
-    // Add current to global buffer
-    const int tile_off = tid * tile_size;
-
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
-        current_m0[tile_off + i] += tile_buffer_0[i];
-        current_m1[tile_off + i] += tile_buffer_1[i];
     }
 }
 
@@ -1863,64 +1577,6 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
 }
 
 /**
- * @brief Moves particles and deposit current
- * 
- * Current will be accumulated on existing data
- * 
- * @param current   Current grid
- */
-void Species::move( Current & current )
-{
-    ///@brief timestep to cell size ratio
-    const float2 dt_dx = make_float2(
-        dt / dx.x,
-        dt / dx.y
-    );
-
-    ///@brief Mode 0 current
-    auto & J0 = current.mode0();
-
-    switch (nmodes)
-    {
-    case 1: {
-        #pragma omp parallel for schedule(dynamic)
-        for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-            
-            const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            move_deposit_0(
-                tile_idx, *particles,
-                J0.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
-                dt_dx
-            );
-        }
-    } break;
-
-    case 2: {
-        auto & J1 = current.mode(1);
-
-        #pragma omp parallel for schedule(dynamic)
-        for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-            
-            const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            move_deposit_1(
-                tile_idx, *particles,
-                J0.d_buffer, J1.d_buffer, J0.offset, J0.nx, J0.ext_nx, 
-                dt_dx
-            );
-        }
-    } break;
-
-    default:
-        break;
-    }
-
-    // This avoids the reduction overhead
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        d_nmove += particles -> np[tid];
-    }
-}
-
-/**
  * @brief Move particles (advance positions), deposit current and shift positions
  * 
  * @param current   Electric current density
@@ -1978,19 +1634,20 @@ void Species::move( Current & current, const int2 shift )
 }
 
 
+namespace kernel {
+
 /**
- * @brief kernel for moving particles
+ * @brief Kernel for moving particles without depositing current
  * 
- * @param d_tile            Particle tiles information
- * @param d_ix              Particle buffer (cells)
- * @param d_x               Particle buffer (positions)
- * @param d_u               Particle buffer (momenta)
- * @param dt_dx             Time step over cell size
+ * @param tile_idx      Tile index (x,y)
+ * @param part          Particle data
+ * @param dt_dx         Ratio between time step and cell size (x/y)
+ * @param shift         Additional cell shift for particles
  */
-void move_kernel(
+void move(
     uint2 const tile_idx,
     ParticleData const part,
-    float2 const dt_dx ) 
+    float2 const dt_dx, int2 const shift ) 
 {
     // Move particles and deposit current
     const int tid = tile_idx.y * part.ntiles.x + tile_idx.x;
@@ -2064,21 +1721,25 @@ void move_kernel(
 
         // Modify cell and store
         int2 ix1 = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
 }
 
+}
 
 /**
- * @brief Moves particles (no current/charge deposition)
+ * @brief Moves particles (no current deposition)
  * 
- * This is usually used for test species: species that do not self-consistently
- * influence the simulation
+ * @note This is usually used for test species: species that do not
+ *       self-consistently influence the simulation
+ * 
+ * @param shift     Additional cell shift for particles, defaults to 0
  */
-void Species::move( )
+void Species::move( const int2 shift )
+
 {
 
 
@@ -2090,7 +1751,7 @@ void Species::move( )
     #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
         const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-        move_kernel ( tile_idx, *particles, dt_dx );
+        kernel::move ( tile_idx, *particles, dt_dx, shift );
     }
 
     // This avoids the reduction overhead

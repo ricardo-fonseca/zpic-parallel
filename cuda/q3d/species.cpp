@@ -1801,6 +1801,7 @@ __global__
  * 
  * @param part          Particle data
  * @param dt_dx         Ratio between time step and cell size (x/y)
+ * @param shift         Additional cell shift for particles
  * @param d_nmove       (out) Number of particles pushed (for performance metrics)
  */
 void move(
@@ -1899,10 +1900,10 @@ void move(
 /**
  * @brief Moves particles (no current deposition)
  * 
- * This is usually used for test species: species that do not self-consistently
- * influence the simulation
+ * @note This is usually used for test species: species that do not
+ *       self-consistently influence the simulation
  * 
- * @param current   Current grid
+ * @param shift     Additional cell shift for particles, defaults to 0
  */
 void Species::move( const int2 shift )
 {
