@@ -1,0 +1,5 @@
+#!/bin/bash
+
+echo "Removing ZPIC data output"
+
+rm -Rf EMF CHARGE CURRENT PHASESPACE PARTICLES
