@@ -1,5 +1,5 @@
 #include <iostream>
-
+#include <fstream>
 #include <stdint.h>
 
 #include "utils.h"
@@ -606,6 +606,111 @@ void test_lwfa() {
     std::cout << ansi::reset; 
 }
 
+void benchmark_weibel()
+{
+
+    auto bench_weibel_sim = [ ]( std::ostream &output, uint2 ppc, uint2 nx, uint2 ntiles ) {
+        Simulation sim(
+            ntiles,                                                      // ntiles
+            nx,                                                          // nx
+            make_float2(ntiles.x * nx.x * 0.1f, ntiles.y * nx.y * 0.1f), // box
+            0.07                                                         // dt
+        );
+
+        float3 ufl = float3{0., 0., 0.6};
+        float3 uth = float3{0.1, 0.1, 0.1};
+
+        Species electrons("electrons", -1.0f, ppc);
+        electrons.set_udist( UDistribution::Thermal (uth, ufl) );
+
+        Species positrons("positrons", +1.0f, ppc);
+        ufl.z = - ufl.z;
+        positrons.set_udist( UDistribution::Thermal (uth, ufl) );
+
+        sim.add_species(electrons);
+        sim.add_species(positrons);
+
+        float const imax = 500;
+
+        Timer timer;
+
+        timer.start();
+
+        while (sim.get_iter() < imax)
+        {
+            sim.advance();
+        }
+
+        timer.stop();
+
+        output         << ppc.x << ", " << ppc.y 
+               << ", " << nx.x<< ", " << nx.y
+               << ", " << ntiles.x << ", " << ntiles.y
+               << ", " << timer.elapsed(timer::s)
+               << ", " << sim.get_nmove() / timer.elapsed(timer::s) / 1.e9
+               << ", " << std::endl;
+    };
+
+/*
+    std::vector<uint2> ppc_list{
+        {1, 1}, {2, 1}, {2, 2}, {4, 2}, {4, 4}, {8, 4}, {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}};
+
+    std::vector<uint2> ntiles_list{
+        {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}, {64, 32}, {64, 64}, {128, 64}, {128, 128}, {256, 128}, {256, 256}, {512, 256}, {512, 512}, {1024, 512}, {1024, 1024}};
+
+    std::vector<uint2> nx_list{
+        {4, 4}, {8, 4}, {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}, {64, 32}, {64, 64}, { 80, 64 }, { 80, 80 } };
+*/
+
+    std::vector<uint2> ppc_list{
+        {4, 4}, {8, 8}, {16, 16}
+    };
+
+    std::vector<uint2> ntiles_list{
+        {4, 4}, {8, 4}, {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}, {64, 32}, {64, 64}, {128, 64} };
+
+    std::vector<uint2> nx_list{
+        {32, 32}
+    };
+
+
+/* 
+    std::vector<uint2> ppc_list{ {4, 4} };
+    std::vector<uint2> ntiles_list{ { 8, 8 } };
+    std::vector<uint2> nx_list{ {80, 80} };
+ */
+
+    std::ofstream output;
+    output.open("benchmark_weibel.csv");
+    output << "ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y, time, perf" << std::endl;
+
+    int ntests = ppc_list.size() *
+                nx_list.size() *
+                ntiles_list.size();
+
+    int i = 0;
+    for (uint2 ppc : ppc_list)
+        for (uint2 nx : nx_list)
+            for (uint2 ntiles : ntiles_list)
+            {
+                // The casts avoid integer overflows (because 64^2 * 1024^2 = 2^32)
+                int64_t vol = static_cast<int64_t>(nx.x * nx.y) * 
+                              static_cast<int64_t>(ntiles.x * ntiles.y);
+                int64_t npart = vol * static_cast<int64_t>(ppc.x * ppc.y);
+
+                printf("[%3d/%3d] %d, %d, %d, %d, %d, %d (%ld)\n", i++, ntests,
+                       ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y, npart);
+
+                // Limit the test to 512 M part / species
+                if ( npart < 512 * 1024 * 1024 )
+                {
+                    bench_weibel_sim(output, ppc, nx, ntiles);
+                }
+            }
+
+    output.close();
+}
+
 int main( void ) {
 
     // Initialize SIMD support
@@ -630,4 +735,6 @@ int main( void ) {
     // test_weibel_96();
 
     test_lwfa();
+
+    // benchmark_weibel();
 }
