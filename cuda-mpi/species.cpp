@@ -48,6 +48,7 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
     particles = nullptr;
     tmp = nullptr;
     sort = nullptr;
+    np_inj = nullptr;
 
     d_energy = nullptr;
     d_nmove = nullptr;

@@ -260,11 +260,16 @@ void test_laser( ) {
     t0.stop();
 
     char buffer[128];
-    snprintf( buffer, 127, "%d iterations: ", niter );
-
-    t0.report( buffer );
+    snprintf( buffer, 127, "%d iterations:", niter );
 
     save_emf();
+    if ( mpi::world_root() ) {
+        t0.report( buffer );
+        std::cout << ansi::bold;
+        std::cout << "Done!\n";
+        std::cout << ansi::reset;
+    }
+
 }
 
 #include "simulation.h"
@@ -1321,7 +1326,7 @@ int main( int argc, char *argv[] ) {
 
     // test_grid( );  
     // test_vec3grid( );
-    // test_laser( );
+    test_laser( );
     // test_inj( );
     // test_mov( );
     // test_current( );
@@ -1330,6 +1335,7 @@ int main( int argc, char *argv[] ) {
     // test_lwfa();
     // test_warm( );
 
+    /*
     if ( test == "weibel" ) {
         test_weibel( param );
     } else {
@@ -1337,6 +1343,7 @@ int main( int argc, char *argv[] ) {
             std::cerr << "Unknonw test '" << test << "', aborting...\n";
         mpi::abort(1);
     }
+    */
 
     // benchmark_weibel();
 

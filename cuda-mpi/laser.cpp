@@ -52,7 +52,7 @@ float lon_env( Laser::Pulse & laser, float z ) {
  * @param ntiles        Number of tiles in local node (x,y)
  * @param nx            Individual tile size
  * @param ext_nx        Individual tile size including guard cells
- * @param recvbuf       Message send buffer
+ * @param sendbuf       Message send buffer
  */
 __global__
 void div_corr_x_scan (
@@ -86,7 +86,7 @@ void div_corr_x_scan (
         float3 * const __restrict__ tile_E = & E_buffer[ tile_off ];
         float3 * const __restrict__ tile_B = & B_buffer[ tile_off ];
 
-        int start = nx.x / WARP_SIZE;
+        int start = ( nx.x / WARP_SIZE ) * WARP_SIZE;
         for( int ix = start + block_thread_rank(); ix >= 0; ix -= WARP_SIZE ) {
 
             double dEx = 0;
