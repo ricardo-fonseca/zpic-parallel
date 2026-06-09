@@ -48,8 +48,12 @@ EMF/
 PARTICLES/
 CHARGE/
 CURRENT/
-mpi/zpic
-openmp/zpic
+mpi/em2d/zpic
+mpi/q3d/zpic
 cuda/em2d/zpic
 cuda/em2ds/zpic
+cuda/q3d/zpic
+openmp/em2d/zpic
+openmp/em2ds/zpic
+openmp/q3d/zpic
 openmp/python/em2d.cpp

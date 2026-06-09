@@ -1837,14 +1837,14 @@ void dep_charge_0(
     const uint2 ntiles  = part.ntiles;
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
  
-    float _dep_charge_buffer[tile_size];
+    float charge_local[tile_size];
 
     // Zero shared memory and sync.
     for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i ++ ) {
-        _dep_charge_buffer[i] = 0;
+        charge_local[i] = 0;
     }
 
-    float *charge = &_dep_charge_buffer[ offset ];
+    float *charge = &charge_local[ offset ];
 
     // sync;
 
@@ -1858,16 +1858,16 @@ void dep_charge_0(
 
     for( int i = 0; i < np; i ++ ) {
         const int idx = ix[i].y * ystride + ix[i].x;
-        const float s0x = 0.5f - x[i].x;
-        const float s1x = 0.5f + x[i].x;
-        const float s0y = 0.5f - x[i].y;
-        const float s1y = 0.5f + x[i].y;
+        const float s0z = 0.5f - x[i].x;
+        const float s1z = 0.5f + x[i].x;
+        const float s0r = 0.5f - x[i].y;
+        const float s1r = 0.5f + x[i].y;
 
         // When use more than 1 thread per tile, these need to be atomic inside tile
-        charge[ idx               ] += s0y * s0x * q[i];
-        charge[ idx + 1           ] += s0y * s1x * q[i];
-        charge[ idx     + ystride ] += s1y * s0x * q[i];
-        charge[ idx + 1 + ystride ] += s1y * s1x * q[i];
+        charge[ idx               ] += s0r * s0z * q[i];
+        charge[ idx + 1           ] += s0r * s1z * q[i];
+        charge[ idx     + ystride ] += s1r * s0z * q[i];
+        charge[ idx + 1 + ystride ] += s1r * s1z * q[i];
     }
 
     // sync
@@ -1875,7 +1875,7 @@ void dep_charge_0(
     // Copy data to global memory
     const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
     for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i ++ ) {
-        d_charge[tile_off + i] += _dep_charge_buffer[i];
+        d_charge[tile_off + i] += charge_local[i];
     } 
 }
 
@@ -1900,14 +1900,14 @@ void dep_charge(
     const uint2 ntiles  = part.ntiles;
     const int tile_size = roundup4( ext_nx.x * ext_nx.y );
  
-    std::complex<float> _dep_charge_buffer[tile_size];
+    std::complex<float> charge_local_m[tile_size];
 
     // Zero shared memory and sync.
     for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i ++ ) {
-        _dep_charge_buffer[i] = 0;
+        charge_local_m[i] = 0;
     }
 
-    auto *charge = &_dep_charge_buffer[ offset ];
+    auto *charge = &charge_local_m[ offset ];
 
     // sync;
 
@@ -1922,20 +1922,20 @@ void dep_charge(
 
     for( int i = 0; i < np; i ++ ) {
         const int idx = ix[i].y * ystride + ix[i].x;
-        const float s0x = 0.5f - x[i].x;
-        const float s1x = 0.5f + x[i].x;
-        const float s0y = 0.5f - x[i].y;
-        const float s1y = 0.5f + x[i].y;
+        const float s0z = 0.5f - x[i].x;
+        const float s1z = 0.5f + x[i].x;
+        const float s0r = 0.5f - x[i].y;
+        const float s1r = 0.5f + x[i].y;
 
         static_assert( m == 1, "only mode m = 1 is currently supported" );
         // auto qm = q[i] * expimθ<m>( θ[i] );
         auto qm = q[i] * std::complex<float>{ θ[i].x, -θ[i].y };
 
         // When use more than 1 thread per tile, these need to be atomic inside tile
-        charge[ idx               ] += s0y * s0x * qm;
-        charge[ idx + 1           ] += s0y * s1x * qm;
-        charge[ idx     + ystride ] += s1y * s0x * qm;
-        charge[ idx + 1 + ystride ] += s1y * s1x * qm;
+        charge[ idx               ] += s0r * s0z * qm;
+        charge[ idx + 1           ] += s0r * s1z * qm;
+        charge[ idx     + ystride ] += s1r * s0z * qm;
+        charge[ idx + 1 + ystride ] += s1r * s1z * qm;
     }
 
     // sync
@@ -1943,7 +1943,7 @@ void dep_charge(
     // Copy data to global memory
     const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
     for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i ++ ) {
-        d_charge[tile_off + i] += _dep_charge_buffer[i];
+        d_charge[tile_off + i] += charge_local_m[i];
     } 
 }
 
