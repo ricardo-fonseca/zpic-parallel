@@ -304,6 +304,10 @@ void test_weibel( ) {
         sim.emf.save(emf::b, fcomp::y);
         sim.emf.save(emf::b, fcomp::z);
 
+        sim.emf.save(emf::fet, fcomp::x);
+        sim.emf.save(emf::fet, fcomp::y);
+        sim.emf.save(emf::fet, fcomp::z);
+
         sim.current.save(fcomp::x);
         sim.current.save(fcomp::y);
         sim.current.save(fcomp::z);

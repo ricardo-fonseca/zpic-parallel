@@ -54,7 +54,7 @@ void poisson(
         std::complex<float> * const __restrict__ data, uint2 const dims, float2 const dk
     )
 {
-    constexpr std::complex<float> I{0,1};
+    // constexpr std::complex<float> I{0,1};
 
     std::cout << "K-space dims: " << dims << '\n';
 
@@ -315,6 +315,10 @@ void test_weibel( ) {
         sim.emf.save(emf::b, fcomp::x);
         sim.emf.save(emf::b, fcomp::y);
         sim.emf.save(emf::b, fcomp::z);
+
+        sim.emf.save(emf::fet, fcomp::x);
+        sim.emf.save(emf::fet, fcomp::y);
+        sim.emf.save(emf::fet, fcomp::z);
 
         sim.current.save(fcomp::x);
         sim.current.save(fcomp::y);

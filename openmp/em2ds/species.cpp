@@ -267,7 +267,7 @@ inline void dep_current( float3 * const __restrict__ J, const int ystride,
     );
 
     int2 ix  = make_int2( ix0.x + deltai.x, ix0.y + deltai.y );
-    float2 x = make_float2( x0.x - deltai.x, x0.y - deltai.y );
+    float2 x = make_float2( x1.x - deltai.x, x1.y - deltai.y );
 
     const float S0x = 0.5f - x.x;
     const float S1x = 0.5f + x.x;
@@ -459,8 +459,8 @@ void vdep_current(
 
     vint2 ix{ vec_add( ix0.x, deltai.x ), vec_add( ix0.y, deltai.y ) };
     vfloat2 x {
-        vec_sub( x0.x, vec_float(deltai.x ) ),
-        vec_sub( x0.y, vec_float(deltai.y ) )
+        vec_sub( x1.x, vec_float(deltai.x ) ),
+        vec_sub( x1.y, vec_float(deltai.y ) )
     };
 
     vfloat S0x = vec_sub( c1_2, x.x );

@@ -22,7 +22,7 @@ class Charge {
     float2 box;
 
     /// @brief cell size
-    float2 dx;
+    // float2 dx;
     
     /// @brief time step
     float dt;
@@ -58,7 +58,7 @@ class Charge {
 
     Charge( uint2 const ntiles, uint2 const nx, float2 const box, float const dt ) :
         box(box), 
-        dx( { box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
+        // dx( { box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
         dt(dt)
     {
         // Guard cells (1 below, 2 above)
