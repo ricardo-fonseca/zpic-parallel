@@ -1,0 +1,12 @@
+-r
+/home/sdp/zpic-parallel/sycl/e000/trc000
+-quiet
+-cs-file
+/home/sdp/zpic-parallel/sycl/e000/callstacks.def
+--cs-mode=no-count-loops,no-count-flops,stl-profiling,stack-stitching
+--target-loops=n
+--count-flops
+--jit-profiling
+--benchmarks=dram,mcdram,cpu_cache,flop_peak,int,
+--
+./zpic

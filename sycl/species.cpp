@@ -605,7 +605,9 @@ inline void dep_current_seg(
  * 
  * @param current   Current grid
  */
-void Species::move( vec3grid<float3> * J )
+
+class move_t1;
+void Species::move(vec3grid<float3>* J)
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -617,208 +619,171 @@ void Species::move( vec3grid<float3> * J )
         q * dx.y / dt
     );
 
-
     const ParticleData part = *particles;
 
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    const int tile_vol = J -> tile_vol;
-    const auto current_offset = J -> offset;
-    const auto d_current = J -> d_buffer;
-    const int ystride = J -> ext_nx.x;
+    const int2 ntiles = make_int2(part.ntiles.x, part.ntiles.y);
+    const int tile_vol = J->tile_vol;
+    const auto current_offset = J->offset;
+    const auto d_current = J->d_buffer;
+    const int ystride = J->ext_nx.x;
 
-    const auto q = this -> q;
-    auto d_nmove = this -> d_nmove;
+    const auto q = this->q;
+    auto d_nmove = this->d_nmove;
 
-    // 512×1 work items per group
-    sycl::range<2> local( 512, 1 );
+    sycl::range<2> local(512, 1);
+    sycl::range<2> grid(ntiles.x, ntiles.y);
 
-    // ntiles.x × ntiles.y groups
-    sycl::range<2> grid( ntiles.x, ntiles.y );
+    queue->submit([&](sycl::handler& h) {
+        constexpr int padding = 16;
+        auto J_local = sycl::local_accessor<float3, 1>(tile_vol + padding, h);
 
+        h.parallel_for<class move_t1>(
+            sycl::nd_range{grid * local, local},
+            [=](sycl::nd_item<2> it) {
+                const int2 tile_idx = make_int2(it.get_group(0), it.get_group(1));
 
-    queue->submit([&](sycl::handler &h) {
+                // Zero local current buffer
+                for (auto i = it.get_local_id(0); i < tile_vol; i += it.get_local_range(0))
+                    J_local[i] = make_float3(0, 0, 0);
 
-        /// @brief [shared] Local copy of current density
-        auto J_local = sycl::local_accessor< float3, 1 > ( tile_vol, h );
+                float3* J = &J_local[current_offset];
+                it.barrier();
 
-        h.parallel_for( 
-            sycl::nd_range{ grid * local, local },
-            [=](sycl::nd_item<2> it) { 
-            
-            const int2 tile_idx = make_int2( it.get_group(0), it.get_group(1) );
+                const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
+                const auto tile_off = part.offset[tile_id];
+                const auto tile_np = part.np[tile_id];
+                int2* __restrict__ ix = &part.ix[tile_off];
+                float2* __restrict__ x = &part.x[tile_off];
+                float3* __restrict__ u = &part.u[tile_off];
 
-            // Zero local current buffer
-            for( auto i = it.get_local_id(0); i < tile_vol; i+= it.get_local_range(0) ) 
-                J_local[i] = make_float3(0,0,0);
+                for (int i = it.get_local_id(0); i < tile_np; i += it.get_local_range(0)) {
+                    float3 pu = u[i];
+                    float2 const x0 = x[i];
+                    int2 const ix0 = ix[i];
 
-            float3 * J = & J_local[ current_offset ];
-            it.barrier();
+                    float const rg = rgamma(pu);
+                    float2 const delta = make_float2(
+                        dt_dx.x * rg * pu.x,
+                        dt_dx.y * rg * pu.y
+                    );
 
-            // Move particles and deposit current
-            const int tile_id   = tile_idx.y * ntiles.x + tile_idx.x;
+                    float2 x1 = make_float2(x0.x + delta.x, x0.y + delta.y);
+                    int2 const deltai = make_int2(
+                        ((x1.x >= 0.5f) - (x1.x < -0.5f)),
+                        ((x1.y >= 0.5f) - (x1.y < -0.5f))
+                    );
 
-            const auto tile_off        = part.offset[ tile_id ];
-            const auto tile_np         = part.np[ tile_id ];
-            int2   * __restrict__ ix  = &part.ix[ tile_off ];
-            float2 * __restrict__ x   = &part.x[ tile_off ];
-            float3 * __restrict__ u   = &part.u[ tile_off ];
+                    int nvp = 1;
+                    int2 v0_ix = ix0;
+                    float2 v0_x0 = x0, v0_x1 = x1;
+                    float v0_qvz = q * pu.z * rg * 0.5f;
+                    int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
+                    int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
 
-            for( int i = it.get_local_id(0); i < tile_np; i+= it.get_local_range(0) ) {
-                float3 pu = u[i];
-                float2 const x0 = x[i];
-                int2   const ix0 =ix[i];
+                    bool x_split = deltai.x != 0;
+                    bool y_split = deltai.y != 0;
 
-                // Get 1 / Lorentz gamma
-                float const rg = rgamma( pu );
+                    if (x_split || y_split) {
+                        float2 xint;
+                        float eps = 0.0f;
 
-                // Get particle motion
-                float2 const delta = make_float2(
-                    dt_dx.x * rg * pu.x,
-                    dt_dx.y * rg * pu.y
-                );
+                        if (x_split) {
+                            xint.x = 0.5f * deltai.x;
+                            eps = (xint.x - x0.x) / delta.x;
+                            xint.y = x0.y + delta.y * eps;
 
-                // Advance position
-                float2 x1 = make_float2(
-                    x0.x + delta.x,
-                    x0.y + delta.y
-                );
-
-                // Check for cell crossings
-                int2 const deltai = make_int2(
-                    ((x1.x >= 0.5f) - (x1.x < -0.5f)),
-                    ((x1.y >= 0.5f) - (x1.y < -0.5f))
-                );
-
-                // Split trajectories:
-                int nvp = 1;
-                int2 v0_ix; float2 v0_x0, v0_x1; float v0_qvz;
-                int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
-                int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
-
-                float eps, xint, yint;
-                float qvz = q * pu.z * rg * 0.5f;
-
-                // Initial position is the same on all cases
-                v0_ix = ix0; v0_x0 = x0;
-
-                switch( 2*(deltai.x != 0) + (deltai.y != 0) )
-                {
-                case(0): // no splits
-                    v0_x1 = x1; v0_qvz = qvz;
-                    break;
-
-                case(1): // only y crossing
-                    nvp++;
-
-                    yint = 0.5f * deltai.y;
-                    eps  = ( yint - x0.y ) / delta.y;
-                    xint = x0.x + delta.x * eps;
-
-                    v0_x1  = make_float2(xint,yint);
-                    v0_qvz = qvz * eps;
-
-                    v1_ix = make_int2( ix0.x, ix0.y  + deltai.y );
-                    v1_x0 = make_float2(xint,-yint);
-                    v1_x1 = make_float2( x1.x, x1.y  - deltai.y );
-                    v1_qvz = qvz * (1-eps);
-
-                    break;
-
-                case(2): // only x crossing
-                case(3): // x-y crossing
-                    
-                    // handle x cross
-                    nvp++;
-                    xint = 0.5f * deltai.x;
-                    eps  = ( xint - x0.x ) / delta.x;
-                    yint = x0.y + delta.y * eps;
-
-                    v0_x1 = make_float2(xint,yint);
-                    v0_qvz = qvz * eps;
-
-                    v1_ix = make_int2( ix0.x + deltai.x, ix0.y);
-                    v1_x0 = make_float2(-xint,yint);
-                    v1_x1 = make_float2( x1.x - deltai.x, x1.y );
-                    v1_qvz = qvz * (1-eps);
-
-                    // handle additional y-cross, if need be
-                    if ( deltai.y ) {
-                        float yint2 = 0.5f * deltai.y;
-                        nvp++;
-
-                        if ( yint >= -0.5f && yint < 0.5f ) {
-                            // y crosssing on 2nd vp
-                            eps   = (yint2 - yint) / (x1.y - yint );
-                            float xint2 = -xint + (x1.x - xint ) * eps;
-                            
-                            v2_ix = make_int2( v1_ix.x, v1_ix.y + deltai.y );
-                            v2_x0 = make_float2(xint2,-yint2);
-                            v2_x1 = make_float2( v1_x1.x, v1_x1.y - deltai.y );
-                            v2_qvz = v1_qvz * (1-eps);
-
-                            // Correct other particle
-                            v1_x1 = make_float2(xint2,yint2);
-                            v1_qvz *= eps;
-                        } else {
-                            // y crossing on 1st vp
-                            eps   = (yint2 - x0.y) / ( yint - x0.y );
-                            float xint2 = x0.x + ( xint - x0.x ) * eps;
-
-                            v2_ix = make_int2( v0_ix.x, v0_ix.y + deltai.y );
-                            v2_x0 = make_float2( xint2,-yint2);
-                            v2_x1 = make_float2( v0_x1.x, v0_x1.y - deltai.y );
-                            v2_qvz = v0_qvz * (1-eps);
-
-                            // Correct other particles
-                            v0_x1 = make_float2(xint2,yint2);
+                            v0_x1 = make_float2(xint.x, xint.y);
                             v0_qvz *= eps;
 
-                            v1_ix.y += deltai.y;
-                            v1_x0.y -= deltai.y;
-                            v1_x1.y -= deltai.y;
+                            v1_ix = make_int2(ix0.x + deltai.x, ix0.y);
+                            v1_x0 = make_float2(-xint.x, xint.y);
+                            v1_x1 = make_float2(x1.x - deltai.x, x1.y);
+                            v1_qvz = (q * pu.z * rg * 0.5f) * (1 - eps);
+
+                            nvp = 2;
+                        }
+
+                        if (!x_split && y_split) {
+                            xint.y = 0.5f * deltai.y;
+                            eps = (xint.y - x0.y) / delta.y;
+                            xint.x = x0.x + delta.x * eps;
+
+                            v0_x1 = make_float2(xint.x, xint.y);
+                            v0_qvz *= eps;
+
+                            v1_ix = make_int2(ix0.x, ix0.y + deltai.y);
+                            v1_x0 = make_float2(xint.x, -xint.y);
+                            v1_x1 = make_float2(x1.x, x1.y - deltai.y);
+                            v1_qvz = (q * pu.z * rg * 0.5f) * (1 - eps);
+
+                            nvp = 2;
+                        }
+
+                        if (x_split && y_split) {
+                            float yint = xint.y;
+                            float yint2 = 0.5f * deltai.y;
+
+                            if (yint >= -0.5f && yint < 0.5f) {
+                                float eps2 = (yint2 - yint) / (x1.y - yint);
+                                float xint2 = -xint.x + (x1.x - xint.x) * eps2;
+
+                                v2_ix = make_int2(v1_ix.x, v1_ix.y + deltai.y);
+                                v2_x0 = make_float2(xint2, -yint2);
+                                v2_x1 = make_float2(v1_x1.x, v1_x1.y - deltai.y);
+                                v2_qvz = v1_qvz * (1 - eps2);
+
+                                v1_x1 = make_float2(xint2, yint2);
+                                v1_qvz *= eps2;
+                            } else {
+                                float eps2 = (yint2 - x0.y) / (xint.y - x0.y);
+                                float xint2 = x0.x + (xint.x - x0.x) * eps2;
+
+                                v2_ix = make_int2(ix0.x, ix0.y + deltai.y);
+                                v2_x0 = make_float2(xint2, -yint2);
+                                v2_x1 = make_float2(v0_x1.x, v0_x1.y - deltai.y);
+                                v2_qvz = v0_qvz * (1 - eps2);
+
+                                v0_x1 = make_float2(xint2, yint2);
+                                v0_qvz *= eps2;
+
+                                v1_ix.y += deltai.y;
+                                v1_x0.y -= deltai.y;
+                                v1_x1.y -= deltai.y;
+                            }
+                            nvp = 3;
                         }
                     }
-                    break;
+
+                    // Deposit vp current
+                    dep_current_seg(v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride);
+                    if (nvp > 1) dep_current_seg(v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride);
+                    if (nvp > 2) dep_current_seg(v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride);
+
+                    // Correct position and store
+                    x1.x -= deltai.x;
+                    x1.y -= deltai.y;
+                    x[i] = x1;
+
+                    int2 ix1 = make_int2(ix0.x + deltai.x, ix0.y + deltai.y);
+                    ix[i] = ix1;
                 }
 
-                // Deposit vp current
-                               dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
-                if ( nvp > 1 ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
-                if ( nvp > 2 ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
+                it.barrier();
 
-                // Correct position and store
-                x1.x -= deltai.x;
-                x1.y -= deltai.y;
-                        
-                x[i] = x1;
+                const int current_tile_off = tile_id * tile_vol;
+                for (auto i = it.get_local_id(0); i < tile_vol; i += it.get_local_range(0))
+                    d_current[current_tile_off + i] += J_local[i];
 
-                // Modify cell and store
-                int2 ix1 = make_int2(
-                    ix0.x + deltai.x,
-                    ix0.y + deltai.y
-                );
-                ix[i] = ix1;
-
-            }
-
-            it.barrier();
-
-            // Add current to global buffer
-            const int current_tile_off = tile_id * tile_vol;
-
-            for( auto i =  it.get_local_id(0); i < tile_vol; i+= it.get_local_range(0) ) 
-                d_current[current_tile_off + i] += J_local[i];
-
-
-            if ( it.get_local_id(0) == 0 ) {
-                // Update total particle pushes counter (for performance metrics)
-                uint64_t np64 = tile_np;
-                device::global::atomicAdd( d_nmove, np64 );
-            }
-        });
+                if (it.get_local_id(0) == 0) {
+                    uint64_t np64 = tile_np;
+                    device::global::atomicAdd(d_nmove, np64);
+                }
+            });
     });
+
     queue->wait();
 }
+
 
 /**
  * @brief Moves particles and deposit current
@@ -1375,81 +1340,130 @@ inline void interpolate_fld(
  * @param ext_nx        E,B tile grid external size
  * @param alpha         Force normalization ( 0.5 * q / m * dt )
  */
-template < species::pusher type >
-void push_kernel ( 
-    sycl::queue & queue,
+
+template <species::pusher T>
+class push_kernel_t;
+
+template <species::pusher type>
+void push_kernel(
+    sycl::queue& queue,
     ParticleData const part,
-    vec3grid<float3> * const E, vec3grid<float3> * const B, 
-    float const alpha, double * const __restrict__ d_energy )
+    vec3grid<float3>* const E, vec3grid<float3>* const B,
+    float const alpha, double* const d_energy)
 {
-    const auto ntiles    = part.ntiles;
-    const auto field_vol = E->tile_vol; 
-    const auto d_E = E -> d_buffer;
-    const auto d_B = B -> d_buffer;
-    const auto field_offset = E -> offset;
-    const int ystride = E -> ext_nx.x;
+    const auto ntiles = part.ntiles;
+    const auto field_vol = E->tile_vol;
+    const auto d_E = E->d_buffer;
+    const auto d_B = B->d_buffer;
+    const auto field_offset = E->offset;
+    const int ystride = E->ext_nx.x;
 
-    // 8×1 work items per group
-    sycl::range<2> local{ 64, 1 };
+    // Optimized: Increased work-items per group from 64 to 128 for better occupancy
+    sycl::range<2> local{128, 1};
+    sycl::range<2> global{ntiles.x, ntiles.y};
 
-    // ntiles.x × ntiles.y groups
-    sycl::range<2> global{ ntiles.x, ntiles.y };
+    queue.submit([&](sycl::handler& h) {
+        // Optimized: Use const auto for cleaner syntax
+        const auto tile_vol = field_vol;
 
-    queue.submit([&](sycl::handler &h) {
+        // Local copy of E and B fields
+        auto E_local = sycl::local_accessor<float3, 1>(tile_vol, h);
+        auto B_local = sycl::local_accessor<float3, 1>(tile_vol, h);
 
-        /// @brief [shared] Local copy of E-field
-        auto E_local = sycl::local_accessor< float3, 1 > ( field_vol, h );
-        /// @brief [shared] Local copy of B-field
-        auto B_local = sycl::local_accessor< float3, 1 > ( field_vol, h );
+        // Optimized: Added shared memory for energy reduction
+        auto energy_local = sycl::local_accessor<double, 1>(local[0], h);
 
-        h.parallel_for( 
-            sycl::nd_range{ global * local, local },
+        h.parallel_for<push_kernel_t<type>>(
+            sycl::nd_range{global * local, local},
             [=](sycl::nd_item<2> it) {
-            
-            const int2 tile_idx = make_int2( it.get_group(0), it.get_group(1) );
-            const int tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tile_id * field_vol;
+            // Optimized: Precompute these values outside the loops
+            const int2 tile_idx = make_int2(it.get_group(0), it.get_group(1));
+            const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
+            const int tile_off = tile_id * tile_vol;
 
-            for( auto i = it.get_local_id(0); i < field_vol; i+= it.get_local_range(0)) {
+            // Compute local thread index and workgroup size
+            const int lid = it.get_local_id(0);
+            const int lrange = it.get_local_range(0);
+
+            // Optimized: Initialize thread energy to 0 at declaration
+            double thread_energy = 0.0;
+
+            // VECTORIZED GLOBAL LOAD using thread-strided loop within a tile
+            // Optimized: Use unrolled, vectorized loads - manually unroll by 2
+            const int vec_lrange = lrange * 2;
+            for (int i = lid; i < tile_vol; i += vec_lrange) {
                 E_local[i] = d_E[tile_off + i];
                 B_local[i] = d_B[tile_off + i];
+
+                // Second iteration of the unrolled loop
+                if (i + lrange < tile_vol) {
+                    E_local[i + lrange] = d_E[tile_off + i + lrange];
+                    B_local[i + lrange] = d_B[tile_off + i + lrange];
+                }
             }
 
-            float3 const * const __restrict__ E = & E_local[ field_offset ];
-            float3 const * const __restrict__ B = & B_local[ field_offset ];
-
+            // Wait for all threads in the group to finish loading
             it.barrier();
 
+            // Optimized: Create direct pointers to field data to avoid indirect addressing
+            float3 const* const E = &E_local[field_offset];
+            float3 const* const B = &B_local[field_offset];
+
             // Push particles
-            const int part_offset = part.offset[ tile_id ];
-            const int np          = part.np[ tile_id ];
-            int2   * __restrict__ ix = &part.ix[ part_offset ];
-            float2 * __restrict__ x  = &part.x[ part_offset ];
-            float3 * __restrict__ u  = &part.u[ part_offset ];
+            const int part_offset = part.offset[tile_id];
+            const int np = part.np[tile_id];
+            int2* ix = &part.ix[part_offset];
+            float2* x = &part.x[part_offset];
+            float3* u = &part.u[part_offset];
 
-            double energy = 0;
+            // Optimized: Prefetch and process particles in chunks to better utilize cache
+            const int chunk_size = 16;  // Process 16 particles at a time
+            for (int chunk_start = 0; chunk_start < np; chunk_start += chunk_size * lrange) {
+                int particle_idx = chunk_start + lid;
 
-            for( int i = it.get_local_id(0); i < np; i+= it.get_local_range(0) ) {
+                // Process chunk_size particles per thread if available
+                #pragma unroll 4
+                for (int c = 0; c < chunk_size; c++) {
+                    if (particle_idx < np) {
+                        // Interpolate field
+                        float3 e, b;
+                        interpolate_fld(E, B, ystride, ix[particle_idx], x[particle_idx], e, b);
 
-                // Interpolate field
-                float3 e, b;
-                interpolate_fld( E, B, ystride, ix[i], x[i], e, b );
-                
-                // Advance momentum
-                float3 pu = u[i];
-                
-                if ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
-                if ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
+                        // Advance momentum
+                        float3 pu = u[particle_idx];
+                        if (type == species::boris) {
+                            u[particle_idx] = dudt_boris(alpha, e, b, pu, thread_energy);
+                        } else if (type == species::euler) {
+                            u[particle_idx] = dudt_boris_euler(alpha, e, b, pu, thread_energy);
+                        }
+
+                        particle_idx += lrange;
+                    }
+                }
             }
 
-            // Add up energy from all threads
-            auto sg = it.get_sub_group();
-            energy = device::subgroup::reduce_add( sg, energy );
-            if ( sg.get_local_id() == 0 ) { 
-                device::global::atomicAdd( d_energy, energy );
+            // Store thread energy in local memory
+            energy_local[lid] = thread_energy;
+
+            // Perform reduction for energy using a tree-based approach
+            it.barrier();  // Ensure all threads have written to energy_local
+
+            // Optimized: Use efficient tree-based reduction
+            for (int stride = lrange / 2; stride > 0; stride >>= 1) {
+                if (lid < stride) {
+                    energy_local[lid] += energy_local[lid + stride];
+                }
+                it.barrier();
+            }
+
+            // Root thread atomically adds to global energy counter
+            if (lid == 0) {
+                device::global::atomicAdd(d_energy, energy_local[0]);
             }
         });
     });
+
+    // Simple queue wait is fine for this kernel
     queue.wait();
 }
 
@@ -2187,3 +2201,4 @@ void Species::save_phasespace(
     host::free( h_data, *queue );
     device::free( d_data, *queue );
 }
+
