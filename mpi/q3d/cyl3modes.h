@@ -29,8 +29,6 @@ class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > 
     using parent :: grid_0;
     using parent :: grid_m;
     using parent :: nmodes;
-    using parent :: set_periodic;
-    using parent :: get_periodic;
 
     using CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > > :: CylGrid;
 
