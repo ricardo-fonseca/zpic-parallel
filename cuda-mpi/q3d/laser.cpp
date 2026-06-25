@@ -254,9 +254,6 @@ void div_corr_z( cyl3grid<ops::complex<float>>& E, cyl3grid<ops::complex<float>>
     dim3 grid( E.local_nx.y );
     dim3 block( WARP_SIZE );
 
-    mpi::cout << "number of lines: " << E.local_nx.y 
-    << " offset: " << E.get_tile_off()*E.nx << '\n';
-
     kernel::div_corr_z_scan <<< grid, block >>> ( 
         & E.d_buffer[ E.offset ], & B.d_buffer[ B.offset ], 
         E.get_ntiles(), E.nx, E.ext_nx, E.get_tile_off(),
@@ -293,16 +290,14 @@ void div_corr_z( cyl3grid<ops::complex<float>>& E, cyl3grid<ops::complex<float>>
 
         MPI_Comm_free( &newcomm );
         device::free( recvbuf );
-    } else {
-        mpi::cout << "no sum!\n";
     }
 
     // Free temporary memory
     device::free( sendbuf );
 
     // Correct longitudinal values on guard cells
-    // E.copy_to_gc();
-    // B.copy_to_gc();
+    E.copy_to_gc();
+    B.copy_to_gc();
 }
 
 
@@ -582,7 +577,7 @@ void gaussian(
     }
 
     // Correct axial cell values, see field solver
-    if ( tile_idx.y == 0 ) {
+    if ( j0 == 0 ) {
         // This is an m = 1 field
         for( int i = block_thread_rank(); i < static_cast<int>(nx.x); i+=block_num_threads() ) {
             tile_E[ i + 0 * jstride ].z = ops::complex<float> {0,0};

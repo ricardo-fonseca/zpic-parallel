@@ -825,7 +825,7 @@ class Particles : public ParticleData {
         x  = device::malloc<float2>( max_part );
         u  = device::malloc<float3>( max_part );
 
-        q  = device::malloc<float>( max_part );
+        q  = device::malloc<float> ( max_part );
         th = device::malloc<float2>( max_part );
 
         // Default global periodic boundaries to parallel partition type
@@ -1182,6 +1182,8 @@ class Particles : public ParticleData {
             std::cout << "-------------[info]> " << msg << '\n';
         }
 
+        int np;
+
         for( int k = 0; k < parallel.get_size() ; k++ ) {
             if ( k == parallel.get_rank() ) {
                 std::cout << '\n';
@@ -1195,10 +1197,15 @@ class Particles : public ParticleData {
                     }
                     mpi::cout << '\n';
                 }
-
-                mpi::cout << "#particles total: " << np_local() << '\n';
+                np = np_local();
+                mpi::cout << "#particles node: " << np << '\n';
             }
             parallel.barrier();
+        }
+
+        parallel.reduce( &np, 1, mpi::sum, 0 );
+        if (parallel.get_rank() == 0 ) {
+            mpi::cout << "#particles all: " << np << '\n';
         }
 
         host::free( h_np );
