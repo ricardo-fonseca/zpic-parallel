@@ -465,7 +465,7 @@ int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::com
         }
 
         // Correct axial cell values, see field solver
-        if ( ty == 0 ) {
+        if ( j0 == 0 ) {
             // This is an m = 1 field
             for( int i = 0; i < static_cast<int>(nx.x); i++ ) {
                 tile_E[ i + 0 * jstride ].z = 0;
