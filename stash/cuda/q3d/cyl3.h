@@ -141,9 +141,12 @@ using cyl_double3 = cyl3<double>;
 using cyl_cfloat3  = cyl3< ops::complex<float> >;
 using cyl_cdouble3 = cyl3< ops::complex<double> >;
 
+#include <cooperative_groups.h>
+#include <cooperative_groups/memcpy_async.h>
+
 namespace block {
 
-__device__ __inline__
+__device__
 /**
  * @brief Block level memcpy of float3 values
  * 
@@ -153,12 +156,19 @@ __device__ __inline__
  * @param src   Source address
  * @param n     Number of elements to copy
  */
-void memcpy( cyl_float3 * __restrict__ dst, cyl_float3 const * __restrict__ src, const size_t n ) {
+inline void memcpy( cyl_float3 * __restrict__ dst, cyl_float3 const * __restrict__ src, const size_t n ) {
+
+/*
     float *       __restrict__ _dst = reinterpret_cast<float *>(dst);
     float const * __restrict__ _src = reinterpret_cast<float const *>(src);
 
     for( size_t i = block_thread_rank(); i < 3*n; i += block_num_threads() )
         _dst[i] = _src[i];
+    }
+*/
+    auto tb = cooperative_groups::this_thread_block();
+    cooperative_groups::memcpy_async( tb, dst, src, n * sizeof(cyl_float3) );
+    cooperative_groups::wait(tb);
 }
 
 __device__
@@ -170,7 +180,7 @@ inline void zero( cyl_float3 * __restrict__ dst, const size_t n ) {
     }
 }
 
-__device__ __inline__
+__device__
 /**
  * @brief Block level memcpy of float3 values
  * 
@@ -180,12 +190,20 @@ __device__ __inline__
  * @param src   Source address
  * @param n     Number of elements to copy
  */
-void memcpy( cyl_cfloat3 * __restrict__ dst, cyl_cfloat3 const * __restrict__ src, const size_t n ) {
+inline void memcpy( cyl_cfloat3 * __restrict__ dst, cyl_cfloat3 const * __restrict__ src, const size_t n ) {
+
+/*
     float2 *       __restrict__ _dst = reinterpret_cast<float2 *>(dst);
     float2 const * __restrict__ _src = reinterpret_cast<float2 const *>(src);
 
     for( size_t i = block_thread_rank(); i < 3*n; i += block_num_threads() )
         _dst[i] = _src[i];
+*/
+
+    auto tb = cooperative_groups::this_thread_block();
+    cooperative_groups::memcpy_async( tb, dst, src, n * sizeof( cyl_cfloat3 ) );
+    cooperative_groups::wait(tb);
+
 }
 
 __device__

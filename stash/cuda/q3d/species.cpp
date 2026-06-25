@@ -1,6 +1,7 @@
 #include "species.h"
 #include <iostream>
 
+
 /**
  * The following values were determined experimentally using a single
  * NVIDIA A100 80GB PCIe board
@@ -320,7 +321,7 @@ __device__ float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float
  * @param J         current(J) grid (should be in shared memory)
  * @param stride    current(J) grid stride
  */
-__device__ __inline__ void dep_current_seg_0(
+__device__ void dep_current_seg_0(
     const int2 ix, const float2 x0, const float2 x1, 
     const float2 t0, const float2 t1,
     float q,
@@ -377,6 +378,8 @@ __device__ __inline__ void dep_current_seg_0(
 /**
  * @brief Deposit (charge conserving) current for 1 segment inside a cell
  * 
+ * @note Uses CUDA intrinsic fma() and rsqrt() functions
+ * 
  * @tparam m        Azymuthal mode (> 0)
  * @param ix        Initial position (cell index)
  * @param x0        Initial position (z,r)
@@ -390,7 +393,7 @@ __device__ __inline__ void dep_current_seg_0(
  * @param stride    j stride for current buffer
  */
 template< int m >
-__device__ __inline__ void dep_current_seg(
+__device__ void dep_current_seg(
     const int ir0, const int2 ix, const float2 x0, const float2 x1,
     const float2 t0, const float2 t1, 
     const float q,
@@ -410,19 +413,19 @@ __device__ __inline__ void dep_current_seg(
     //const auto cr0 = (ir0 + j) + r0;
     //const auto cr1 = (ir0 + j) + r1;
 
-    const auto cr0 = std::sqrt( fma( t0.x, t0.x, t0.y*t0.y ) );
-    const auto cr1 = std::sqrt( fma( t1.x, t1.x, t1.y*t1.y ) );
+    const auto rcr0 = rsqrt( fma( t0.x, t0.x, t0.y*t0.y ) );
+    const auto rcr1 = rsqrt( fma( t1.x, t1.x, t1.y*t1.y ) );
 
     /// @brief Initial θ
-    const auto th0 = make_float2( t0.x/cr0, t0.y/cr0 );
+    const auto th0 = make_float2( t0.x * rcr0, t0.y * rcr0 );
     /// @brief Final θ
-    const auto th1 = make_float2( t1.x/cr1, t1.y/cr1 );
+    const auto th1 = make_float2( t1.x * rcr1, t1.y * rcr1 );
 
     const auto xif = t0.x + t1.x;
     const auto yif = t0.y + t1.y;
 
-    const auto rm2 = std::sqrt( fma( xif, xif, yif*yif ) );
-    const auto thm = float2{ xif/rm2, yif/rm2 };
+    const auto rrm2 = rsqrt( fma( xif, xif, yif*yif ) );
+    const auto thm  = float2{ xif * rrm2, yif * rrm2 };
 
     // Complex coefficients for initial, mid and final angular positions
     
@@ -460,15 +463,117 @@ __device__ __inline__ void dep_current_seg(
     const auto wp21 = 0.5f*(S0z1 + S1z1);
 
     ops::block::atomic_add( &J[ stride * j     + i     ].z, q * wl1 * wp10 );
-    ops::block::atomic_add( &J[ stride * (j+1) + i     ].z, q * wl1 * wp11 );
-
     ops::block::atomic_add( &J[ stride * j     + i     ].r, q * wl2 * wp20 );
-    ops::block::atomic_add( &J[ stride * j     + (i+1) ].r, q * wl2 * wp21 );
-
     ops::block::atomic_add( &J[ stride * j     + i     ].th, q * ( S0z1 * S0r1 * c1 - S0z0 * S0r0 * c0 ) );
+
+    ops::block::atomic_add( &J[ stride * j     + (i+1) ].r, q * wl2 * wp21 );
     ops::block::atomic_add( &J[ stride * j     + (i+1) ].th, q * ( S1z1 * S0r1 * c1 - S1z0 * S0r0 * c0 ) );
+
+    ops::block::atomic_add( &J[ stride * (j+1) + i     ].z, q * wl1 * wp11 );
     ops::block::atomic_add( &J[ stride * (j+1) + i     ].th, q * ( S0z1 * S1r1 * c1 - S0z0 * S1r0 * c0 ) );
     ops::block::atomic_add( &J[ stride * (j+1) + (i+1) ].th, q * ( S1z1 * S1r1 * c1 - S1z0 * S1r0 * c0 ) );
+}
+
+/**
+ * @brief Deposits current for modes 0 and 1
+ * 
+ * @param ir0 
+ * @param ix 
+ * @param x0 
+ * @param x1 
+ * @param t0 
+ * @param t1 
+ * @param q 
+ * @param J0 
+ * @param J1 
+ * @param stride 
+ * @return __device__ 
+ */
+__device__ void dep_current_seg_01(
+    const int ir0, const int2 ix, const float2 x0, const float2 x1,
+    const float2 t0, const float2 t1, 
+    const float q,
+    cyl_float3 * __restrict__ J0,
+    cyl_cfloat3 * __restrict__ J1,
+    const int stride )
+{
+    // Initial and final grid positions
+    // We rename the variables for clarity
+    int i = ix.x;
+    int j = ix.y;
+    const auto z0 = x0.x;
+    const auto z1 = x1.x;
+    const auto r0 = x0.y;
+    const auto r1 = x1.y;
+
+    //const auto cr0 = (ir0 + j) + r0;
+    //const auto cr1 = (ir0 + j) + r1;
+
+    const auto rcr0 = rsqrt( fma( t0.x, t0.x, t0.y*t0.y ) );
+    const auto rcr1 = rsqrt( fma( t1.x, t1.x, t1.y*t1.y ) );
+
+    /// @brief Initial θ
+    const auto th0 = make_float2( t0.x * rcr0, t0.y * rcr0 );
+    /// @brief Final θ
+    const auto th1 = make_float2( t1.x * rcr1, t1.y * rcr1 );
+
+    const auto xif = t0.x + t1.x;
+    const auto yif = t0.y + t1.y;
+
+    const auto Δx  = t1.x - t0.x;
+    const auto Δy  = t1.y - t0.y;
+    const auto jth = q * ( fma( - Δx , yif , Δy * xif ) ) * rsqrt( fma( xif, xif, yif*yif) );
+
+    const auto rrm2 = rsqrt( fma( xif, xif, yif*yif ) );
+    const auto thm  = float2{ xif * rrm2, yif * rrm2 };
+
+    // Complex coefficients for initial, mid and final angular positions
+    auto cm = ops::complex<float>{ thm.x, -thm.y };
+    auto c0 = ops::complex<float>{ th0.x, -th0.y } - cm;
+    auto c1 = ops::complex<float>{ th1.x, -th1.y } - cm;
+
+
+    const auto S0z0 = 0.5f - z0;
+    const auto S0z1 = 0.5f + z0;
+
+    const auto S1z0 = 0.5f - z1;
+    const auto S1z1 = 0.5f + z1;
+
+    const auto S0r0 = 0.5f - r0;
+    const auto S0r1 = 0.5f + r0;
+
+    const auto S1r0 = 0.5f - r1;
+    const auto S1r1 = 0.5f + r1;
+
+    const auto wl1 = (z1 - z0);
+    const auto wl2 = (r1 - r0);
+    
+    const auto wp10 = 0.5f*(S0r0 + S1r0);
+    const auto wp11 = 0.5f*(S0r1 + S1r1);
+    
+    const auto wp20 = 0.5f*(S0z0 + S1z0);
+    const auto wp21 = 0.5f*(S0z1 + S1z1);
+
+    // Mode 0
+    block::atomic_fetch_add( &J0[ stride * j     + i     ].z, q * wl1 * wp10 );
+    block::atomic_fetch_add( &J0[ stride * (j+1) + i     ].z, q * wl1 * wp11 );
+    block::atomic_fetch_add( &J0[ stride * j     + i     ].r, q * wl2 * wp20 );
+    block::atomic_fetch_add( &J0[ stride * j     + (i+1) ].r, q * wl2 * wp21 );
+    block::atomic_fetch_add( &J0[ stride * j     + i     ].th, jth * ( S0z0 * S0r0 + S1z0 * S1r0 + (S0z0 * S1r0 - S1z0 * S0r0)/2.0f ) );
+    block::atomic_fetch_add( &J0[ stride * j     + (i+1) ].th, jth * ( S0z1 * S0r0 + S1z1 * S1r0 + (S0z1 * S1r0 - S1z1 * S0r0)/2.0f ) );
+    block::atomic_fetch_add( &J0[ stride * (j+1) + i     ].th, jth * ( S0z0 * S0r1 + S1z0 * S1r1 + (S0z0 * S1r1 - S1z0 * S0r1)/2.0f ) );
+    block::atomic_fetch_add( &J0[ stride * (j+1) + (i+1) ].th, jth * ( S0z1 * S0r1 + S1z1 * S1r1 + (S0z1 * S1r1 - S1z1 * S0r1)/2.0f ) );
+
+
+    // Mode 1
+    ops::block::atomic_add( &J1[ stride * j     + i     ].z, q * wl1 * wp10 * cm);
+    ops::block::atomic_add( &J1[ stride * (j+1) + i     ].z, q * wl1 * wp11 * cm);
+    ops::block::atomic_add( &J1[ stride * j     + i     ].r, q * wl2 * wp20 * cm);
+    ops::block::atomic_add( &J1[ stride * j     + (i+1) ].r, q * wl2 * wp21 * cm);
+    ops::block::atomic_add( &J1[ stride * j     + i     ].th, q * ( S0z1 * S0r1 * c1 - S0z0 * S0r0 * c0 ) );
+    ops::block::atomic_add( &J1[ stride * j     + (i+1) ].th, q * ( S1z1 * S0r1 * c1 - S1z0 * S0r0 * c0 ) );
+    ops::block::atomic_add( &J1[ stride * (j+1) + i     ].th, q * ( S0z1 * S1r1 * c1 - S0z0 * S1r0 * c0 ) );
+    ops::block::atomic_add( &J1[ stride * (j+1) + (i+1) ].th, q * ( S1z1 * S1r1 * c1 - S1z0 * S1r0 * c0 ) );
 }
 
 
@@ -498,7 +603,7 @@ __device__ __inline__ void dep_current_seg(
  * @param v2_t1     [out] 3rd segment final transverse position (x1, y1) 
  * @param cross     [out] Cell edge crossing
  */
-__device__ __inline__ void split2d_cyl( 
+__device__ void split2d_cyl( 
     const int ir0, const int2 ix, const float2 x0, const float2 delta, int2 & deltai,
     const float2 t0, const float2 tdelta,
     int2 & v0_ix, float2 & v0_x0, float2 & v0_x1, float2 & v0_t0, float2 & v0_t1,
@@ -647,7 +752,7 @@ __device__ __inline__ void split2d_cyl(
 
 __global__
 /**
- * @brief Kernel for moving particles and depositing current
+ * @brief Kernel for moving particles and depositing current (mode 0 only)
  * 
  * @note This version allows the use of multiple blocks per tile. It must be
  *       launched with grid( ntiles.x, ntiles.y, blocks_per_tile )
@@ -677,8 +782,7 @@ void __launch_bounds__(opt_move_block) move_deposit_0(
     auto * tile_buffer_0 = block::shared_mem< cyl3<float> >();
 
     // Zero local current buffer
-    for( auto i = block_thread_rank(); i < tile_size; i+= block_num_threads() ) 
-        tile_buffer_0[i] = cyl3<float>{0};
+    block::zero( tile_buffer_0, tile_size );
 
     block_sync();
 
@@ -821,7 +925,7 @@ void __launch_bounds__(opt_move_block) move_deposit_0(
 
 __global__
 /**
- * @brief Kernel for moving particles and depositing current
+ * @brief Kernel for moving particles and depositing current (modes 0 and 1)
  * 
  * @note This version allows the use of multiple blocks per tile. It must be
  *       launched with grid( ntiles.x, ntiles.y, blocks_per_tile )
@@ -853,10 +957,8 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
     auto * tile_buffer_1 = shm.get< cyl_cfloat3 >( tile_size );
 
     // Zero local current buffers
-    for( auto i = block_thread_rank(); i < tile_size; i+= block_num_threads() ) {
-        tile_buffer_0[i] = {0};
-        tile_buffer_1[i] = {0};
-    }
+    block::zero( tile_buffer_0, tile_size );
+    block::zero( tile_buffer_1, tile_size );
 
     block_sync();
 
@@ -949,7 +1051,7 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
             cross
         );
 
-        // Deposit current (mode 0)
+        // Deposit current (mode 0) - 1.91941
                                   dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
         if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
         if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
@@ -959,6 +1061,26 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
         if ( cross.x || cross.y ) dep_current_seg<1>( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
         if ( cross.x && cross.y ) dep_current_seg<1>( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
 
+/*
+        // Deposit current (mode 0 + 1) - 1.929
+        dep_current_seg_0(       v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        dep_current_seg<1>( ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
+        if ( cross.x || cross.y ) {
+            dep_current_seg_0(       v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
+            dep_current_seg<1>( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
+        }
+        if ( cross.x && cross.y ) {
+            dep_current_seg_0(       v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
+            dep_current_seg<1>( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
+        }
+*/
+
+/*
+        // Deposit current (mode 0 + 1) - 1.943
+                                  dep_current_seg_01( ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, J1, jstride );
+        if ( cross.x || cross.y ) dep_current_seg_01( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, J1, jstride );
+        if ( cross.x && cross.y ) dep_current_seg_01( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, J1, jstride );
+*/
 
         // Modify cell position and store
         x[i] = make_float2( 
@@ -1013,6 +1135,7 @@ void __launch_bounds__(opt_move_block) move_deposit_1(
         device::atomic_fetch_add( d_nmove, np64 );
     }
 }
+
 
 __global__
 /**
@@ -1152,6 +1275,13 @@ void __launch_bounds__(opt_move_block) deposit_1(
         if ( gridDim.z > 1 ) {
             // When using multiple blocks per tile we must add the current
             // using atomic ops
+/*
+            for( auto i =  block_thread_rank(); i < tile_size; i+= block_num_threads() ) {
+                ops::device::atomic_add( & current_m1[tile_off + i].z, tile_buffer_1[i].z );
+                ops::device::atomic_add( & current_m1[tile_off + i].r, tile_buffer_1[i].r );
+                ops::device::atomic_add( & current_m1[tile_off + i].th, tile_buffer_1[i].th );
+            }
+*/
             float * dev_J1 = reinterpret_cast< float * > ( & current_m1[ tile_off ] );
             float * shm_J1 = reinterpret_cast< float * > ( tile_buffer_1 );
             for( auto i =  block_thread_rank(); i < 3 * 2 * tile_size; i+= block_num_threads() ) {
@@ -1287,7 +1417,8 @@ void __launch_bounds__(opt_push_block)  push_1 (
     unsigned int const field_offset, uint2 const ext_nx,
     float const alpha, double * const __restrict__ d_energy )
 {
-    const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
+
+    const uint2 tile_idx{ blockIdx.x, blockIdx.y };
     const int tid =  tile_idx.y * part.ntiles.x + tile_idx.x;
 
     int const field_vol = roundup4( ext_nx.x * ext_nx.y );
@@ -1353,8 +1484,8 @@ void __launch_bounds__(opt_push_block)  push_1 (
         const auto cos_th = th[i].x;
         const auto sin_th = th[i].y;
 
-        e.z += fma( cos_th, e1.z.real( ), -sin_th * e1.z.imag( ) );
-        e.r += fma( cos_th, e1.r.real( ), -sin_th * e1.r.imag( ) );
+        e.z  += fma( cos_th, e1.z.real( ), -sin_th * e1.z.imag( ) );
+        e.r  += fma( cos_th, e1.r.real( ), -sin_th * e1.r.imag( ) );
         e.th += fma( cos_th, e1.th.real( ), -sin_th * e1.th.imag( ) );
 
         b.z += fma( cos_th, b1.z.real( ), -sin_th * b1.z.imag( ) );
@@ -1890,7 +2021,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
     iter++;
 }
 
-#if 0
+#if 1
 
 /**
  * @brief Move particles (advance positions), deposit current and shift positions
@@ -2125,8 +2256,8 @@ void move(
 /**
  * @brief Moves particles (no current deposition)
  * 
- * @note This is usually used for test species: species that do not
- *       self-consistently influence the simulation
+ * @note This is usually used for test species: species that do not self-consistently
+ *       influence the simulation
  * 
  * @param shift     Additional cell shift for particles, defaults to 0
  */
@@ -2486,6 +2617,7 @@ void Species::save_charge( const unsigned m ) const {
         // Fundamental mode
         grid<float> charge( particles -> ntiles, particles -> nx, gc );
         charge.set_periodic( int2{ particles->periodic_z, 0 } );
+
         charge.zero();
         deposit_charge0( charge );
         charge.add_from_gc();

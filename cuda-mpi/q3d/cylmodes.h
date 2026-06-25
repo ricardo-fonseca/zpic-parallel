@@ -1,12 +1,8 @@
 #ifndef CYLMODES_H_
 #define CYLMODES_H_
 
-#include "vec_types.h"
-#include "bnd.h"
-#include "zdf-cpp.h"
+#include "complex.h"
 #include "grid.h"
-
-#include <iostream>
 #include <vector>
 
 /**
@@ -14,9 +10,9 @@
  * 
  * @tparam T        Base type
  * @tparam G        Real grid type, defaults to grid<T>
- * @tparam cG       Complex grid type, defaults to grid< std::complex<T> > 
+ * @tparam cG       Complex grid type, defaults to grid< ops::complex<T> > 
  */
-template <class T, class G = grid<T>, class cG = grid< std::complex<T> > >
+template <class T, class G = grid<T>, class cG = grid< ops::complex<T> > >
 class CylGrid {
     protected:
 
@@ -173,7 +169,7 @@ class CylGrid {
      * @brief Access mode m
      * 
      * @param m     Mode index, must be >= 1
-     * @return grid< ops::complex(T) >& Mode m grid
+     * @return grid< std::complex(T) >& Mode m grid
      */
     auto & mode( int m ) {
         return * grid_m[m-1];

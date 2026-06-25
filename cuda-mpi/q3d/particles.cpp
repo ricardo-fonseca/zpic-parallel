@@ -12,8 +12,8 @@
  * Optimized parameters for NVIDIA A100
  */
 constexpr int opt_bnd_check_block        = 1024;
-constexpr int opt_update_tile_info_block = 1024;
-constexpr int opt_copy_out_block         = 1024;
+constexpr int opt_update_tile_info_block = 64;
+constexpr int opt_copy_out_block         = 32;
 constexpr int opt_copy_in_block          = 1024;
 
 namespace kernel {
@@ -114,31 +114,30 @@ void ParticleSort::exchange_np() {
     };
 
     // Post receives
-    size_t offset;
-    offset = 0;
+    unsigned int idx = 0;
     for( auto dir = 0; dir < 9; dir++ ) {            
         if ( neighbor[dir] >= 0 ) {
-            MPI_Irecv( &recv.buffer[offset], size(dir), MPI_INT, neighbor[dir],
-                    source_tag(dir), comm, &recv.requests[dir]);      
+            MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+                    source_tag(dir), comm, &recv.requests[dir]);
         } else {
             recv.requests[dir] = MPI_REQUEST_NULL;
         }
-        offset += size(dir);
+        idx += size(dir);
     }
 
     // Ensure send data is up to date
     device::sync();
 
     // Post sends
-    offset = 0;
+    idx = 0;
     for( auto dir = 0; dir < 9; dir++ ) {
         if ( neighbor[dir] >= 0 ) {
-            MPI_Isend( &send.buffer[offset], size(dir), MPI_INT, neighbor[dir],
+            MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
                 dest_tag(dir), comm, &send.requests[dir]);
         } else {
             send.requests[dir] = MPI_REQUEST_NULL;
         }
-        offset += size(dir);
+        idx += size(dir);
     }
 
     // Wait for receives to complete
@@ -313,7 +312,7 @@ namespace kernel {
  */
 template < part::quant quant >
 __global__
-void gather_quant( 
+void gather( 
     ParticleData part,
     float * const __restrict__ d_data )
 {
@@ -329,17 +328,22 @@ void gather_quant(
     const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
     const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
 
-    int2   const * __restrict__ const ix = & part.ix[ offset ];
-    float2 const * __restrict__ const x  = & part.x [ offset ];
-    float3 const * __restrict__ const u  = & part.u [ offset ];
+    auto const * __restrict__ const ix = &part.ix[ offset ];
+    auto const * __restrict__ const x  = &part.x[ offset ];
+    auto const * __restrict__ const u  = &part.u[ offset ];
+    auto const * __restrict__ const q  = &part.q[ offset ];
+    auto const * __restrict__ const th  = &part.th[ offset ];
 
     for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
-        if constexpr( quant == part::x  ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
-        if constexpr( quant == part::y  ) val = ( offy + ix[idx].y ) + (0.5f + x[idx].y);
-        if constexpr( quant == part::ux ) val = u[idx].x;
-        if constexpr( quant == part::uy ) val = u[idx].y;
-        if constexpr( quant == part::uz ) val = u[idx].z;
+        if constexpr( quant == part::z      ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
+        if constexpr( quant == part::r      ) val = ( offy + ix[idx].y ) + x[idx].y;
+        if constexpr( quant == part::q      ) val = q[idx];
+        if constexpr( quant == part::cos_th ) val = th[idx].x;
+        if constexpr( quant == part::sin_th ) val = th[idx].y;
+        if constexpr( quant == part::ux     ) val = u[idx].x;
+        if constexpr( quant == part::uy     ) val = u[idx].y;
+        if constexpr( quant == part::uz     ) val = u[idx].z;
         d_data[ offset + idx ] = val;
     }
 }
@@ -362,20 +366,29 @@ void Particles::gather( part::quant quant, float * const __restrict__ d_data )
     
     // Gather data on device
     switch (quant) {
-    case part::x : 
-        kernel::gather_quant<part::x> <<<grid,block>>>( *this, d_data );
+    case part::z : 
+        kernel::gather<part::z> <<<grid,block>>>( *this, d_data );
         break;
-    case part::y:
-        kernel::gather_quant<part::y> <<<grid,block>>>( *this, d_data );
+    case part::r:
+        kernel::gather<part::r> <<<grid,block>>>( *this, d_data );
+        break;
+    case part::q : 
+        kernel::gather<part::q> <<<grid,block>>>( *this, d_data );
+        break;
+    case part::cos_th : 
+        kernel::gather<part::cos_th> <<<grid,block>>>( *this, d_data );
+        break;
+    case part::sin_th:
+        kernel::gather<part::sin_th> <<<grid,block>>>( *this, d_data );
         break;
     case part::ux:
-        kernel::gather_quant<part::ux> <<<grid,block>>>( *this, d_data );
+        kernel::gather<part::ux> <<<grid,block>>>( *this, d_data );
         break;
     case part::uy:
-        kernel::gather_quant<part::uy> <<<grid,block>>>( *this, d_data );
+        kernel::gather<part::uy> <<<grid,block>>>( *this, d_data );
         break;
     case part::uz:
-        kernel::gather_quant<part::uz> <<<grid,block>>>( *this, d_data );
+        kernel::gather<part::uz> <<<grid,block>>>( *this, d_data );
         break;
     }
 }
@@ -391,33 +404,39 @@ namespace kernel {
  */
 template < part::quant quant >
 __global__
-void gather_quant( 
+void gather( 
     ParticleData part,
-    float * const __restrict__ d_data,
-    const float2 scale
+    const float2 scale,
+    float * const __restrict__ d_data
 ) {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
 
-    // Spatial offsets of local tile
-    const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
-    const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
 
     // Offset and number of particles on particle buffer
     const auto  offset = part.offset[ tile_id ];
     const auto  np     = part.np[ tile_id ];
 
-    int2   * const __restrict__ ix       = & part.ix[ offset ];
-    float2 const * __restrict__ const x  = & part.x[ offset ];
-    float3 const * __restrict__ const u  = & part.u[ offset ];
+    // Spatial offsets of local tile
+    const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
+    const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
+
+    auto const * __restrict__ const ix = &part.ix[ offset ];
+    auto const * __restrict__ const x  = &part.x[ offset ];
+    auto const * __restrict__ const u  = &part.u[ offset ];
+    auto const * __restrict__ const q  = &part.q[ offset ];
+    auto const * __restrict__ const th  = &part.th[ offset ];
 
     for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
-        if constexpr( quant == part::x  ) val = (offx + ix[idx].x) + (0.5f + x[idx].x);
-        if constexpr( quant == part::y  ) val = (offy + ix[idx].y) + (0.5f + x[idx].y);
-        if constexpr( quant == part::ux ) val = u[idx].x;
-        if constexpr( quant == part::uy ) val = u[idx].y;
-        if constexpr( quant == part::uz ) val = u[idx].z;
+        if constexpr( quant == part::z      ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
+        if constexpr( quant == part::r      ) val = ( offy + ix[idx].y ) + x[idx].y;
+        if constexpr( quant == part::q      ) val = q[idx];
+        if constexpr( quant == part::cos_th ) val = th[idx].x;
+        if constexpr( quant == part::sin_th ) val = th[idx].y;
+        if constexpr( quant == part::ux     ) val = u[idx].x;
+        if constexpr( quant == part::uy     ) val = u[idx].y;
+        if constexpr( quant == part::uz     ) val = u[idx].z;
         d_data[ offset + idx ] = fma( scale.x, val, scale.y );
     }
 }
@@ -443,20 +462,29 @@ void Particles::gather( part::quant quant, const float2 scale, float * const __r
     
     // Gather data on device
     switch (quant) {
-    case part::x : 
-        kernel::gather_quant<part::x> <<<grid,block>>>( *this, d_data, scale );
+    case part::z : 
+        kernel::gather<part::z> <<<grid,block>>>( *this, scale, d_data );
         break;
-    case part::y:
-        kernel::gather_quant<part::y> <<<grid,block>>>( *this, d_data, scale );
+    case part::r:
+        kernel::gather<part::r> <<<grid,block>>>( *this, scale, d_data );
+        break;
+    case part::q: 
+        kernel::gather<part::q> <<<grid,block>>>( *this, scale, d_data );
+        break;
+    case part::cos_th: 
+        kernel::gather<part::cos_th> <<<grid,block>>>( *this, scale, d_data );
+        break;
+    case part::sin_th:
+        kernel::gather<part::sin_th> <<<grid,block>>>( *this, scale, d_data );
         break;
     case part::ux:
-        kernel::gather_quant<part::ux> <<<grid,block>>>( *this, d_data, scale );
+        kernel::gather<part::ux> <<<grid,block>>>( *this, scale, d_data );
         break;
     case part::uy:
-        kernel::gather_quant<part::uy> <<<grid,block>>>( *this, d_data, scale );
+        kernel::gather<part::uy> <<<grid,block>>>( *this, scale, d_data );
         break;
     case part::uz:
-        kernel::gather_quant<part::uz> <<<grid,block>>>( *this, d_data, scale );
+        kernel::gather<part::uz> <<<grid,block>>>( *this, scale, d_data );
         break;
     }
 }
@@ -906,21 +934,25 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
     int const old_offset      = part.offset[ tile_id ];
     int * __restrict__ npt    = &sort.npt[ 9*tile_id ];
 
-    int2   * __restrict__ ix  = &part.ix[ old_offset ];
-    float2 * __restrict__ x   = &part.x[ old_offset ];
-    float3 * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ ix  = &part.ix[ old_offset ];
+    auto * __restrict__ x   = &part.x[ old_offset ];
+    auto * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ q   = &part.q[ old_offset ];
+    auto * __restrict__ th  = &part.th[ old_offset ];
 
-    int * __restrict__ idx    = &sort.idx[ old_offset ];
-    uint32_t const nidx       = sort.nidx[ tile_id ];
+    auto * __restrict__ idx = &sort.idx[ old_offset ];
+    uint32_t const nidx     = sort.nidx[ tile_id ];
 
     int const new_offset = tmp.offset[ tile_id ];
     int const new_np     = sort.new_np[ tile_id ];
 
     // The _dir_offset variable holds the offset for each of the 9 target
     // tiles so the tmp_* variables just point to the beggining of the buffers
-    int2* __restrict__  tmp_ix  = tmp.ix;
-    float2* __restrict__ tmp_x  = tmp.x;
-    float3* __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_ix  = tmp.ix;
+    auto * __restrict__ tmp_x  = tmp.x;
+    auto * __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_q  = tmp.q;
+    auto * __restrict__ tmp_th  = tmp.th;
 
     // Number of particles staying in tile
     const int n0 = npt[4];
@@ -980,9 +1012,11 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
         
         int k = idx[i];
 
-        int2 nix  = ix[k];
-        float2 nx = x[k];
-        float3 nu = u[k];
+        auto nix  = ix[k];
+        auto nx   = x[k];
+        auto nu   = u[k];
+        auto nq   = q[k];
+        auto nth  = th[k];
         
         int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
         int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
@@ -1002,6 +1036,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             tmp_ix[ l ] = nix;
             tmp_x[ l ] = nx;
             tmp_u[ l ] = nu;
+            tmp_q[ l ] = nq;
+            tmp_th[ l ] = nth;
         }
 
         // Fill hole if needed
@@ -1017,6 +1053,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             ix[ k ] = ix[ c ];
             x [ k ] = x [ c ];
             u [ k ] = u [ c ];
+            q [ k ] = q [ c ];
+            th[ k ] = th[ c ];
         }
     }
 
@@ -1034,6 +1072,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             tmp_ix[ new_idx + i ] = ix[ i ];
             tmp_x[ new_idx + i ]  = x [ i ];
             tmp_u[ new_idx + i ]  = u [ i ];
+            tmp_q[ new_idx + i ]  = q [ i ];
+            tmp_th[ new_idx + i ] = th[ i ];
         }
 
     } else {
@@ -1044,6 +1084,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             tmp_ix[ new_idx + i ] = ix[ old_idx + i ];
             tmp_x[ new_idx + i ]  = x [ old_idx + i ];
             tmp_u[ new_idx + i ]  = u [ old_idx + i ];
+            tmp_q[ new_idx + i ]  = q [ old_idx + i ];
+            tmp_th[ new_idx + i ] = th[ old_idx + i ];
         }
     }
 
@@ -1098,21 +1140,27 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
     const int tmp_np           =  tmp.np[ tile_id ];
 
     // Notice that we are already working with the new offset
-    int2   * __restrict__ ix  = &part.ix[ new_offset ];
-    float2 * __restrict__ x   = &part.x [ new_offset ];
-    float3 * __restrict__ u   = &part.u [ new_offset ];
+    auto * __restrict__ ix  = &part.ix[ new_offset ];
+    auto * __restrict__ x   = &part.x [ new_offset ];
+    auto * __restrict__ u   = &part.u [ new_offset ];
+    auto * __restrict__ q   = &part.q [ new_offset ];
+    auto * __restrict__ th  = &part.th[ new_offset ];
 
-    int2   * __restrict__ tmp_ix = &tmp.ix[ new_offset ];
-    float2 * __restrict__ tmp_x  = &tmp.x [ new_offset ];
-    float3 * __restrict__ tmp_u  = &tmp.u [ new_offset ];
+    auto * __restrict__ tmp_ix = &tmp.ix[ new_offset ];
+    auto * __restrict__ tmp_x  = &tmp.x [ new_offset ];
+    auto * __restrict__ tmp_u  = &tmp.u [ new_offset ];
+    auto * __restrict__ tmp_q  = &tmp.q [ new_offset ];
+    auto * __restrict__ tmp_th = &tmp.th[ new_offset ];
 
     if ( new_offset >= old_offset ) {
 
         // Add particles to the end of the buffer
         for( int i = block_thread_rank(); i < tmp_np; i += block_num_threads() ) {
             ix[ old_np + i ] = tmp_ix[ i ];
-            x[ old_np + i ]  = tmp_x[ i ];
-            u[ old_np + i ]  = tmp_u[ i ];
+            x [ old_np + i ] = tmp_x[ i ];
+            u [ old_np + i ] = tmp_u[ i ];
+            q [ old_np + i ] = tmp_q[ i ];
+            th[ old_np + i ] = tmp_th[ i ];
         }
 
     } else {
@@ -1123,15 +1171,19 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
         
         for( int i = block_thread_rank(); i < np0; i += block_num_threads() ) {
             ix[ i ] = tmp_ix[ i ];
-            x[ i ]  = tmp_x[ i ];
-            u[ i ]  = tmp_u[ i ];
+            x [ i ] = tmp_x [ i ];
+            u [ i ] = tmp_u [ i ];
+            q [ i ] = tmp_q [ i ];
+            th[ i ] = tmp_th[ i ];
         }
 
         // If any particles left, add particles to the end of the buffer
         for( int i = np0 + block_thread_rank(); i < tmp_np; i += block_num_threads() ) {
             ix[ old_np + i ] = tmp_ix[ i ];
-            x[ old_np + i ]  = tmp_x[ i ];
-            u[ old_np + i ]  = tmp_u[ i ];
+            x [ old_np + i ] = tmp_x [ i ];
+            u [ old_np + i ] = tmp_u [ i ];
+            q [ old_np + i ] = tmp_q [ i ];
+            th[ old_np + i ] = tmp_th[ i ];
         }
 
     }
@@ -1195,18 +1247,22 @@ void copy_sorted(
     int const old_offset      = part.offset[ tile_id ];
     int * __restrict__ npt    = &sort.npt[ 9*tile_id ];
 
-    int2   * __restrict__ ix  = &part.ix[ old_offset ];
-    float2 * __restrict__ x   = &part.x[ old_offset ];
-    float3 * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ ix  = &part.ix[ old_offset ];
+    auto * __restrict__ x   = &part.x[ old_offset ];
+    auto * __restrict__ u   = &part.u[ old_offset ];
+    auto * __restrict__ q   = &part.q[ old_offset ];
+    auto * __restrict__ th  = &part.th[ old_offset ];
 
     int * __restrict__ idx    = &sort.idx[ old_offset ];
     uint32_t const nidx       = sort.nidx[ tile_id ];
 
     // The _dir_offset variables hold the offset for each of the 9 target
     // tiles so the tmp_* variables just point to the beggining of the buffers
-    int2* __restrict__  tmp_ix  = tmp.ix;
-    float2* __restrict__ tmp_x  = tmp.x;
-    float3* __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_ix = tmp.ix;
+    auto * __restrict__ tmp_x  = tmp.x;
+    auto * __restrict__ tmp_u  = tmp.u;
+    auto * __restrict__ tmp_q  = tmp.q;
+    auto * __restrict__ tmp_th = tmp.th;
 
     // Find offsets on new buffer
     for( int i = block_thread_rank(); i < 9; i += block_num_threads() ) {
@@ -1258,9 +1314,11 @@ void copy_sorted(
         
         int k = idx[i];
 
-        int2 nix  = ix[k];
-        float2 nx = x[k];
-        float3 nu = u[k];
+        auto nix = ix[k];
+        auto nx  = x[k];
+        auto nu  = u[k];
+        auto nq  = q[k];
+        auto nth = th[k];
         
         int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
         int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
@@ -1277,8 +1335,10 @@ void copy_sorted(
             nix.y -= ycross * lim.y;
 
             tmp_ix[ l ] = nix;
-            tmp_x[ l ] = nx;
-            tmp_u[ l ] = nu;
+            tmp_x[ l ]  = nx;
+            tmp_u[ l ]  = nu;
+            tmp_q[ l ]  = nq;
+            tmp_th[ l ] = nth;
         }
 
         // Fill hole if needed
@@ -1294,6 +1354,8 @@ void copy_sorted(
             ix[ k ] = ix[ c ];
             x [ k ] = x [ c ];
             u [ k ] = u [ c ];
+            q [ k ] = q [ c ];
+            th[ k ] = th[ c ];
         }
     }
 
@@ -1306,6 +1368,8 @@ void copy_sorted(
         tmp_ix[ start + i ] = ix[i];
         tmp_x [ start + i ] = x[i];
         tmp_u [ start + i ] = u[i];
+        tmp_q [ start + i ] = q[i];
+        tmp_th[ start + i ] = th[i];
     }
 }
 
@@ -1452,15 +1516,18 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
 
     int const offset = part.offset[ tile_id ];
     int const np     = part.np[ tile_id ];
-    int2   const * const __restrict__ ix = &part.ix[ offset ];
-    float2 const * const __restrict__ x  = &part.x[ offset ];
-    float3 const * const __restrict__ u  = &part.u[ offset ];
+    auto * const __restrict__ ix = &part.ix[ offset ];
+    auto * const __restrict__ x  = &part.x[ offset ];
+    auto * const __restrict__ u  = &part.u[ offset ];
+    auto * const __restrict__ q  = &part.q[ offset ];
+    auto * const __restrict__ th = &part.th[ offset ];
 
-    __shared__ int _err; _err = 0;
-    block_sync();
+    __shared__ int _err;
+    _err = 0;
 
     int2 const lb = make_int2( -over, -over );
     int2 const ub = make_int2( part.nx.x + over, part.nx.y + over ); 
+    block_sync();
 
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
         int err = 0;
@@ -1498,6 +1565,20 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
             err = 1;
         }
 
+        if ( q[i] == 0 || isnan(q[i]) || isinf(q[i]) || std::abs(q[i]) >= __ULIM ) {
+            printf("[%d,%d] Invalid q[%d] charge (%f)\n", tile_idx.x, tile_idx.y, i, q[i] );
+            err = 1;
+        }
+
+        if ( th[i].x < -1 || th[i].x > 1 ) {
+            printf("[%d,%d] Invalid cosθ[%d] value (%f)\n", tile_idx.x, tile_idx.y, i, th[i].x );
+            err = 1;
+        }
+
+        if ( th[i].y < -1 || th[i].y > 1 ) {
+            printf("[%d,%d] Invalid sinθ[%d] value (%f)\n", tile_idx.x, tile_idx.y, i, th[i].y );
+            err = 1;
+        }
         if ( err ) _err = 1;
 
         if ( _err ) {
@@ -1673,7 +1754,12 @@ namespace kernel {
         const auto np     = tmp.np[ source_tid ];
 
         ///@brief Size of single particle data
-        constexpr size_t particle_size = sizeof(int2) + sizeof(float2) + sizeof(float3);        
+        constexpr size_t particle_size = 
+               sizeof(int2) +       // ix
+               sizeof(float2) +     // x
+               sizeof(float3) +     // u
+               sizeof(float) +      // q
+               sizeof(float2);      // θ
 
         ///@brief offset for this direction message data (number of particles)
         int dir_offset = 0;
@@ -1700,29 +1786,59 @@ namespace kernel {
 
         // Note that due to alignment issues copying as int2/float2 may fail
 
+
+        size_t comp_off = 0;
+
         {   // Pack ix position data
-            size_t pos = msg_buffer_off * sizeof(int2);
+            size_t pos = comp_off + msg_buffer_off * sizeof(int2);
             int * const __restrict__ src = (int *) &tmp.ix[ offset ];
             int * const __restrict__ tgt = (int *) &msg_buffer[ pos ];
             for( int i = block_thread_rank(); i < 2 * np; i += block_num_threads() )
                 tgt[i] = src[i];
+            
+            comp_off += msg_np[dir] * sizeof( int2 );
         }
 
         {   // Pack x position data
-            size_t pos = msg_np[dir] * sizeof( int2 ) + msg_buffer_off * sizeof(int2);
+            size_t pos = comp_off + msg_buffer_off * sizeof(float2);
             float * const __restrict__ src = (float *) &tmp.x[ offset ];
             float * const __restrict__ tgt = (float *) &msg_buffer[ pos ];
             for( int i = block_thread_rank(); i < 2 * np; i += block_num_threads() )
                 tgt[i] = src[i];
+
+            comp_off += msg_np[dir] * sizeof( float2 );
         }
 
         {   // Pack u momentum data
-            size_t pos = msg_np[dir] * (sizeof( int2 )+sizeof( float2 )) + msg_buffer_off * sizeof(float3);
+            size_t pos = comp_off + msg_buffer_off * sizeof(float3);
             float * const __restrict__ src = (float *) &tmp.u[ offset ];
             float * const __restrict__ tgt = (float *) &msg_buffer[ pos ];
             for( int i = block_thread_rank(); i < 3 * np; i += block_num_threads() )
                 tgt[i] = src[i];
+
+            comp_off += msg_np[dir] * sizeof( float3 );
         }
+
+        {   // Pack q charge data
+            size_t pos = comp_off + msg_buffer_off * sizeof(float);
+            float * const __restrict__ src = (float *) &tmp.q[ offset ];
+            float * const __restrict__ tgt = (float *) &msg_buffer[ pos ];
+            for( int i = block_thread_rank(); i < np; i += block_num_threads() )
+                tgt[i] = src[i];
+
+            comp_off += msg_np[dir] * sizeof( float );
+        }
+
+        {   // Pack theta charge data
+            size_t pos = comp_off + msg_buffer_off * sizeof(float2);
+            float * const __restrict__ src = (float *) &tmp.q[ offset ];
+            float * const __restrict__ tgt = (float *) &msg_buffer[ pos ];
+            for( int i = block_thread_rank(); i < 2 * np; i += block_num_threads() )
+                tgt[i] = src[i];
+
+            // comp_off += msg_np[dir] * sizeof( float2 ); // unecessary
+        }
+
     }
 }
 
@@ -1883,29 +1999,57 @@ namespace kernel {
             }
 
             // Note that due to alignment issues copying as int2/float2 may fail
+            
+            size_t comp_off = 0;
 
             {   // Unpack ix position data
-                size_t pos = msg_buffer_off * sizeof(int2);
+                size_t pos = comp_off + msg_buffer_off * sizeof(int2);
                 int * const __restrict__ src = (int *) &msg_buffer[ pos ];
                 int * const __restrict__ tgt = (int *) &part.ix[ tgt_offset ];
                 for( int i = block_thread_rank(); i < 2 * recv_np; i += block_num_threads() )
                     tgt[i] = src[i];
+                
+                comp_off += msg_np[dir] * sizeof( int2 );
             }
 
             {   // Unpack x position data
-                size_t pos = msg_np[dir] * sizeof( int2 ) + msg_buffer_off * sizeof(int2);
+                size_t pos = comp_off + msg_buffer_off * sizeof(float2);
                 float * const __restrict__ src = (float *) &msg_buffer[ pos ];
                 float * const __restrict__ tgt = (float *) &part.x[ tgt_offset ];
                 for( int i = block_thread_rank(); i < 2 * recv_np; i += block_num_threads() )
                     tgt[i] = src[i];
+
+                comp_off += msg_np[dir] * sizeof( float2 );
             }
 
             {   // Unpack u position data
-                size_t pos = msg_np[dir] * (sizeof( int2 )+sizeof( float2 )) + msg_buffer_off * sizeof(float3);
+                size_t pos = comp_off + msg_buffer_off * sizeof(float3);
                 float * const __restrict__ src = (float *) &msg_buffer[ pos ];
                 float * const __restrict__ tgt = (float *) &part.u[ tgt_offset ];
                 for( int i = block_thread_rank(); i < 3 * recv_np; i += block_num_threads() )
                     tgt[i] = src[i];
+
+                comp_off += msg_np[dir] * sizeof( float3 );
+            }
+
+            {   // Unpack q charge data
+                size_t pos = comp_off + msg_buffer_off * sizeof(float);
+                float * const __restrict__ src = (float *) &msg_buffer[ pos ];
+                float * const __restrict__ tgt = (float *) &part.u[ tgt_offset ];
+                for( int i = block_thread_rank(); i < recv_np; i += block_num_threads() )
+                    tgt[i] = src[i];
+
+                comp_off += msg_np[dir] * sizeof( float );
+            }
+
+            {   // Unpack θ angular position data
+                size_t pos = comp_off + msg_buffer_off * sizeof(float2);
+                float * const __restrict__ src = (float *) &msg_buffer[ pos ];
+                float * const __restrict__ tgt = (float *) &part.u[ tgt_offset ];
+                for( int i = block_thread_rank(); i < 2 * recv_np; i += block_num_threads() )
+                    tgt[i] = src[i];
+
+                // comp_off += msg_np[dir] * sizeof( float2 ); // unecessary
             }
 
         }

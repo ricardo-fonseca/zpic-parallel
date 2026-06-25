@@ -3,6 +3,57 @@
 
 #include <iostream>
 
+/**
+ * @brief Construct a new EMF object
+ * 
+ * @param nmodes    Number of cylindrical modes (>= 1)
+ * @param ntiles    Number of tiles in z,r direction
+ * @param nx        Tile size (#cells)
+ * @param box       Simulation box size (sim. units)
+ * @param dt        Time step
+ * @param parallel          Parallel partition 
+ */
+EMF::EMF( unsigned int nmodes, uint2 const ntiles, uint2 const nx, float2 const box,
+     double const dt, Partition & parallel ) : 
+    dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
+    dt( dt ),
+    nmodes( nmodes ),
+    box(box)
+{
+    auto cour = zpic::courant( nmodes, dx );
+    if ( dt >= cour ){
+        if ( mpi::world_root() ) {
+            std::cerr << "(*error*) Invalid timestep, courant condition violation.\n"
+                    << "(*error*) For the no. modes / current resolution " << nmodes << " / " << dx
+                    << " the maximum timestep is dt = " << cour << '\n';
+        }
+        mpi::abort(1);
+    }
+
+    // Guard cells (1 below, 2 above)
+    // These are required for the Yee solver AND for field interpolation
+    bnd<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
+
+    E = new Cyl3CylGrid<float> ( nmodes, ntiles, nx, gc, parallel );
+    E -> set_name( "E" );
+
+    B = new Cyl3CylGrid<float> ( nmodes, ntiles, nx, gc, parallel );
+    B -> set_name( "B" );
+
+    // Zero fields
+    E -> zero();
+    B -> zero();
+
+    // Set default boundary conditions
+    bc.x.lower = bc.x.upper = emf::bc::periodic;
+    bc.y.lower = emf::bc::axial; 
+    bc.y.upper = emf::bc::none;
+
+    // Reset iteration number
+    iter = 0;
+};
 
 /**
  * @brief B advance for Yee algorithm (mode 0)
@@ -414,58 +465,6 @@ void yeemJ_e(
     }
 }
 
-/**
- * @brief Construct a new EMF object
- * 
- * @param nmodes    Number of cylindrical modes (>= 1)
- * @param ntiles    Number of tiles in z,r direction
- * @param nx        Tile size (#cells)
- * @param box       Simulation box size (sim. units)
- * @param dt        Time step
- * @param parallel          Parallel partition 
- */
-EMF::EMF( unsigned int nmodes, uint2 const ntiles, uint2 const nx, float2 const box,
-     double const dt, Partition & parallel ) : 
-    dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
-    dt( dt ),
-    nmodes( nmodes ),
-    box(box)
-{
-    auto cour = zpic::courant( nmodes, dx );
-    if ( dt >= cour ){
-        if ( mpi::world_root() ) {
-            std::cerr << "(*error*) Invalid timestep, courant condition violation.\n"
-                    << "(*error*) For the no. modes / current resolution " << nmodes << " / " << dx
-                    << " the maximum timestep is dt = " << cour << '\n';
-        }
-        mpi::abort(1);
-    }
-
-    // Guard cells (1 below, 2 above)
-    // These are required for the Yee solver AND for field interpolation
-    bnd<unsigned int> gc;
-    gc.x = {1,2};
-    gc.y = {1,2};
-
-    E = new Cyl3CylGrid<float> ( nmodes, ntiles, nx, gc, parallel );
-    E -> set_name( "E" );
-
-    B = new Cyl3CylGrid<float> ( nmodes, ntiles, nx, gc, parallel );
-    B -> set_name( "B" );
-
-    // Zero fields
-    E -> zero();
-    B -> zero();
-
-    // Set default boundary conditions
-    bc.x.lower = bc.x.upper = emf::bc::periodic;
-    bc.y.lower = emf::bc::axial; 
-    bc.y.upper = emf::bc::none;
-
-    // Reset iteration number
-    iter = 0;
-};
-
 
 /**
  * @brief Advance EM fields 1 time step (no current)
@@ -660,7 +659,7 @@ void EMF::advance( Current & current ) {
     // process_bc();
 
     // Advance internal iteration number
-    iter += 1;    
+    iter += 1;
 
     // Move simulation window if needed
     if ( moving_window.active() ) move_window();

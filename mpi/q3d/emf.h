@@ -84,7 +84,7 @@ class EMF {
     }
 
     friend std::ostream& operator<<(std::ostream& os, const EMF & obj) {
-        os << "EMF object\n";
+        os << "EMF object";
         return os;
     }
 

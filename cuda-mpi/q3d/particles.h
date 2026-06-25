@@ -17,7 +17,7 @@ namespace part {
  * @brief Particle quantity identifiers
  * 
  */
-enum quant { x, y, ux, uy, uz };
+enum quant { z, r, cos_th, sin_th, q, ux, uy, uz };
 
 namespace bnd_t {
     enum type { none = 0, periodic, comm };
@@ -730,6 +730,12 @@ class ParticleMessage {
     /// @brief Particle velocity
     float3 *u;
 
+    /// @brief Individual particle charge
+    float *q;
+
+    /// @brief Angular position stored as { cos(θ), sin(θ) }
+    float2 *th;
+
     /// @brief Maximum number of particles in the buffer
     uint32_t max_part;
 
@@ -815,9 +821,12 @@ class Particles : public ParticleData {
         device::zero( offset, bsize );
 
         // Particle data
-        ix = device::malloc<int2>( max_part );
-        x = device::malloc<float2>( max_part );
-        u = device::malloc<float3>( max_part );
+        ix = device::malloc<int2>  ( max_part );
+        x  = device::malloc<float2>( max_part );
+        u  = device::malloc<float3>( max_part );
+
+        q  = device::malloc<float>( max_part );
+        th = device::malloc<float2>( max_part );
 
         // Default global periodic boundaries to parallel partition type
         periodic = parallel.periodic;
@@ -827,6 +836,9 @@ class Particles : public ParticleData {
     }
 
     ~Particles() {
+        device::free( th );
+        device::free( q );
+
         device::free( u );
         device::free( x );
         device::free( ix );
@@ -929,6 +941,8 @@ class Particles : public ParticleData {
      */
     void grow_buffer( uint32_t new_max ) {
         if ( new_max > max_part ) {
+            device::free( th );
+            device::free( q );
             device::free( u );
             device::free( x );
             device::free( ix );
@@ -939,6 +953,9 @@ class Particles : public ParticleData {
             ix = device::malloc<int2>  ( max_part );
             x  = device::malloc<float2>( max_part );
             u  = device::malloc<float3>( max_part );
+
+            q  = device::malloc<float> ( max_part );
+            th = device::malloc<float2>( max_part );
         }
     }
 
@@ -952,7 +969,8 @@ class Particles : public ParticleData {
         swap( a.ix, b.ix );
         swap( a.x,  b.x );
         swap( a.u,  b.u );
-
+        swap( a.q,  b.q );
+        swap( a.th,  b.th );
         auto tmp_max_part = b.max_part;
         b.max_part = a.max_part;
         a.max_part = tmp_max_part;
@@ -1113,9 +1131,12 @@ class Particles : public ParticleData {
      * @return size_t 
      */
     size_t constexpr particle_size() {
-        return sizeof(int2) + sizeof(float2) + sizeof(float3);
+        return sizeof(int2) +       // ix
+               sizeof(float2) +     // x
+               sizeof(float3) +     // u
+               sizeof(float) +      // q
+               sizeof(float2);      // θ
     };
-
 
     /**
      * @brief Prepare particle receive buffers and start receive

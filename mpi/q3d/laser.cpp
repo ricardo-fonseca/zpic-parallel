@@ -371,7 +371,7 @@ int Laser::Gaussian::validate() {
 inline float gauss_phase( const float omega0, const float W0, const float z, const float r ) {
     const float z0   = omega0 * ( W0 * W0 ) / 2;
     const float rho2 = r*r;
-    const float curv = rho2 * z / (z0*z0 + z*z);
+    const float curv = 0.5 * rho2 * z / (z0*z0 + z*z);
     const float rWl2 = (z0*z0)/(z0*z0 + z*z);
     const float gouy_shift = atan2( z, z0 );
 

@@ -474,10 +474,10 @@ void test_lwfa() {
     std::cout << ansi::reset << std::endl;
 
 
-    uint2 dims { 1024, 128 };
+    uint2 dims { 1024, 512 };
     float2 box { 20.48, 12.8 };
 
-    uint2 nx { 8, 8 };
+    uint2 nx { 16, 16 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
     auto dt = zpic::courant( 2, dims, box ) * 0.9f;
@@ -486,7 +486,7 @@ void test_lwfa() {
     Simulation sim( 2, ntiles, nx, box, dt );
 
     // Add electrons
-    Species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
+    Species electrons("electrons", -1.0f, make_uint3( 4, 4, 8 ));
     electrons.set_density( Density::Step( coord::z, 1.0, 20.48 ) );
 //    electrons.set_density( Density::Step( coord::z, 1.0, 10.24 ) );
     sim.add_species( electrons );
@@ -495,7 +495,7 @@ void test_lwfa() {
     Laser::Gaussian laser;
     laser.start   = 20.0;
     laser.fwhm    = 2.0;
-    laser.a0      = 1.0;
+    laser.a0      = 2.0;
     laser.omega0  = 10.0;
     laser.W0      = 4.0;
     laser.focus   = 20.48;
@@ -532,21 +532,34 @@ void test_lwfa() {
 
     std::cout << "Starting simulation, dt = " << dt << '\n';
 
+
+    // Fill box before starting timings
+    while( sim.get_t() <= box.x ) sim.advance_mov_window();
+
+    std::cout << "Now at t =  " << sim.get_t() << '\n';
+
+    auto nmove0 = sim.get_nmove();
+
+    std::cout << "Already moved " << nmove0 << '\n';
+
     Timer timer;
     timer.start();
 
-    while( sim.get_t() <= 1.05 * box.x ) {
-        if ( sim.get_iter() % 10 == 0 ) {
+    while( sim.get_iter() < 2500 ) {
+        if ( sim.get_iter() % 100 == 0 ) {
             std::cout << "i = " << sim.get_iter() << '\n';
-            diag();
+            // diag();
         }
         sim.advance_mov_window();
     }
 
     timer.stop();
+    diag();
 
     std::cout << "Simulation run up to t = " << sim.get_t()
-              << " in " << timer.elapsed(timer::s) << " s\n";
+              << " in " << timer.elapsed(timer::s) << " s\n"
+              << "Perf: " << (sim.get_nmove() - nmove0) / timer.elapsed(timer::s) / 1.e9 
+              << " GPart/s\n";
 
 
     std::cout << ansi::bold;

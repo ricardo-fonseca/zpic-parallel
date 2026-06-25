@@ -245,7 +245,7 @@ void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
     }
 
     // Free temporary memory
-    device::free( sendbuf );    
+    device::free( sendbuf );
 
     // Correct longitudinal values on guard cells
     E.copy_to_gc();

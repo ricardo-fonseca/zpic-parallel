@@ -1,38 +1,30 @@
-#ifndef VEC3_CYLGRID_H_
-#define VEC3_CYLGRID_H_
+#ifndef CYL3MODES_H_
+#define CYL3MODES_H_
 
-#include "vec_types.h"
-#include "bnd.h"
-
-#include "cyl3grid.h"
 #include "cylmodes.h"
-
-#include <iostream>
-#include <complex>
+#include "cyl3grid.h"
 
 /**
  * @brief cyl3<> cylindrical modes tiled grid object
  * 
- * @note will create cyl3grids of std::complex<T> type for modes m > 0
+ * @note will create cyl3grids of ops::complex<T> type for modes m > 0
  * 
  * @tparam T    Base class type, must be one of float, double or long-double
  */
 template <class T>
-class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > > {
+class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< ops::complex<T> > > {
 
     protected:
 
-    using parent = CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > >;
+    using parent = CylGrid< T, cyl3grid<T>, cyl3grid< ops::complex<T> > >;
 
     public:
 
     using parent :: grid_0;
     using parent :: grid_m;
     using parent :: nmodes;
-    using parent :: set_periodic;
-    using parent :: get_periodic;
 
-    using CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > > :: CylGrid;
+    using CylGrid< T, cyl3grid<T>, cyl3grid< ops::complex<T> > > :: CylGrid;
 
     /**
      * @brief Save mode m grid values to disk
@@ -41,9 +33,9 @@ class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > 
      * @param fc        Field component to save
      * @param filename  Output file name (includes path)
      */
-    void save( unsigned m, const enum fcomp::cyl fc, std::string filename ) {
+    void save( const int m, const enum fcomp::cyl fc, std::string filename ) {
 
-        if ( m >= nmodes ) {
+        if ( m < 0 || m >= nmodes ) {
             std::cerr << "invalid mode (" << m << ") selected.\n";
             exit(1);
         }
@@ -64,9 +56,9 @@ class Cyl3CylGrid : public CylGrid< T, cyl3grid<T>, cyl3grid< std::complex<T> > 
      * @param iter          Iteration metadata
      * @param path          Ouput path
      */
-    void save( unsigned m, const enum fcomp::cyl fc, zdf::grid_info &metadata, zdf::iteration &iter, std::string &path ) {
+    void save( const int m, const enum fcomp::cyl fc, zdf::grid_info &metadata, zdf::iteration &iter, std::string &path ) {
 
-        if ( m >= nmodes ) {
+        if ( m < 0 || m >= nmodes ) {
             std::cerr << "invalid mode (" << m << ") selected.\n";
             exit(1);
         }

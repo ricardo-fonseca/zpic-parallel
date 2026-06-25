@@ -1170,8 +1170,11 @@ class grid {
     /**
      * @brief Save grid values to disk with full metadata
      * 
-     * The field type <T> must be supported by ZDF file format
+     * @note The field type <T> must be supported by ZDF file format
      * 
+     * @param info      Grid metadata (label, units, axis, etc.). Information is used to set file name
+     * @param iter      Iteration metadata
+     * @param path      Base path for file
      */
     void save( zdf::grid_info &info, zdf::iteration &iter, std::string path ) {
 
@@ -1205,7 +1208,7 @@ class grid {
     /**
      * @brief Save grid values to disk
      * 
-     * @param filename      Output file name
+     * @param filename      Output file name (includes path)
      */
     void save( std::string filename ) {
         // Allocate buffer on host to gather data

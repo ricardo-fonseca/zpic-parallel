@@ -24,7 +24,7 @@ namespace emf {
 
 class EMF {
 
-    /// @brief Boundary condition
+    /// @brief Global boundary conditions
     emf::bc_type bc;
 
     /// @brief cell size
@@ -46,13 +46,13 @@ class EMF {
      * @brief Move simulation window if needed
      * 
      */
-    void move_window( );
+    void move_window();
 
     /**
      * @brief Process boundary conditions
      * 
      */
-    // void process_bc( );
+    // void process_bc();
 
     public:
 
@@ -69,12 +69,13 @@ class EMF {
      * @brief Construct a new EMF object
      * 
      * @param nmodes    Number of cylindrical modes (>= 1)
-     * @param ntiles    Number of tiles in x,y direction
+     * @param ntiles    Global Number of tiles in x,y direction
      * @param nx        Tile size (#cells)
      * @param box       Simulation box size (sim. units)
      * @param dt        Time step
+     * @param parallel          Parallel partition 
      */
-    EMF( int nmodes, uint2 const ntiles, uint2 const nx, float2 const box, double const dt );
+    EMF( unsigned int nmodes, uint2 const global_ntiles, uint2 const nx, float2 const box, double const dt, Partition & parallel );
     
     /**
      * @brief Destroy the EMF object
@@ -127,28 +128,26 @@ class EMF {
         if ( new_bc.y.upper == emf::bc::periodic ) {
             std::cerr << "(*error*) Invalid EMF boundary along r.\n";
             std::cerr << "(*error*) Periodic boundaries are not allowed in the radial direction.\n";
-            std::exit(1);
+            mpi::abort(1);
         }
 
         if ( (new_bc.x.lower == emf::bc::periodic) || (new_bc.x.upper == emf::bc::periodic) ) {
             if ( new_bc.x.lower != new_bc.x.upper ) {
                 std::cerr << "(*error*) EMF boundary type mismatch along x.\n";
                 std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                std::exit(1);
+                mpi::abort(1);
             }
         }
 
         // Store new values
         bc = new_bc;
 
-        std::string bc_name[] = { "none", "axial", "periodic", "pec", "pmc"};
-        std::cout << "(*info*) EMF boundary conditions\n";
-        std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-        std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
-
-        // Set periodic flags on tile grids
-        E -> set_periodic( bc.x.lower == emf::bc::periodic );
-        B -> set_periodic( bc.x.lower == emf::bc::periodic );
+        if ( mpi::world_root() ) {
+            std::string bc_name[] = { "none", "axial", "periodic", "pec", "pmc"};
+            std::cout << "(*info*) EMF boundary conditions\n";
+            std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
+            std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+        }
     }
 
     /**
@@ -160,12 +159,14 @@ class EMF {
      */
     int set_moving_window() { 
         if ( iter == 0 ) {
+
+            if ( E -> part.periodic.x ) {
+                std::cerr << "(*error*) EMF::set_moving_window() - Unable to set_moving_window() with periodic x partition\n";
+                return -1; 
+            }
             moving_window.init( dx.x );
 
             bc.x.lower = bc.x.upper = emf::bc::none;
- 
-            E -> set_periodic( false );
-            B -> set_periodic( false );
 
             return 0;
         } else {
@@ -173,7 +174,6 @@ class EMF {
             return -1; 
         }
     }
-
 
     /**
      * @brief Advance EM field 1 iteration assuming no current
@@ -192,7 +192,7 @@ class EMF {
      * @brief Save EM field component to file
      * 
      * @param field     Which field to save (E or B)
-     * @param fc        Which field component to save (z, r, or θ)
+     * @param fc        Which field component to save (r, θ or z)
      * @param m         Mode
      */
     void save( emf::field const field, const fcomp::cyl fc, const int m );
@@ -208,6 +208,7 @@ class EMF {
      * @param m         Mode
      */
     void get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m );
+
 };
 
 #endif

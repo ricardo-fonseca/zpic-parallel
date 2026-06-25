@@ -104,6 +104,7 @@ class Simulation {
         // Advance EM fields
         emf.advance( current );
 
+        // Advance iteration number
         iter++;
     }
 
@@ -127,6 +128,7 @@ class Simulation {
         // Advance EM fields
         emf.advance( current );
 
+        // Advance iteration number
         iter++;
     }
 
@@ -142,7 +144,7 @@ class Simulation {
      * 
      * @return double   Simulation time
      */
-    double get_t() { return iter * double(dt); };
+    double get_t() { return iter * dt; };
 
     /**
      * @brief Print global energy diagnostic
