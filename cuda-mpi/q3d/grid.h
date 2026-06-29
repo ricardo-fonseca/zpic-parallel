@@ -280,53 +280,24 @@ void kernel_x_shift_left( T * const __restrict__ d_buffer, const uint2 ntiles, c
         buffer[idx] = local[idx];
 }
 
+/**
+ * @brief CUDA kernel for 3 point kernel convolution along x
+ * 
+ * @tparam T        Main data type
+ * @tparam S        Kernel values type
+ * @param d_buffer  Main data buffer
+ * @param ntiles    Number of tiles
+ * @param nx        Tile size
+ * @param ext_nx    External tile size (including guard cells)
+ * @param offset    Offset to position (0,0) in tile
+ * @param a         Kernel value a
+ * @param b         Kernel value b
+ * @param c         Kernel value c
+ */
 template< typename T, typename S >
 __global__
 void kernel_kernel3_x( T * const __restrict__ d_buffer, const uint2 ntiles,
-    const uint2 nx, const uint2 ext_nx, const int gc_x_lower, 
-    S const a, S const b, S const c )
-{
-    auto * shm = block::shared_mem<T>();
-
-    const uint2  tile_idx = { blockIdx.x, blockIdx.y };
-    const int    tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
-    const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
-    const size_t tile_off = tile_id * tile_vol;
-    const int    ystride  = ext_nx.x;
-
-    T * __restrict__ buffer = & d_buffer[ tile_off ];
-    T * __restrict__ A = & shm[0];
-    T * __restrict__ B = & shm[tile_vol];
-
-    // Copy data from tile buffer
-    for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
-        A[i] = B[i] = buffer[i];
-
-    // Synchronize 
-    block_sync();
-
-    // Apply kernel locally
-    for( int idx = block_thread_rank(); idx < ext_nx.y * nx.x; idx += block_num_threads() ) {
-        const auto iy = idx / nx.x;
-        const auto ix = idx % nx.x + gc_x_lower;
-        B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
-                                  A[ iy * ystride +  ix    ] * b +
-                                  A[ iy * ystride + (ix+1) ] * c;
-    }
-
-    // Synchronize 
-    block_sync();
-
-    // Copy data back to tile buffer
-    for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
-        buffer[i] = B[i];
-}
-
-
-template< typename T, typename S >
-__global__
-void kernel_kernel3_y( T * const __restrict__ d_buffer, const uint2 ntiles,
-    const uint2 nx, const uint2 ext_nx, const int gc_y_lower, 
+    const uint2 nx, const uint2 ext_nx, const int offset, 
     S const a, S const b, S const c )
 {
     auto * shm = block::shared_mem<T>();
@@ -349,9 +320,65 @@ void kernel_kernel3_y( T * const __restrict__ d_buffer, const uint2 ntiles,
     block_sync();
 
     // Apply kernel locally
-    for( int idx = block_thread_rank(); idx < nx.y * ext_nx.x; idx += block_num_threads() ) {
-        const auto iy = idx / ext_nx.x + gc_y_lower;
-        const auto ix = idx % ext_nx.x;
+    for( int idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
+        const int iy = idx / nx.x;
+        const int ix = offset + idx % nx.x;
+        B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
+                                  A[ iy * ystride +  ix    ] * b +
+                                  A[ iy * ystride + (ix+1) ] * c;
+    }
+ 
+    // Synchronize 
+    block_sync();
+
+    // Copy data back to tile buffer
+    for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
+        buffer[i] = B[i];
+}
+
+/**
+ * @brief CUDA kernel for 3 point kernel convolution along y
+ * 
+ * @tparam T        Main data type
+ * @tparam S        Kernel values type
+ * @param d_buffer  Main data buffer
+ * @param ntiles    Number of tiles
+ * @param nx        Tile size
+ * @param ext_nx    External tile size (including guard cells)
+ * @param offset    Offset to position (0,0) in tile
+ * @param a         Kernel value a
+ * @param b         Kernel value b
+ * @param c         Kernel value c
+ */
+template< typename T, typename S >
+__global__
+void kernel_kernel3_y( T * const __restrict__ d_buffer, const uint2 ntiles,
+    const uint2 nx, const uint2 ext_nx, const int offset,
+    S const a, S const b, S const c )
+{
+    auto * shm = block::shared_mem<T>();
+
+    const uint2  tile_idx = { blockIdx.x, blockIdx.y };
+    const int    tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
+    const int    tile_vol = roundup4( ext_nx.x * ext_nx.y );
+    const size_t tile_off = tile_id * tile_vol;
+    const int    ystride  = ext_nx.x;
+
+    T * __restrict__ buffer = & d_buffer[ tile_off ];
+    T * __restrict__ A = & shm[0];
+    T * __restrict__ B = & shm[tile_vol];
+
+    // Copy data from tile buffer
+    for( int i = block_thread_rank(); i < tile_vol; i += block_num_threads() )
+        A[i] = buffer[i];
+
+    // Synchronize 
+    block_sync();
+
+    // Apply kernel locally
+    for( int idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
+        const int iy = idx / nx.x;
+        const int ix = offset + idx % nx.x;
 
         B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
                                   A[    iy  * ystride + ix ] * b +
@@ -389,7 +416,7 @@ void kernel_copy_to_gc_x_send(
     const uint2 nx, const uint2 ext_nx, 
     const int gc_x_lower, const int gc_x_upper ) {
 
-    unsigned int tx = ( blockIdx.x == 0 ) ? 0 : ntiles.x - 1;    
+    unsigned int tx = ( blockIdx.x == 0 ) ? 0 : ntiles.x - 1;
     unsigned int ty = blockIdx.y;
 
     const auto tid = ty * ntiles.x + tx;
@@ -1543,15 +1570,14 @@ class grid {
             size_t shm_size = 2 * tile_vol * sizeof(T);
 
             if ( shm_size > block::shared_mem_size() ) {
-                ABORT("grid::x_shift_left(), tile size too large, insufficient shared memory");
+                ABORT("grid::kernel3_x(), tile size too large, insufficient shared memory");
             }
 
             block::set_shmem_size( kernel_kernel3_x<T,S>, shm_size );
             kernel_kernel3_x <<< grid, 1024, shm_size >>> ( 
-                d_buffer, ntiles, nx, ext_nx, gc.x.lower, a, b, c
+                d_buffer, ntiles, nx, ext_nx, offset, a, b, c
             ); 
-
-            copy_to_gc_x();
+            copy_to_gc();
 
         } else {
             ABORT("grid::kernel3_x() requires at least 1 guard cell at both the lower and upper x boundaries.");
@@ -1574,12 +1600,16 @@ class grid {
 
             size_t shm_size = 2 * tile_vol * sizeof(T);
 
+            if ( shm_size > block::shared_mem_size() ) {
+                ABORT("grid::kernel3_y(), tile size too large, insufficient shared memory");
+            }
+
             block::set_shmem_size( kernel_kernel3_y<T,S>, shm_size );
             kernel_kernel3_y <<< grid, 1024, shm_size >>> ( 
-                d_buffer, ntiles, nx, ext_nx, gc.y.lower, a, b, c
+                d_buffer, ntiles, nx, ext_nx, offset, a, b, c
             ); 
 
-            copy_to_gc_y();
+            copy_to_gc();
 
         } else {
             ABORT("grid::kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.");

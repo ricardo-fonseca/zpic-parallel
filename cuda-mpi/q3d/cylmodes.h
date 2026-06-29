@@ -211,9 +211,9 @@ class CylGrid {
      * 
      */
     void copy_to_gc_y() {
-        grid_0 -> copy_to_gc_x();
+        grid_0 -> copy_to_gc_y();
         for ( auto & m : grid_m )
-            m -> copy_to_gc_x();
+            m -> copy_to_gc_y();
     }
 
     /**

@@ -552,41 +552,6 @@ void info( void ) {
     }
 }
 
-/**
- * @brief Initialize GPU device
- * 
- * @note Selects and initializes a GPU device on the parallel node
- * 
- * @param comm      MPI communicator
- */
-void gpu_init( MPI_Comm comm ) {
-
-    MPI_Comm local_comm;
-    int global_rank, local_rank;
-
-    // Create a communicator with processes sharing the same hardware node
-    MPI_Comm_rank( comm, &global_rank );
-    MPI_Comm_split_type( comm, MPI_COMM_TYPE_SHARED, global_rank,  MPI_INFO_NULL, &local_comm );
-    
-    // Get rank in local communicator
-    MPI_Comm_rank(local_comm, &local_rank);
-
-    // Free the communicator
-    MPI_Comm_free(&local_comm);
-
-    // Get number of GPU devices on node
-    int num_devices; cudaGetDeviceCount(&num_devices);
-
-    // Use local_rank to select GPU device on node usina a round-robin algorithm
-    int device = local_rank % num_devices;
-    cudaSetDevice( device );
-
-    // mpi::cout << "GPU device: " << device << '\n';
-
-    // Reset current device
-    // deviceReset();
-}
-
 #include "timer.h"
 
 void test_lwfa() {
@@ -628,10 +593,9 @@ void test_lwfa() {
 
     laser.add( sim.emf );
 
-
     // Set moving window and current filtering
     sim.set_moving_window();
-    sim.current.set_filter( Filter::Compensated( coord::z, 4 ));
+    sim.current.set_filter( Filter::Compensated( coord::z, 4 ) );
 
     auto diag = [& sim, & electrons ]( ) {
         sim.emf.save(emf::e, fcomp::z, 0);
@@ -680,6 +644,41 @@ void test_lwfa() {
         std::cout << "Done!\n";
         std::cout << ansi::reset; 
     }
+}
+
+/**
+ * @brief Initialize GPU device
+ * 
+ * @note Selects and initializes a GPU device on the parallel node
+ * 
+ * @param comm      MPI communicator
+ */
+void gpu_init( MPI_Comm comm ) {
+
+    MPI_Comm local_comm;
+    int global_rank, local_rank;
+
+    // Create a communicator with processes sharing the same hardware node
+    MPI_Comm_rank( comm, &global_rank );
+    MPI_Comm_split_type( comm, MPI_COMM_TYPE_SHARED, global_rank,  MPI_INFO_NULL, &local_comm );
+    
+    // Get rank in local communicator
+    MPI_Comm_rank(local_comm, &local_rank);
+
+    // Free the communicator
+    MPI_Comm_free(&local_comm);
+
+    // Get number of GPU devices on node
+    int num_devices; cudaGetDeviceCount(&num_devices);
+
+    // Use local_rank to select GPU device on node usina a round-robin algorithm
+    int device = local_rank % num_devices;
+    cudaSetDevice( device );
+
+    // mpi::cout << "GPU device: " << device << '\n';
+
+    // Reset current device
+    // deviceReset();
 }
 
 int main( int argc, char *argv[] ) {

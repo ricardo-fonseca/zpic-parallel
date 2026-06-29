@@ -130,6 +130,8 @@ __global__
 /**
  * @brief Normalize current grid (m = 0)
  * 
+ * @note Normalization is only applied to inner cells (no guard cells)
+ * 
  * @param d_current     Pointer to current grid
  * @param offset        Offset to position (0,0) on the grid
  * @param nx            Tile grid size
@@ -159,12 +161,9 @@ void current_norm_0(
     // const int i0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
     const int j0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
 
-    int range_z = (nx.x + 2) + 1; // [-1 .. nx.x-2[
-    int range_r = (nx.y + 2) + 1; // [-1 .. nx.y-2[
-
-    for( int idx = block_thread_rank(); idx < range_z * range_r; idx += block_num_threads() ) {
-        int i = idx % range_z - 1;
-        int j = idx / range_z - 1;
+    for( int idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
+        int i = idx % nx.x;
+        int j = idx / nx.x;
 
         /// @brief r at center of cell
         float rc   = std::abs( j0 + j        ) * dr;
@@ -179,11 +178,13 @@ void current_norm_0(
         current[ j * jstride +i ].th *= dr_dt * norm_zth;
     }
 
+    block_sync();
+
     // Axial boundary
     // Fold values for r < 0 back into simulation domain
     if ( j0 == 0 ) {
 
-        for( int i = block_thread_rank() - 1; i < nx.x + 2; i += block_num_threads() ) {
+        for( int i = block_thread_rank(); i < nx.x; i += block_num_threads() ) {
 
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
@@ -204,6 +205,8 @@ void current_norm_0(
 __global__
 /**
  * @brief Normalize current grid, modes m > 0
+ * 
+ * @note Normalization is only applied to inner cells (no guard cells)
  * 
  * @param m 
  * @param tile_idx 
@@ -241,12 +244,9 @@ void current_norm_m(
     // const int i0 = ( global_tile_off.x + tile_idx.x ) * nx.x;
     const int j0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
 
-    int range_z = (nx.x + 2) + 1; // [-1 .. nx.x-2[
-    int range_r = (nx.y + 2) + 1; // [-1 .. nx.y-2[
-
-    for( int idx = block_thread_rank(); idx < range_z * range_r; idx += block_num_threads() ) {
-        int i = idx % range_z - 1;
-        int j = idx / range_z - 1;
+    for( int idx = block_thread_rank(); idx < nx.y * nx.x; idx += block_num_threads() ) {
+        int i = idx % nx.x;
+        int j = idx / nx.x;
 
         /// @brief r at center of cell
         float rc   = std::abs( j0 + j        ) * dr;
@@ -261,6 +261,8 @@ void current_norm_m(
         current[ i + j * jstride ].th *= norm_th;
     }
 
+    block_sync();
+
     // Axial boundary
     // Fold values for r < 0 back into simulation domain
     if ( j0 == 0 ) {
@@ -268,7 +270,7 @@ void current_norm_m(
         // alternative, signt = -(-1)^m
         // const auto signt = ( m & 1 ) ? 1.f : -1.f;
 
-        for( int i = block_thread_rank() - 1; i < nx.x + 2; i += block_num_threads() ) {
+        for( int i = block_thread_rank(); i < nx.x; i += block_num_threads() ) {
             current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
             current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
 
@@ -284,6 +286,7 @@ void current_norm_m(
         }
     }
 }
+
 
 }
 
@@ -379,7 +382,6 @@ void Current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc( );
-    J -> copy_to_gc( );
 
     // Do additional bc calculations if needed
     // Process_bc();
@@ -387,8 +389,11 @@ void Current::advance() {
     // Normalize for ring particles
     normalize();
 
+    // Update guard cell values with normalized current
+    J -> copy_to_gc( );
+
     // Apply filtering
-    apply_filter();
+    apply_filter( );
 
     // Advance iteration count
     iter++;

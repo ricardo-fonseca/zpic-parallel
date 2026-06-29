@@ -103,9 +103,9 @@ struct cyl3 {
     // The following will only work if T is a complex type
     __host__ __device__
     auto friend real( cyl3 v ) {
-        auto th = real( v.th );
-        auto r  = real( v.r );
         auto z  = real( v.z );
+        auto r  = real( v.r );
+        auto th = real( v.th );
         return cyl3< decltype(r) > { z, r, th };
     }
 
@@ -121,7 +121,7 @@ struct cyl3 {
     auto friend norm( cyl3 v ) {
         auto z = norm( v.z );
         auto r = norm( v.r );
-        auto th = norm( v.t );
+        auto th = norm( v.th );
         return cyl3< decltype(r) > { z, r, th };
     }
 
