@@ -45,6 +45,13 @@ if (CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     target_compile_definitions(zpic_em2d PRIVATE USE_NEON)
 endif()
 
+# x86_64 AVX2 optimizations
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    target_compile_definitions(zpic_em2d PRIVATE USE_AVX2)
+    target_compile_options(zpic_em2d PRIVATE -mavx2 -mfma)
+endif()
+
+
 # Find OpenMP installation - In the future this may be made optional
 find_package(OpenMP REQUIRED)
 target_link_libraries(zpic_em2d PRIVATE OpenMP::OpenMP_CXX)
