@@ -75,7 +75,7 @@ class Current {
         J = new Cyl3CylGrid<float> ( nmodes, ntiles, nx, gc, parallel );
         J -> set_name( "Current" );
 
-        // Zero initial charge
+        // Zero initial current
         // This is only relevant for diagnostics, current is always zeroed before deposition
         J -> zero();
 
@@ -225,7 +225,7 @@ class Current {
     int set_moving_window() { 
         if ( iter == 0 ) {
             if ( J -> part.periodic.x ) {
-                std::cerr << "(*error*) EMF::set_moving_window() - Unable to set_moving_window() with periodic x partition\n";
+                std::cerr << "(*error*) Current::set_moving_window() - Unable to set_moving_window() with periodic x partition\n";
                 return -1; 
             }
 
@@ -250,6 +250,10 @@ class Current {
         filter = new_filter.clone();
     }
 
+    /**
+     * @brief Apply digital filter
+     * 
+     */
     void apply_filter() {
         if ( filter != nullptr ) {
             auto & J0 = J -> mode0();

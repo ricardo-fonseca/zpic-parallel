@@ -497,8 +497,22 @@ public:
      * 
      * @param msg   (optional) Message to print before printing particle information
      */
-    void info_np() {
-        particles->info_np();
+    void info_np( std::string msg = "" ) {
+        particles->info_np( msg );
+    }
+
+    /**
+     * @brief Validates particle data
+     * 
+     * @details In case of invalid particle data prints out an error message and aborts
+     *          the program
+     * 
+     * @param msg   Message to print in case of error
+     * @param over  Amount of extra cells indices beyond limit allowed. Used
+     *              when checking the buffer before tile_sort(). Defaults to 0
+     */
+    void validate( std::string msg, int const over = 0 ) {
+        particles -> validate( msg, over );
     }
 };
 

@@ -46,7 +46,8 @@ CXXFLAGS += -Xcompiler -Wall -std=c++17
 # SOURCE = parallel.cpp particles.cpp emf.cpp laser.cpp current.cpp \
          udist.cpp density.cpp species.cpp
 
-SOURCE = parallel.cpp particles.cpp emf.cpp laser.cpp current.cpp
+SOURCE = parallel.cpp particles.cpp emf.cpp laser.cpp current.cpp \
+         udist.cpp density.cpp species.cpp
 
 SOURCE += main.cpp
 

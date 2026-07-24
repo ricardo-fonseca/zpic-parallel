@@ -12,8 +12,8 @@
  * Optimized parameters for NVIDIA A100
  */
 constexpr int opt_bnd_check_block        = 1024;
-constexpr int opt_update_tile_info_block = 64;
-constexpr int opt_copy_out_block         = 32;
+constexpr int opt_update_tile_info_block = 1024;
+constexpr int opt_copy_out_block         = 1024;
 constexpr int opt_copy_in_block          = 1024;
 
 namespace kernel {
@@ -114,30 +114,30 @@ void ParticleSort::exchange_np() {
     };
 
     // Post receives
-    unsigned int idx = 0;
+    size_t offset = 0;
     for( auto dir = 0; dir < 9; dir++ ) {            
         if ( neighbor[dir] >= 0 ) {
-            MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+            MPI_Irecv( &recv.buffer[offset], size(dir), MPI_INT, neighbor[dir],
                     source_tag(dir), comm, &recv.requests[dir]);
         } else {
             recv.requests[dir] = MPI_REQUEST_NULL;
         }
-        idx += size(dir);
+        offset += size(dir);
     }
 
     // Ensure send data is up to date
     device::sync();
 
     // Post sends
-    idx = 0;
+    offset = 0;
     for( auto dir = 0; dir < 9; dir++ ) {
         if ( neighbor[dir] >= 0 ) {
-            MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+            MPI_Isend( &send.buffer[offset], size(dir), MPI_INT, neighbor[dir],
                 dest_tag(dir), comm, &send.requests[dir]);
         } else {
             send.requests[dir] = MPI_REQUEST_NULL;
         }
-        idx += size(dir);
+        offset += size(dir);
     }
 
     // Wait for receives to complete
@@ -328,11 +328,11 @@ void gather(
     const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
     const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
 
-    auto const * __restrict__ const ix = &part.ix[ offset ];
-    auto const * __restrict__ const x  = &part.x[ offset ];
-    auto const * __restrict__ const u  = &part.u[ offset ];
-    auto const * __restrict__ const q  = &part.q[ offset ];
-    auto const * __restrict__ const th  = &part.th[ offset ];
+    auto const * __restrict__ const ix = & part.ix[ offset ];
+    auto const * __restrict__ const x  = & part.x [ offset ];
+    auto const * __restrict__ const u  = & part.u [ offset ];
+    auto const * __restrict__ const q  = & part.q [ offset ];
+    auto const * __restrict__ const th = & part.th[ offset ];
 
     for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
@@ -412,20 +412,19 @@ void gather(
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.ntiles.x + tile_idx.x;
 
+    // Spatial offsets of local tile
+    const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
+    const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
 
     // Offset and number of particles on particle buffer
     const auto  offset = part.offset[ tile_id ];
     const auto  np     = part.np[ tile_id ];
 
-    // Spatial offsets of local tile
-    const int offx = (part.tile_off.x + tile_idx.x) * part.nx.x;
-    const int offy = (part.tile_off.y + tile_idx.y) * part.nx.y;
-
-    auto const * __restrict__ const ix = &part.ix[ offset ];
-    auto const * __restrict__ const x  = &part.x[ offset ];
-    auto const * __restrict__ const u  = &part.u[ offset ];
-    auto const * __restrict__ const q  = &part.q[ offset ];
-    auto const * __restrict__ const th  = &part.th[ offset ];
+    auto const * __restrict__ const ix = & part.ix[ offset ];
+    auto const * __restrict__ const x  = & part.x [ offset ];
+    auto const * __restrict__ const u  = & part.u [ offset ];
+    auto const * __restrict__ const q  = & part.q [ offset ];
+    auto const * __restrict__ const th = & part.th[ offset ];
 
     for( int idx = block_thread_rank(); idx < np; idx += block_num_threads() ) {
         float val;
@@ -948,11 +947,11 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
 
     // The _dir_offset variable holds the offset for each of the 9 target
     // tiles so the tmp_* variables just point to the beggining of the buffers
-    auto * __restrict__ tmp_ix  = tmp.ix;
+    auto * __restrict__ tmp_ix = tmp.ix;
     auto * __restrict__ tmp_x  = tmp.x;
     auto * __restrict__ tmp_u  = tmp.u;
     auto * __restrict__ tmp_q  = tmp.q;
-    auto * __restrict__ tmp_th  = tmp.th;
+    auto * __restrict__ tmp_th = tmp.th;
 
     // Number of particles staying in tile
     const int n0 = npt[4];
@@ -1522,12 +1521,11 @@ void validate( ParticleData part, int const over, uint32_t * out ) {
     auto * const __restrict__ q  = &part.q[ offset ];
     auto * const __restrict__ th = &part.th[ offset ];
 
-    __shared__ int _err;
-    _err = 0;
+    __shared__ int _err; _err = 0;
+    block_sync();
 
     int2 const lb = make_int2( -over, -over );
     int2 const ub = make_int2( part.nx.x + over, part.nx.y + over ); 
-    block_sync();
 
     for( int i = block_thread_rank(); i < np; i += block_num_threads() ) {
         int err = 0;
@@ -1624,7 +1622,7 @@ void Particles::validate( std::string msg, int const over ) {
     for( unsigned tile_id = 0; tile_id < ntiles.x * ntiles.y; ++tile_id ) {
         if ( h_np[tile_id] < 0 ) {
             mpi::cout << "tile[" << tile_id << "] - bad np (" << h_np[ tile_id ] << "), should be >= 0\n";
-            err = 1;
+            err = 1; break;
         }
 
         if ( tile_id > 0 ) {
@@ -1632,12 +1630,12 @@ void Particles::validate( std::string msg, int const over ) {
             if ( prev != h_offset[ tile_id ] ) {
                 mpi::cout << "tile[" << tile_id << "] - bad offset (" << h_offset[ tile_id ] << ")"
                           << ", does not match previous tile info, should be " << prev << '\n';
-                err = 1;
+                err = 1; break;
             }
         } else {
             if ( h_offset[ tile_id ] != 0 ) {
                 mpi::cout << "tile[" << tile_id << "] - bad offset (" << h_offset[ tile_id ] << "), should be 0\n";
-                err = 1;
+                err = 1; break;
             }
         }   
     }
@@ -1657,8 +1655,9 @@ void Particles::validate( std::string msg, int const over ) {
     kernel::validate <<< grid, block >>> ( *this, over, dev_tmp_uint32.ptr() );
 
     if ( dev_tmp_uint32.get() ) {
-        std::cerr << "(*error*) " << msg << " (np = " << np_local() << ")\n";
-        ABORT( "invalid particle found, aborting..." );
+        mpi::cout << "(*error*) " << msg << " (np = " << np_local() << ')'
+                  << " invalid particle found, aborting...\n";
+        mpi::abort(1);
     } else {
         mpi::cout << "(*info*) " << msg << " particles ok\n";
     }
@@ -1831,7 +1830,7 @@ namespace kernel {
 
         {   // Pack theta charge data
             size_t pos = comp_off + msg_buffer_off * sizeof(float2);
-            float * const __restrict__ src = (float *) &tmp.q[ offset ];
+            float * const __restrict__ src = (float *) &tmp.th[ offset ];
             float * const __restrict__ tgt = (float *) &msg_buffer[ pos ];
             for( int i = block_thread_rank(); i < 2 * np; i += block_num_threads() )
                 tgt[i] = src[i];
@@ -1908,7 +1907,12 @@ namespace kernel {
 
         const uint2 ntiles = part.ntiles;
         
-        constexpr size_t particle_size = sizeof(int2) + sizeof(float2) + sizeof(float3);
+        constexpr size_t particle_size =
+               sizeof(int2) +       // ix
+               sizeof(float2) +     // x
+               sizeof(float3) +     // u
+               sizeof(float) +      // q
+               sizeof(float2);      // θ
 
         ///@brief Message tile offset for each direction
         __shared__ unsigned int msg_tile_off[9];
@@ -2035,7 +2039,7 @@ namespace kernel {
             {   // Unpack q charge data
                 size_t pos = comp_off + msg_buffer_off * sizeof(float);
                 float * const __restrict__ src = (float *) &msg_buffer[ pos ];
-                float * const __restrict__ tgt = (float *) &part.u[ tgt_offset ];
+                float * const __restrict__ tgt = (float *) &part.q[ tgt_offset ];
                 for( int i = block_thread_rank(); i < recv_np; i += block_num_threads() )
                     tgt[i] = src[i];
 
@@ -2045,7 +2049,7 @@ namespace kernel {
             {   // Unpack θ angular position data
                 size_t pos = comp_off + msg_buffer_off * sizeof(float2);
                 float * const __restrict__ src = (float *) &msg_buffer[ pos ];
-                float * const __restrict__ tgt = (float *) &part.u[ tgt_offset ];
+                float * const __restrict__ tgt = (float *) &part.th[ tgt_offset ];
                 for( int i = block_thread_rank(); i < 2 * recv_np; i += block_num_threads() )
                     tgt[i] = src[i];
 
