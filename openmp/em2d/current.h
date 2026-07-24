@@ -60,21 +60,21 @@ class Current {
      * 
      * @return auto 
      */
-    auto get_iter() { return iter; }
+    auto get_iter() const { return iter; }
 
     /**
      * @brief Get the time step (dt) value
      * 
      * @return auto 
      */
-    auto get_dt() { return dt; }
+    auto get_dt() const { return dt; }
 
     /**
      * @brief Get the boundary condition type
      * 
      * @return current::bc_type 
      */
-    current::bc_type get_bc( ) { return bc; }
+    current::bc_type get_bc( ) const { return bc; }
 
     /**
      * @brief Set the boundary condition type

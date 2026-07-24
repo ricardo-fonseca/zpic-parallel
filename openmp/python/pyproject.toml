@@ -1,3 +1,30 @@
 [build-system]
-requires = ["setuptools", "cython"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core >=0.10", "nanobind >=2.2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "em2d"
+version = "0.1.0"
+description = "Python bindings for the ZPIC EM2D plasma physics code"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Ricardo Fonseca" }]
+dependencies = [
+    "numpy",
+    "matplotlib",   # for visxd.py; drop if optional
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ipykernel"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+# wheel.py-api = "cp312"       # or leave unset for stable ABI; see note below
+
+# Tell scikit-build-core where your pure-Python sources live
+wheel.packages = ["python/em2d"]
+
+[tool.scikit-build.cmake.define]
+# Any -D flags you want to forward, e.g.:
+# CMAKE_BUILD_TYPE = "Release"

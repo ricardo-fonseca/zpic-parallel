@@ -1,16 +1,11 @@
-# BUILD_LIB = ./lib
-# --build-lib=$(BUILD_LIB)
+.PHONY: dev build clean
 
-all:
-	python3 setup.py build_ext --inplace
+dev:
+	pip install --no-build-isolation -Ceditable.rebuild=true -ve .
+
+build:
+	pip wheel . -w dist/
 
 clean:
-	rm -rf build \
-	em2d/*.cpp \
-	em2d/laser/*.cpp \
-	em2d/udist/*.cpp \
-	em2d/density/*.cpp \
-	em2d/filter/*.cpp \
-	em2d/*.so em2d/em2d/*.so
-
-
+	rm -rf build dist *.egg-info
+	find python -name __pycache__ -exec rm -rf {} +

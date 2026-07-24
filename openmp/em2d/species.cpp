@@ -1715,6 +1715,7 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
     particles = nullptr;
     tmp = nullptr;
     sort = nullptr;
+    np_inj = nullptr;
 }
 
 
@@ -1792,10 +1793,13 @@ void Species::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
  * 
  */
 Species::~Species() {
-    memory::free( np_inj );
-    delete( tmp );
-    delete( sort );
-    delete( particles );
+    // This test is required should the Species object be destroyed before it
+    // is initialized
+    if ( np_inj != nullptr )    memory::free( np_inj );
+    if ( tmp != nullptr )       delete( tmp );
+    if ( sort != nullptr )      delete( sort );
+    if ( particles != nullptr ) delete( particles );
+
     delete( density );
     delete( udist );
 };
