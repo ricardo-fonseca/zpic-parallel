@@ -96,6 +96,8 @@ void interpolate_fld(
 /**
  * @brief Advance momentum using a relativistic Boris pusher.
  * 
+ * @note
+ * 
  * The momentum advance in this method is split into 3 parts:
  * 1. Perform half of E-field acceleration
  * 2. Perform full B-field rotation
@@ -182,8 +184,8 @@ float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, double & ene
 /**
  * @brief Advance momentum using a relativistic Boris pusher for high magnetic fields
  * 
- * This is similar to the dudt_boris method above, but the rotation is done using
- * using an exact Euler-Rodriguez method.2
+ * @note This is similar to the dudt_boris method above, but the rotation is done using
+ * using an exact Euler-Rodriguez method.
  * 
  * @param tem 
  * @param e 
@@ -360,7 +362,9 @@ inline void dep_current_seg(
     const auto rcr0 = 1.0f / std::sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
     const auto rcr1 = 1.0f / std::sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
 
+    /// @brief Initial θ
     const auto θ0 = make_float2( t0.x * rcr0, t0.y * rcr0 );
+    /// @brief Final θ
     const auto θ1 = make_float2( t1.x * rcr1, t1.y * rcr1 );
 
     const auto xif = t0.x + t1.x;
@@ -1134,12 +1138,13 @@ Species::Species( std::string const name, float const m_q, uint3 const ppc ):
 /**
  * @brief Initialize data structures and inject initial particle distribution
  * 
- * @param nmodes_            Number of cylindrical modes (including fundamental mode)
+ * @param nmodes_           Number of cylindrical modes (including fundamental mode)
  * @param box_              Global simulation box size
- * @param ntiles            Number of tiles
+ * @param global_ntiles     Global number of tiles
  * @param nx                Individual tile grid size
  * @param dt_               Time step
  * @param id_               Species unique identifier
+ * @param parallel          Parallel partition
  */
 void Species::initialize( int nmodes_, float2 const box_, uint2 const global_ntiles, uint2 const nx,
     float const dt_, int const id_, Partition & parallel ) {
@@ -1170,6 +1175,7 @@ void Species::initialize( int nmodes_, float2 const box_, uint2 const global_nti
     // Set cell size
     dx.x = box.x / (global_nx.x);
     dx.y = box.y / (global_nx.y);
+
     /// @brief Number of tiles in local parallel node
     uint2 ntiles = parallel.grid_size( global_ntiles );
 
@@ -1227,13 +1233,13 @@ void Species::initialize( int nmodes_, float2 const box_, uint2 const global_nti
  */
 Species::~Species() {
     memory::free( np_inj );
+
     delete( tmp );
     delete( sort );
     delete( particles );
     delete( density );
     delete( udist );
 };
-
 
 /**
  * @brief Inject particles in the complete simulation box
@@ -1249,6 +1255,7 @@ void Species::inject( ) {
 /**
  * @brief Inject particles in a specific cell range
  * 
+ * @param range     Cell range in which to inject
  */
 void Species::inject( bnd<unsigned int> range ) {
 
@@ -1278,11 +1285,8 @@ void Species::np_inject( bnd<unsigned int> range, int * np ) {
 /**
  * @brief Physical boundary conditions for the x direction 
  * 
- * @param ntiles    Number of tiles
  * @param tile_idx  Tile index
- * @param tiles     Particle tile information
- * @param data      Particle data
- * @param nx        Tile grid size
+ * @param part      Particle data
  * @param bc        Boundary condition
  */
 void species_bcx(
@@ -1338,11 +1342,9 @@ void species_bcx(
 /**
  * @brief Physical boundary conditions for the y direction (upper bound only)
  * 
- * @param ntiles    Number of tiles
  * @param tile_idx  Tile index
- * @param tiles     Particle tile information
- * @param data      Particle data
- * @param nx        Tile grid size
+ * @param dr.       Radial cell size
+ * @param part      Particle data
  * @param bc        Boundary condition
  */
 void species_bcy_upper(
@@ -1496,6 +1498,21 @@ void Species::advance( EMF const &emf, Current &current ) {
     iter++;
 }
 
+/**
+ * @brief Advance particles 1 iteration without using EM fields
+ * 
+ * @note Use for debug purposes only
+ * 
+ * This routine will:
+ * 1. Advance positions and deposit current
+ * 2. Process boundary conditions
+ * 3. Handle moving window algorith,
+ * 4. Sort particles according to tiles
+ * 
+ * The routine does not advance momenta
+ * 
+ * @param current   Electric current density
+ */
 void Species::advance_mov_window( Current &current ) {
 
     if ( moving_window.needs_move( (iter+1) * dt ) ) {
@@ -1547,6 +1564,19 @@ void Species::advance_mov_window( Current &current ) {
     iter++;
 }
 
+/**
+ * @brief Advance particles 1 iteration
+ * 
+ * This routine will:
+ * 1. Advance momenta
+ * 2. Advance positions and deposit current
+ * 3. Process boundary conditions
+ * 4. Handle moving window algorith,
+ * 5. Sort particles according to tiles
+ * 
+ * @param emf       EM fields
+ * @param current   Electric current density
+ */
 void Species::advance_mov_window( EMF const &emf, Current &current ) {
 
     // Advance momenta
@@ -1729,6 +1759,7 @@ void move(
         float2 delta = make_float2( Δz, Δr );
 
         auto x1 = x0 + delta;
+        // Check for cell crossings
         auto deltai = make_int2(
             ((x1.x >= 0.5f) - (x1.x < -0.5f)),
             ((x1.y >= 0.5f) - (x1.y < -0.5f))
@@ -1763,7 +1794,6 @@ void move(
  * @param shift     Additional cell shift for particles, defaults to 0
  */
 void Species::move( const int2 shift )
-
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -2166,7 +2196,6 @@ void Species::save() const {
         part::quant::ux, part::quant::uy, part::quant::uz
     };
 
-
     const char * qnames[] = {
         "z","r",
         "q",
@@ -2177,7 +2206,7 @@ void Species::save() const {
     const char * qlabels[] = {
         "z","r",
         "q",
-        "\\cos θ", "\\sin θ",
+        "\\cos \\theta", "\\sin \\theta",
         "u_x","u_y","u_z"
     };
 

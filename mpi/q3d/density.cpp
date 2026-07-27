@@ -310,7 +310,7 @@ namespace kernel {
 /**
  * @brief Kernel for injecting step profile
  * 
- * @tparam dir      Step direction ( coord::x | coord::y )
+ * @tparam dir      Step direction ( coord::z | coord::r )
  * @param tile_idx  Tile index (x,y)
  * @param range     Cell range to inject particles in
  * @param step      Step position (normalized to node grid coordinates)
