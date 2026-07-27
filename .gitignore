@@ -56,4 +56,6 @@ cuda/q3d/zpic
 openmp/em2d/zpic
 openmp/em2ds/zpic
 openmp/q3d/zpic
-openmp/python/em2d.cpp
+
+cuda/python/build
+openmp/python/build

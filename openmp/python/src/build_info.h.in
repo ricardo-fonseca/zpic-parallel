@@ -1,0 +1,10 @@
+#pragma once
+
+// Auto-generated, do not edit.
+#define ZPIC_BUILD_TYPE            "@ZPIC_BUILD_TYPE@"
+#define ZPIC_COMPILER_ID           "@ZPIC_COMPILER_ID@"
+#define ZPIC_COMPILER_VERSION      "@ZPIC_COMPILER_VERSION@"
+#define ZPIC_CXX_STANDARD          "@ZPIC_CXX_STANDARD@"
+
+#define ZPIC_COMPILE_OPTIONS       "@ZPIC_COMPILE_OPTIONS@"
+#define ZPIC_COMPILE_DEFS          "@ZPIC_COMPILE_DEFS@"

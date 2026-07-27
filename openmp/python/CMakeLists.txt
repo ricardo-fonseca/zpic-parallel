@@ -58,25 +58,34 @@ target_link_libraries(zpic_em2d PRIVATE OpenMP::OpenMP_CXX)
 
 set_property(TARGET zpic_em2d PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-get_target_property(opts zpic_em2d COMPILE_OPTIONS)
-get_target_property(defs zpic_em2d COMPILE_DEFINITIONS)
+###
+# Include build information
 
-# Create file with compile options
-file(GENERATE
-    OUTPUT  "${CMAKE_CURRENT_BINARY_DIR}/build_info.h"
-    CONTENT
-"// Auto-generated, do not edit.
-#pragma once
-#define ZPIC_BUILD_TYPE       \"$<CONFIG>\"
-#define ZPIC_COMPILER_ID      \"${CMAKE_CXX_COMPILER_ID}\"
-#define ZPIC_COMPILER_VERSION \"${CMAKE_CXX_COMPILER_VERSION}\"
-#define ZPIC_CXX_STANDARD     \"$<TARGET_PROPERTY:zpic_em2d,CXX_STANDARD>\"
-#define ZPIC_CXX_FLAGS        \"${CMAKE_CXX_FLAGS}\"
-#define ZPIC_VERSION          \"${PROJECT_VERSION}\"
-#define ZPIC_COMPILE_OPTIONS  \"$<JOIN:${opts}, >\"
-#define ZPIC_COMPILE_DEFS     \"${defs}\"
-"
-    TARGET zpic_em2d
+# Grab target properties
+get_target_property(_zpic_opts zpic_em2d COMPILE_OPTIONS)
+if(NOT _zpic_opts)
+    set(_zpic_opts "")
+endif()
+string(REPLACE ";" " " ZPIC_COMPILE_OPTIONS    "${_zpic_opts}")
+
+# Get target defines. This may be undefined.
+get_target_property(_zpic_defs zpic_em2d COMPILE_DEFINITIONS)
+if(NOT _zpic_defs)
+    set(_zpic_defs "")
+endif()
+string(REPLACE ";" " " ZPIC_COMPILE_DEFS    "${_zpic_defs}")
+
+set(ZPIC_BUILD_TYPE            "${CMAKE_BUILD_TYPE}")
+set(ZPIC_COMPILER_ID           "${CMAKE_CXX_COMPILER_ID}")
+set(ZPIC_COMPILER_VERSION      "${CMAKE_CXX_COMPILER_VERSION}")
+
+get_target_property(_zpic_cxx_std zpic_em2d CXX_STANDARD)
+set(ZPIC_CXX_STANDARD          "${_zpic_cxx_std}")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/build_info.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/build_info.h"
+    @ONLY
 )
 
 target_include_directories(zpic_em2d PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")

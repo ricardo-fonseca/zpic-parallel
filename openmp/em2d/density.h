@@ -6,7 +6,6 @@
 
 #include <iostream>
 
-
 namespace Density {
 
     class Profile {
