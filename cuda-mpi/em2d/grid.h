@@ -307,8 +307,8 @@ void kernel_kernel3_x( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Apply kernel locally
     for( int idx = block_thread_rank(); idx < ext_nx.y * nx.x; idx += block_num_threads() ) {
-        const auto iy = idx / nx.x;
-        const auto ix = idx % nx.x + gc_x_lower;
+        const int iy = idx / nx.x;
+        const int ix = idx % nx.x + gc_x_lower;
         B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
                                   A[ iy * ystride +  ix    ] * b +
                                   A[ iy * ystride + (ix+1) ] * c;
@@ -350,8 +350,8 @@ void kernel_kernel3_y( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Apply kernel locally
     for( int idx = block_thread_rank(); idx < nx.y * ext_nx.x; idx += block_num_threads() ) {
-        const auto iy = idx / ext_nx.x + gc_y_lower;
-        const auto ix = idx % ext_nx.x;
+        const int iy = idx / ext_nx.x + gc_y_lower;
+        const int ix = idx % ext_nx.x;
 
         B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
                                   A[    iy  * ystride + ix ] * b +
@@ -1543,7 +1543,7 @@ class grid {
             size_t shm_size = 2 * tile_vol * sizeof(T);
 
             if ( shm_size > block::shared_mem_size() ) {
-                ABORT("grid::x_shift_left(), tile size too large, insufficient shared memory");
+                ABORT("grid::kernel3_x(), tile size too large, insufficient shared memory");
             }
 
             block::set_shmem_size( kernel_kernel3_x<T,S>, shm_size );
@@ -1573,6 +1573,10 @@ class grid {
             dim3 grid( ntiles.x, ntiles.y );
 
             size_t shm_size = 2 * tile_vol * sizeof(T);
+
+            if ( shm_size > block::shared_mem_size() ) {
+                ABORT("grid::kernel3_y(), tile size too large, insufficient shared memory");
+            }
 
             block::set_shmem_size( kernel_kernel3_y<T,S>, shm_size );
             kernel_kernel3_y <<< grid, 1024, shm_size >>> ( 

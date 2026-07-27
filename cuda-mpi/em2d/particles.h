@@ -815,9 +815,9 @@ class Particles : public ParticleData {
         device::zero( offset, bsize );
 
         // Particle data
-        ix = device::malloc<int2>( max_part );
-        x = device::malloc<float2>( max_part );
-        u = device::malloc<float3>( max_part );
+        ix = device::malloc<int2>  ( max_part );
+        x  = device::malloc<float2>( max_part );
+        u  = device::malloc<float3>( max_part );
 
         // Default global periodic boundaries to parallel partition type
         periodic = parallel.periodic;
@@ -1113,7 +1113,9 @@ class Particles : public ParticleData {
      * @return size_t 
      */
     size_t constexpr particle_size() {
-        return sizeof(int2) + sizeof(float2) + sizeof(float3);
+        return sizeof(int2) +       // ix
+               sizeof(float2) +     // x
+               sizeof(float3);      // u
     };
 
 
@@ -1161,6 +1163,8 @@ class Particles : public ParticleData {
             std::cout << "-------------[info]> " << msg << '\n';
         }
 
+        int np;
+
         for( int k = 0; k < parallel.get_size() ; k++ ) {
             if ( k == parallel.get_rank() ) {
                 std::cout << '\n';
@@ -1174,10 +1178,15 @@ class Particles : public ParticleData {
                     }
                     mpi::cout << '\n';
                 }
-
-                mpi::cout << "#particles total: " << np_local() << '\n';
+                np = np_local();
+                mpi::cout << "#particles node: " << np << '\n';
             }
             parallel.barrier();
+        }
+
+        parallel.reduce( &np, 1, mpi::sum, 0 );
+        if (parallel.get_rank() == 0 ) {
+            mpi::cout << "#particles all: " << np << '\n';
         }
 
         host::free( h_np );
