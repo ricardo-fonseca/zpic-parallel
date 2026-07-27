@@ -373,8 +373,8 @@ void kernel_kernel3_x( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Apply kernel locally
     for( int idx = block_thread_rank(); idx < ext_nx.y * nx.x; idx += block_num_threads() ) {
-        const auto iy = idx / nx.x;
-        const auto ix = idx % nx.x + gc_x_lower;
+        const int iy = idx / nx.x;
+        const int ix = idx % nx.x + gc_x_lower;
         B [ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
                                   A[ iy * ystride +  ix    ] * b +
                                   A[ iy * ystride + (ix+1) ] * c;
@@ -416,8 +416,8 @@ void kernel_kernel3_y( T * const __restrict__ d_buffer, const uint2 ntiles,
 
     // Apply kernel locally
     for( int idx = block_thread_rank(); idx < nx.y * ext_nx.x; idx += block_num_threads() ) {
-        const auto iy = idx / ext_nx.x + gc_y_lower;
-        const auto ix = idx % ext_nx.x;
+        const int iy = idx / ext_nx.x + gc_y_lower;
+        const int ix = idx % ext_nx.x;
 
         B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
                                   A[    iy  * ystride + ix ] * b +

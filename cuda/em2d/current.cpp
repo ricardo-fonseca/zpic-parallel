@@ -11,7 +11,7 @@
  * @param dt        Time step
  */
 Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
-    float const dt ) : box(box), 
+    double const dt ) : box(box), 
     dx( { box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
     dt(dt)
 {

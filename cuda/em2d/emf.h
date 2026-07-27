@@ -13,7 +13,7 @@
 #include <string>
 
 namespace emf {
-    enum field  { e, b };
+    enum field  { e = 0, b };
 
     namespace bc {
         enum type { none = 0, periodic, pec, pmc };
@@ -95,10 +95,27 @@ class EMF {
      * 
      * @return auto 
      */
-    int get_iter() { return iter; }
+    auto get_iter() const { return iter; }
 
+    /**
+     * @brief Get the time step (dt) value
+     * 
+     * @return auto 
+     */
+    auto get_dt() const { return dt; }
+
+    /**
+     * @brief Get the boundary condition type
+     * 
+     * @return emf::bc_type 
+     */
     emf::bc_type get_bc( ) { return bc; }
 
+    /**
+     * @brief Set the boundary condition type
+     * 
+     * @param new_bc 
+     */
     void set_bc( emf::bc_type new_bc ) {
 
         // Validate parameters

@@ -137,32 +137,6 @@ private:
      */
     void move_window_inject();
 
-    /**
-     * @brief Deposit 1D phasespace density
-     * 
-     * @param d_data    Data buffer
-     * @param q         Quantity for axis
-     * @param range     Value range
-     * @param size      Number of grid points
-     */
-    void dep_phasespace( float * const d_data, 
-        phasespace::quant q, float2 const range, unsigned const size ) const;
-
-    /**
-     * @brief Deposit 2D phasespace density
-     * 
-     * @param d_data    Data buffer
-     * @param quant0    axis 0 quantity
-     * @param range0    axis 0 value range
-     * @param size0     axis 0 number of points
-     * @param quant1    axis 1 quantity
-     * @param range1    axis 1 value range
-     * @param size1     axis 1 number of points
-     */
-    void dep_phasespace( float * const d_data,
-        phasespace::quant quant0, float2 range0, unsigned const size0,
-        phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
-
 public:
 
      /// @brief Species name
@@ -427,6 +401,51 @@ public:
     }
 
     /**
+     * @brief Gets the number of iterations
+     * 
+     * @return auto 
+     */
+    auto get_iter() const {
+        return iter;
+    }
+
+    /**
+     * @brief Gets the time step (dt)
+     * 
+     * @return auto 
+     */
+    auto get_dt() const {
+        return dt;
+    }
+
+    /**
+     * @brief Gets the number of tiles
+     * 
+     * @return auto 
+     */
+    auto get_ntiles() const {
+        return particles -> ntiles;
+    }
+
+    /**
+     * @brief Gets the tile grid size
+     * 
+     * @return auto 
+     */
+    auto get_nx() const {
+        return particles -> nx;
+    }
+
+    /**
+     * @brief Gets the simulation box size
+     * 
+     * @return auto 
+     */
+    auto get_box() const {
+        return box;
+    }
+
+    /**
      * @brief Returns the maximum number of particles per tile
      * 
      * @return auto 
@@ -458,6 +477,17 @@ public:
     void save_charge() const;
 
     /**
+     * @brief Deposit 1D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param q         Quantity for axis
+     * @param range     Value range
+     * @param size      Number of grid points
+     */
+    void dep_phasespace( float * const d_data, 
+        phasespace::quant q, float2 const range, unsigned const size ) const;
+
+    /**
      * @brief Save 1D phasespace density to file
      * 
      * @param quant     Phasespace quantity
@@ -466,6 +496,22 @@ public:
      */
     void save_phasespace ( 
         phasespace::quant quant, float2 const range, int const size ) const;
+
+    /**
+     * @brief Deposit 2D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param quant0    axis 0 quantity
+     * @param range0    axis 0 value range
+     * @param size0     axis 0 number of points
+     * @param quant1    axis 1 quantity
+     * @param range1    axis 1 value range
+     * @param size1     axis 1 number of points
+     */
+    void dep_phasespace( float * const d_data,
+        phasespace::quant quant0, float2 range0, unsigned const size0,
+        phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
+
 
     /**
      * @brief Save 2D phasespace density to file
@@ -480,6 +526,29 @@ public:
     void save_phasespace ( 
         phasespace::quant quant0, float2 const range0, int const size0,
         phasespace::quant quant1, float2 const range1, int const size1 ) const;
+
+    /**
+     * @brief Gather particle quantity into buffer
+     * 
+     * @note Positions will be in simulation units
+     * 
+     * @param quant     Quantity to gather 
+     * @param d_dat     Output data buffer, assumed to have size >= np 
+     */
+    void gather( part::quant quant, float * const __restrict__ d_data ) {
+        switch (quant) {
+        case part::quant::x : 
+            particles -> gather ( part::quant::x, d_data, make_float2( dx.x, 0 ) );
+            break; 
+        case part::quant::y: 
+            particles -> gather ( part::quant::y, d_data, make_float2( dx.y, 0 ) );
+            break;
+        default:
+            particles -> gather ( quant, d_data );
+            break;
+        }
+
+    }
 
 };
 

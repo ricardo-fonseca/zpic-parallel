@@ -1,5 +1,5 @@
-#ifndef __DENSITY__
-#define __DENSITY__
+#ifndef DENSITY_H_
+#define DENSITY_H_
 
 #include "zpic.h"
 #include "particles.h"
@@ -13,7 +13,7 @@ namespace Density {
 
         const float n0;
 
-        Profile(float const n0) : n0(fabs(n0)) {};
+        Profile(float const n0) : n0(std::abs(n0)) {};
 
         virtual Profile * clone() const = 0;
         
@@ -32,10 +32,10 @@ namespace Density {
 
         public:
 
-        None( float const n0) : Profile( n0 ) { };
+        None( ) : Profile( 0.f ) { };
 
         None * clone() const override {
-            return new None( n0 );
+            return new None( );
         };
         void inject( Particles & part, uint2 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const override {
             // no injection
