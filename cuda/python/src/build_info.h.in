@@ -1,0 +1,16 @@
+#pragma once
+
+// Auto-generated, do not edit.
+#define ZPIC_BUILD_TYPE            "@ZPIC_BUILD_TYPE@"
+#define ZPIC_COMPILER_ID           "@ZPIC_COMPILER_ID@"
+#define ZPIC_COMPILER_VERSION      "@ZPIC_COMPILER_VERSION@"
+
+#define ZPIC_C_FLAGS               "@ZPIC_C_FLAGS_STR@"
+#define ZPIC_CXX_FLAGS             "@ZPIC_CXX_FLAGS_STR@"
+
+#define ZPIC_COMPILE_DEFS          "@ZPIC_COMPILE_DEFS_STR@"
+
+#define ZPIC_CUDA_COMPILER_ID      "@ZPIC_CUDA_COMPILER_ID@"
+#define ZPIC_CUDA_COMPILER_VERSION "@ZPIC_CUDA_COMPILER_VERSION@"
+#define ZPIC_CUDA_FLAGS            "@ZPIC_CUDA_FLAGS_STR@"
+#define ZPIC_CUDA_ARCHITECTURES    "@ZPIC_CUDA_ARCHITECTURES@"

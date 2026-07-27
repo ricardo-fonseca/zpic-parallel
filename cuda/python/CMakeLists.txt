@@ -31,9 +31,10 @@ execute_process(
   OUTPUT_VARIABLE nanobind_DIR)
 find_package(nanobind CONFIG REQUIRED)
 
-# --- CUDA toolkit (for cudart, cuda_runtime.h, etc.) ---
+# CUDA Toolkit
 find_package(CUDAToolkit REQUIRED)
 
+# Since we don't use .cu for CUDA files we need to set this manually
 set_source_files_properties(src/em2d/emf.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(src/em2d/laser.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(src/em2d/particles.cpp PROPERTIES LANGUAGE CUDA)
@@ -43,7 +44,7 @@ set_source_files_properties(src/em2d/density.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(src/em2d/species.cpp PROPERTIES LANGUAGE CUDA)
 set_source_files_properties(src/util.cpp PROPERTIES LANGUAGE CUDA)
 
-# The ZPIC code stays as a separete lib
+# The ZPIC code stays as a separate lib
 add_library(zpic_em2d STATIC 
   src/em2d/emf.cpp 
   src/em2d/laser.cpp 
@@ -81,29 +82,55 @@ set_property(TARGET zpic_em2d PROPERTY POSITION_INDEPENDENT_CODE ON)
 # Link the CUDA runtime
 target_link_libraries(zpic_em2d PRIVATE CUDA::cudart)
 
-get_target_property(opts zpic_em2d COMPILE_OPTIONS)
-get_target_property(defs zpic_em2d COMPILE_DEFINITIONS)
+###
+# Include build information
 
-# Create file with compile options
-file(GENERATE
-    OUTPUT  "${CMAKE_CURRENT_BINARY_DIR}/build_info.h"
-    CONTENT
-"// Auto-generated, do not edit.
-#pragma once
-#define ZPIC_BUILD_TYPE       \"$<CONFIG>\"
-#define ZPIC_COMPILER_ID      \"${CMAKE_CXX_COMPILER_ID}\"
-#define ZPIC_COMPILER_VERSION \"${CMAKE_CXX_COMPILER_VERSION}\"
-#define ZPIC_CXX_STANDARD     \"$<TARGET_PROPERTY:zpic_em2d,CXX_STANDARD>\"
-#define ZPIC_CXX_FLAGS        \"${CMAKE_CXX_FLAGS}\"
-#define ZPIC_VERSION          \"${PROJECT_VERSION}\"
-"
-    TARGET zpic_em2d
+# Grab target properties
+get_target_property(_zpic_opts zpic_em2d COMPILE_OPTIONS)
+
+set(_zpic_c_flags "")
+set(_zpic_cxx_flags "")
+set(_zpic_cuda_flags "")
+foreach( opt IN LISTS _zpic_opts )
+    if(opt MATCHES "\\$<\\$<COMPILE_LANGUAGE:C>:([^>]+)>")
+        list(APPEND _zpic_c_flags "${CMAKE_MATCH_1}")
+    elseif(opt MATCHES "\\$<\\$<COMPILE_LANGUAGE:CXX>:([^>]+)>")
+        list(APPEND _zpic_cxx_flags "${CMAKE_MATCH_1}")
+    elseif(opt MATCHES "\\$<\\$<COMPILE_LANGUAGE:CUDA>:([^>]+)>")
+        list(APPEND _zpic_cuda_flags "${CMAKE_MATCH_1}")
+    endif()
+endforeach()
+
+string(REPLACE ";" " " ZPIC_C_FLAGS_STR    "${_zpic_c_flags}")
+string(REPLACE ";" " " ZPIC_CXX_FLAGS_STR    "${_zpic_cxx_flags}")
+string(REPLACE ";" " " ZPIC_CUDA_FLAGS_STR    "${_zpic_cuda_flags}")
+
+# Get target defines. This may be undefined.
+get_target_property(_zpic_defs zpic_em2d COMPILE_DEFINITIONS)
+if(NOT _zpic_defs)
+    set(_zpic_defs "")
+endif()
+string(REPLACE ";" " " ZPIC_COMPILE_DEFS_STR    "${_zpic_defs}")
+
+set(ZPIC_BUILD_TYPE            "${CMAKE_BUILD_TYPE}")
+set(ZPIC_COMPILER_ID           "${CMAKE_CXX_COMPILER_ID}")
+set(ZPIC_COMPILER_VERSION      "${CMAKE_CXX_COMPILER_VERSION}")
+set(ZPIC_CUDA_COMPILER_ID      "${CMAKE_CUDA_COMPILER_ID}")
+set(ZPIC_CUDA_COMPILER_VERSION "${CMAKE_CUDA_COMPILER_VERSION}")
+get_target_property(_zpic_cuda_arch zpic_em2d CUDA_ARCHITECTURES)
+set(ZPIC_CUDA_ARCHITECTURES "${_zpic_cuda_arch}")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/build_info.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/build_info.h"
+    @ONLY
 )
 
 target_include_directories(zpic_em2d PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
-
+##
 # The Python extension module
+
 set_source_files_properties(src/bindings.cpp PROPERTIES LANGUAGE CUDA)
 
 nanobind_add_module(
