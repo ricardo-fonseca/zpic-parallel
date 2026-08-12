@@ -1,5 +1,4 @@
-#ifndef VEC_TYPES_H_
-#define VEC_TYPES_H_
+#pragma once
 
 #include <iostream>
 
@@ -196,5 +195,3 @@ __GEN_VEC3( double3, double )
 
 #undef __GEN_VEC3
 
-
-#endif

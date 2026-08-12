@@ -38,7 +38,12 @@ CXXFLAGS += -fopenmp
 # Add FFTW library (single precision)
 
 CXXFLAGS += -I/opt/homebrew/include
-LDFLAGS = -L/opt/homebrew/lib -lfftw3f_omp -lfftw3f
+
+# We need to add -L/opt/homebrew/opt/libomp/lib to avoid a conflict
+# with another version of libomp installed in /opt/homebrew/opt/llvm/lib
+
+LDFLAGS = -L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/lib \
+          -lfftw3f_omp -lfftw3f_mpi -lfftw3f -lm
 
 # LDFLAGS = -lfftw3f_omp -lfftw3f -lm
 
@@ -59,8 +64,8 @@ CXXFLAGS += -DUSE_NEON
 # c11 compliance and full warnings
 CFLAGS += -Wall -std=c11
 
-# c++17 compliance and full warnings (except for VLA extension)
-CXXFLAGS += -Wall -std=c++17 -Wno-unknown-pragmas 
+# c++20 compliance and full warnings (except for VLA extension)
+CXXFLAGS += -Wall -std=c++20 -Wno-unknown-pragmas 
 
 # Disable VLA extension warnings (clang compilers)
 # CXXFLAGS += -Wno-vla-cxx-extension
@@ -68,10 +73,10 @@ CXXFLAGS += -Wno-vla-extension
 
 # --------------------------------------------------------------------------- #
 
-#SOURCE = parallel.cpp particles.cpp emf.cpp laser.cpp current.cpp \
-#         udist.cpp density.cpp species.cpp cathode.cpp
+#SOURCE = emf.cpp laser.cpp current.cpp charge.cpp \
+#         udist.cpp density.cpp particles.cpp species.cpp cathode.cpp
 
-SOURCE = parallel.cpp
+SOURCE = emf.cpp laser.cpp
 
 SOURCE += main.cpp
 

@@ -50,15 +50,17 @@ static const char zdf_magic[ZDF_MAGIC_LENGTH] = {'Z','D','F','1'};
 enum zdf_data_type{ 
     zdf_null,        ///< No type
     zdf_int8,        ///< 8 bit signed intger
-    zdf_uint8,        ///< 8 bit unsigned integer
-    zdf_int16,        ///< 16 bit signed integer
-    zdf_uint16,        ///< 16 bit unsigned integer
-    zdf_int32,        ///< 32 bit signed integer
-    zdf_uint32,        ///< 32 bit unsigned integer
-    zdf_int64,        ///< 64 bit integer
-    zdf_uint64,        ///< 64 bit unsigned integer
-    zdf_float32,    ///< 32 bit floating point
-    zdf_float64        ///< 64 bit floating point
+    zdf_uint8,       ///< 8 bit unsigned integer
+    zdf_int16,       ///< 16 bit signed integer
+    zdf_uint16,      ///< 16 bit unsigned integer
+    zdf_int32,       ///< 32 bit signed integer
+    zdf_uint32,      ///< 32 bit unsigned integer
+    zdf_int64,       ///< 64 bit integer
+    zdf_uint64,      ///< 64 bit unsigned integer
+    zdf_float32,     ///< 32 bit floating point
+    zdf_float64,     ///< 64 bit floating point
+    zdf_complex64,   ///< 64 bit complex floating point (2 x 32 bit)
+    zdf_complex128   ///< 128 bit complex floating point (2 x 64 bit)
 };
 
 typedef enum zdf_data_type t_zdf_data_type;
@@ -78,9 +80,9 @@ enum zdf_file_access_mode {
  * 
  */
 typedef struct ZDF_File{
-    FILE *fp;                            ///< File pointer
-    enum zdf_file_access_mode mode;        ///< Access mode
-    uint32_t ndatasets;                    ///< Number of datasets in file
+    FILE *fp;                          ///< File pointer
+    enum zdf_file_access_mode mode;    ///< Access mode
+    uint32_t ndatasets;                ///< Number of datasets in file
 } t_zdf_file;
 
 /**
@@ -88,13 +90,13 @@ typedef struct ZDF_File{
  * 
  */
 typedef struct ZDF_Dataset {
-    char* name;                            ///< Dataset name
-     enum zdf_data_type data_type;        ///< Data type
-    uint32_t ndims;                        ///< Number of dimensions
-    uint64_t count[zdf_max_dims];        ///< Dimension for each direction
-    void * data;                        ///< Pointer to data buffer
-    uint64_t id;                        ///< Optional integer ID
-    uint64_t offset;                    ///< File position for dataset header
+    char* name;                        ///< Dataset name
+     enum zdf_data_type data_type;     ///< Data type
+    uint32_t ndims;                    ///< Number of dimensions
+    uint64_t count[zdf_max_dims];      ///< Dimension for each direction
+    void * data;                       ///< Pointer to data buffer
+    uint64_t id;                       ///< Optional integer ID
+    uint64_t offset;                   ///< File position for dataset header
 } t_zdf_dataset;
 
 /**
@@ -102,10 +104,10 @@ typedef struct ZDF_Dataset {
  * 
  */
 typedef struct ZDF_Chunk {
-    uint64_t count[zdf_max_dims];        ///< Dimension of chunk
-    uint64_t start[zdf_max_dims];        ///< Start position of data chunk
-    uint64_t stride[zdf_max_dims];        ///< Chunk stride
-    void * data;                        ///< Pointer to chunk data
+    uint64_t count[zdf_max_dims];      ///< Dimension of chunk
+    uint64_t start[zdf_max_dims];      ///< Start position of data chunk
+    uint64_t stride[zdf_max_dims];     ///< Chunk stride
+    void * data;                       ///< Pointer to chunk data
 } t_zdf_chunk;
 
 /**
@@ -113,8 +115,8 @@ typedef struct ZDF_Chunk {
  * 
  */
 enum zdf_axis_type { 
-    zdf_linear,    ///< Linear axis
-    zdf_log10,    ///< Log10 axis
+    zdf_linear, ///< Linear axis
+    zdf_log10,  ///< Log10 axis
     zdf_log2    ///< Log2 axis
 };
 
@@ -123,11 +125,11 @@ enum zdf_axis_type {
  * 
  */
 typedef struct ZDF_GridAxis {
-    char* name;                    ///< Axis name
+    char* name;                 ///< Axis name
     enum zdf_axis_type type;    ///< Axis type
 
-    double min;                    ///< Minimum value
-    double max;                    ///< Maximum value
+    double min;                 ///< Minimum value
+    double max;                 ///< Maximum value
 
     char* label;                ///< Axis label
     char* units;                ///< Axis units
@@ -139,12 +141,12 @@ typedef struct ZDF_GridAxis {
  * 
  */
 typedef struct ZDF_GridInfo {
-    char* name;                        ///< Grid name
-    uint32_t ndims;                    ///< Number of grid dimensions {1..zdf_max_dims}
-    uint64_t count[zdf_max_dims];    ///< Grid dimensions
+    char* name;                     ///< Grid name
+    uint32_t ndims;                 ///< Number of grid dimensions {1..zdf_max_dims}
+    uint64_t count[zdf_max_dims];   ///< Grid dimensions
     char* label;                    ///< Grid label
     char* units;                    ///< Grid units
-    t_zdf_grid_axis *axis;            ///< Grid axis information
+    t_zdf_grid_axis *axis;          ///< Grid axis information
 } t_zdf_grid_info;
 
 /**
@@ -152,8 +154,8 @@ typedef struct ZDF_GridInfo {
  * 
  */
 typedef struct ZDF_Iteration{
-    char* name;            ///< Iteration name
-    int32_t n;            ///< Iteration number
+    char* name;          ///< Iteration name
+    int32_t n;           ///< Iteration number
     double t;            ///< Time (phyical units)
     char* time_units;    ///< Units for time
 } t_zdf_iteration;
@@ -163,13 +165,13 @@ typedef struct ZDF_Iteration{
  * 
  */
 typedef struct ZDF_PartInfo {
-    char* name;            ///< Particle species name
+    char* name;         ///< Particle species name
     char* label;        ///< Particle species label
     uint64_t np;        ///< Number of particles
-    uint32_t nquants;    ///< Number of quantities stored
-    char** quants;        ///< Names of quantities
-    char** qlabels;        ///< Labels for quantities
-    char** qunits;        ///< Units for quantities
+    uint32_t nquants;   ///< Number of quantities stored
+    char** quants;      ///< Names of quantities
+    char** qlabels;     ///< Labels for quantities
+    char** qunits;      ///< Units for quantities
 } t_zdf_part_info;
 
 /**
@@ -177,16 +179,16 @@ typedef struct ZDF_PartInfo {
  * 
  */
 typedef struct ZDF_TrackInfo {
-    char* name;            ///< Particle species name
+    char* name;         ///< Particle species name
     char* label;        ///< Particle species label
-    uint32_t ntracks;    ///< Number of tracks in dataset
-    uint32_t ndump;        ///< Frequency at which the file was updated
-    uint32_t niter;        ///< Number of iterations between track points
+    uint32_t ntracks;   ///< Number of tracks in dataset
+    uint32_t ndump;     ///< Frequency at which the file was updated
+    uint32_t niter;     ///< Number of iterations between track points
 
-    uint32_t nquants;    ///< Number of quantities in tracks
-    char** quants;        ///< Names of quantities
-    char** qlabels;        ///< Labels for quantities
-    char** qunits;        ///< Units for quantities
+    uint32_t nquants;   ///< Number of quantities in tracks
+    char** quants;      ///< Names of quantities
+    char** qlabels;     ///< Labels for quantities
+    char** qunits;      ///< Units for quantities
 } t_zdf_track_info;
 
 // Low level interface

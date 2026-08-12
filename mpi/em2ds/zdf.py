@@ -399,7 +399,19 @@ class ZDFfile:
         data = np.fromfile(self.__file,dtype='<f8',count=size)
         data.shape = np.flip(nx)
         return data
-    
+
+    def __read_complex64_arr(self, nx):
+        size = np.prod(nx)
+        data = np.fromfile(self.__file,dtype='<c8',count=size)
+        data.shape = np.flip(nx)
+        return data
+
+    def __read_complex128_arr(self, nx):
+        size = np.prod(nx)
+        data = np.fromfile(self.__file,dtype='<c16',count=size)
+        data.shape = np.flip(nx)
+        return data
+
     def __read_arr( self, dtype, nx ):
         
         if ( dtype == 5 ):
@@ -414,6 +426,10 @@ class ZDFfile:
             data = self.__read_float32_arr(nx)           
         elif ( dtype == 10 ):
             data = self.__read_float64_arr(nx)           
+        elif ( dtype == 11 ):
+            data = self.__read_complex64_arr(nx)           
+        elif ( dtype == 12 ):
+            data = self.__read_complex128_arr(nx)           
         else:
             print( '(*error*) ZDF: Data type not yet supported.' , file=sys.stderr)
             data = False
@@ -428,8 +444,8 @@ class ZDFfile:
 # Read record header
 # -----------------------------------------------------------------------------
 
-    def read_record(self, skip=False):
-        """read_record(skip=False)
+    def read_record(self, skip = False):
+        """read_record(skip = False)
 
         Reads current record information from file
 
@@ -466,8 +482,8 @@ class ZDFfile:
 # Read string
 # -----------------------------------------------------------------------------
 
-    def read_string(self, rec = False):
-        """read_string(rec = False)
+    def read_string(self, rec = None):
+        """read_string(rec = None)
 
         Reads string record from data file
         
@@ -481,7 +497,7 @@ class ZDFfile:
         string : str
             String data
         """
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
 
         fstring = self.__read_string()
@@ -491,8 +507,8 @@ class ZDFfile:
 # Read iteration
 # -----------------------------------------------------------------------------
 
-    def read_iteration(self, rec = False):
-        """read_iteration( rec = False )
+    def read_iteration(self, rec = None):
+        """read_iteration( rec = None )
 
         Read iteration record from data file
 
@@ -507,7 +523,7 @@ class ZDFfile:
             Iteration data
         """
 
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
         
         if ( rec.type() == 'iteration' ):
@@ -528,8 +544,8 @@ class ZDFfile:
 # Read grid info
 # -----------------------------------------------------------------------------
 
-    def read_grid_info(self, rec = False):
-        """read_grid_info( rec = False )
+    def read_grid_info(self, rec = None):
+        """read_grid_info( rec = None )
 
         Read grid information record from data file
 
@@ -543,7 +559,7 @@ class ZDFfile:
         info : ZDF_Grid_Info()
             Grid information data
         """
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
 
         # Maximum supported version
@@ -586,8 +602,8 @@ class ZDFfile:
 # Read particle info
 # -----------------------------------------------------------------------------
     
-    def read_part_info(self, rec = False):
-        """read_part_info( rec = False )
+    def read_part_info(self, rec = None):
+        """read_part_info( rec = None )
 
         Read particle information record from data file
 
@@ -599,9 +615,9 @@ class ZDFfile:
         Returns
         -------
         info : ZDF_Part_Info()
-            Particle information data
+            Particle information data. On error returns None.
         """
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
 
         # Maximum supported version
@@ -612,7 +628,7 @@ class ZDFfile:
         if ( version > max_version ):
             print( '(*error*) ZDF: Particles info version is higher than supported.' , file=sys.stderr)
             print( '(*error*) ZDF: Please update the code to a newer version.' , file=sys.stderr)
-            return False
+            return None
         
         info      = ZDF_Part_Info()
         info.name = rec.name
@@ -649,8 +665,8 @@ class ZDFfile:
 # Read track info
 # -----------------------------------------------------------------------------
 
-    def read_track_info(self, rec = False):
-        """read_track_info( rec = False )
+    def read_track_info(self, rec = None):
+        """read_track_info( rec = None )
 
         Read track information record from data file
 
@@ -662,10 +678,10 @@ class ZDFfile:
         Returns
         -------
         info : ZDF_Tracks_Info()
-            Track information data
+            Track information data. On error returns None.
         """
 
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
         
         # Maximum supported version
@@ -676,7 +692,7 @@ class ZDFfile:
         if ( version > max_version ):
             print( '(*error*) ZDF: Tracks info version is higher than supported.' , file=sys.stderr)
             print( '(*error*) ZDF: Please update the code to a newer version.' , file=sys.stderr)
-            return False
+            return None
         
         info = ZDF_Tracks_Info()
 
@@ -709,7 +725,7 @@ class ZDFfile:
 # Read dataset
 # -----------------------------------------------------------------------------
 
-    def read_dataset(self, rec = False):
+    def read_dataset(self, rec = None):
         """read_dataset()
 
         Read dataset from data file
@@ -725,13 +741,13 @@ class ZDFfile:
             Numpy ndarray with data
         """
 
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
             
         if ( self.record_type(rec.id) != 'dataset' ):
             print( '(*error*) ZDF: Expected dataset record but found {} instead.'.format(self.record_type(rec.id)),
                   file=sys.stderr)
-            return False
+            return None
             
         
         # Maximum supported version
@@ -742,7 +758,7 @@ class ZDFfile:
         if ( version > max_version ):
             print( '(*error*) ZDF: Dataset version is higher than supported.' , file=sys.stderr)
             print( '(*error*) ZDF: Please update the code to a newer version.' , file=sys.stderr)
-            return False
+            return None
         
         # Version 0x0001 includes id tag
         if ( version >= 1 ):
@@ -761,7 +777,7 @@ class ZDFfile:
 # Read chunked dataset
 # -----------------------------------------------------------------------------
     
-    def read_cdset(self, rec = False, pos = 0 ):
+    def read_cdset(self, rec = None, pos = 0 ):
         """read_cdset()
 
         Read chunked dataset from data file
@@ -776,16 +792,16 @@ class ZDFfile:
         Returns
         -------
         data : numpy.ndarray
-            Numpy ndarray with data
+            Numpy ndarray with data. On error returns None.
         """
 
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
 
         if ( self.record_type(rec.id) != 'cdset_start' ):
             print( '(*error*) ZDF: Expected cdset_start record but found {} instead.'.format(self.record_type(rec.id)),
                   file=sys.stderr)
-            return False
+            return None
 
         # Maximum supported version
         max_version = 0x00000001
@@ -812,6 +828,8 @@ class ZDFfile:
             8 :'uint64',
             9 :'float32',
            10 :'float64',
+           11 :'complex64',     # same as C++ std::complex<float>
+           12 :'complex128',    # same as C++ std::complex<double>
         }       
         
         data = np.zeros( np.flip(nx), dtype = dt[data_type] )
@@ -829,7 +847,7 @@ class ZDFfile:
             rec = self.read_record()
             
             # Check if end of file reached
-            if ( rec is False ):
+            if ( rec is None ):
                 break
             
             name = rec.name
@@ -867,7 +885,7 @@ class ZDFfile:
 # Read arbitrary ZDF element
 # -----------------------------------------------------------------------------
 
-    def read_element( self, rec = False, name = False, type_id = False):
+    def read_element( self, rec = None, name = None, type_id = None):
         """Reads abitrary zdf element from file
 
         Args:
@@ -878,10 +896,10 @@ class ZDFfile:
         Returns:
             multiple data types: zdf element data
         """
-        if ( rec is False ):
+        if ( rec is None ):
             rec = self.read_record()
         
-        if ( name ):
+        if ( name is not None ):
             if (name != rec.name ):
                 print("(*warning*) Requested name does not match record name", file=sys.stderr)
                 print("(*warning*) expected '{}', found '{}".format(name, rec.name), file=sys.stderr)
@@ -890,7 +908,7 @@ class ZDFfile:
         else:
             name = rec.name
         
-        if ( type_id ):
+        if ( type_id is not None ):
             if (type_id != self.record_type(rec.id) ):
                 print("(*warning*) Requested type does not match record type", file=sys.stderr)
                 print("(*warning*) expected '{}', found '{}".format(type_id, self.record_type(rec.id)), file=sys.stderr)
@@ -912,11 +930,11 @@ class ZDFfile:
         elif( type_id == "cdset_chunk" ):
             print("(*warning*) Dataset chunks are not meant to be read directly", file=sys.stderr)
             self.__record_skip(rec)
-            data = False
+            data = None
         elif( type_id == "cdset_end" ):
             print("(*warning*) Dataset end marks have no data", file=sys.stderr)
             self.__record_skip(rec)
-            data = False
+            data = None
         elif( type_id == "iteration" ):
             data = self.read_iteration( rec = rec )
         elif( type_id == "grid_info" ):
@@ -928,7 +946,7 @@ class ZDFfile:
         else:
             print("(*warning*) Unknown element type, skipping", file=sys.stderr)
             self.__record_skip(rec)
-            data = False
+            data = None
         
         return data
 
@@ -1042,7 +1060,7 @@ class ZDFfile:
         rec_list = []
         while True:
             rec = self.read_record(skip=True)
-            if (rec is False):
+            if (rec is None):
                 break
             else:
                 rec_list.append(rec)
@@ -1114,7 +1132,7 @@ def info( file_name ):
     Returns
     -------
     info : ZDF_Info
-        File information. If file is invalid False is returned.
+        File information. If file is invalid None is returned.
     """
     # Open file
     zdf = ZDFfile( file_name )
@@ -1133,7 +1151,7 @@ def info( file_name ):
     else:
         print("File is not a valid ZDF grid, particles or tracks file", file=sys.stderr)
         zdf.close()
-        return False
+        return None
 
     # Close file
     zdf.close()
@@ -1158,7 +1176,7 @@ def read( file_name ):
         + a dictionary of numpy.array for particle data (one entry per quantity).
         + a list of numpy.array for track data (one entry per track)
         Metadata is returned as a ZDF_Info object.
-        If file is invalid False is returned.
+        If file is invalid None is returned.
     """
     # Open file
     zdf = ZDFfile( file_name )
@@ -1181,7 +1199,7 @@ def read( file_name ):
     else:
         print("File is not a valid ZDF grid, particles or tracks file", file=sys.stderr)
         zdf.close()
-        return False
+        return None
 
     # Close file
     zdf.close()

@@ -81,6 +81,8 @@ MPI_Datatype zdf_mpi_type( int data_type ) {
         case( zdf_uint16 ):  return( MPI_UINT16_T );
         case( zdf_uint32 ):  return( MPI_UINT32_T );
         case( zdf_uint64 ):  return( MPI_UINT64_T );
+        case( zdf_complex64 ):  return( MPI_C_FLOAT_COMPLEX );
+        case( zdf_complex128 ):  return( MPI_C_DOUBLE_COMPLEX );
     }
     return( MPI_DATATYPE_NULL );
 }

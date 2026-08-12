@@ -1,24 +1,13 @@
-#ifndef BASIC_GRID_H_
-#define BASIC_GRID_H_
+#pragma once
 
-#include "parallel.h"
+#include "../parallel.hpp"
 
-#include "vec_types.h"
-#include "bnd.h"
-#include "zdf-cpp.h"
+#include "../vec_types.hpp"
+#include "../bounds.hpp"
+#include "../zdf-cpp.h"
 
 
-// Tags are paired so that a message sent with dest::lower is received
-// with source::upper (both have value 0). This ensures MPI tag matching
-// between sender and receiver without extra bookkeeping.
-
-namespace source {
-    enum tag { lower = 0, upper = 1 };
-}
-
-namespace dest {
-    enum tag { upper = 0, lower = 1 };
-}
+namespace grid {
 
 /**
  * @brief Basic grid class
@@ -28,9 +17,18 @@ namespace dest {
  * @tparam T    grid datatype
  */
 template <class T>
-class basic_grid{
+class ghosted{
 
     protected:
+
+    // Tags are paired so that a message sent with dest::lower is received
+    // with source::upper (both have value 0). This ensures MPI tag matching
+    // between sender and receiver without extra bookkeeping.
+
+    /// @brief tags for outgoing messages
+    struct source { enum tag { lower = 0, upper = 1 }; };
+    /// @brief tags for incoming messages
+    struct dest   { enum tag { upper = 0, lower = 1 }; };
 
     /// @brief Parallel partition
     const Partition & part;
@@ -41,8 +39,8 @@ class basic_grid{
     /// @brief Local grid size including guard cells
     uint2 local_ext_dims;
 
-    /// @brief Local grid position on global grid
-    uint2 local_pos;
+    /// @brief Start position of local grid on global grid
+    uint2 local_start;
 
     /// @brief Consider local boundaries periodic
     int2 local_periodic;
@@ -51,21 +49,21 @@ class basic_grid{
     unsigned int offset;
 
     /// @brief Buffers for sending messages
-    pair< Message<T>* > msg_send;
+    bounds< Message<T>* > msg_send;
 
     /// @brief Buffers for receiving messages
-    pair< Message<T>* > msg_recv;
-
-    public:
+    bounds< Message<T>* > msg_recv;
 
     /// @brief Data buffer   
     T * d_buffer;    
 
     /// @brief Global grid size
-    const uint2 global_dims;
+    uint2 global_dims;
 
     /// @brief Tile guard cells
-    const bnd<unsigned int> gc;
+    bounds_2d<unsigned int> gc;
+
+    public:
 
     /// @brief Object name
     std::string name ="unnamed_grid";
@@ -81,7 +79,7 @@ class basic_grid{
      * @param part          Parallel partition
      * @param granularity   Granularity for splitting grid across parallel nodes
      */
-    basic_grid( uint2 const global_dims, bnd<unsigned int> const gc, const Partition & part, 
+    ghosted( uint2 const global_dims, bounds_2d<unsigned int> const gc, const Partition & part, 
         uint2 const granularity = {1,1} ):
         part( part ),
         d_buffer( nullptr ), 
@@ -115,7 +113,7 @@ class basic_grid{
         local_dims = local_chunks * granularity;
         local_ext_dims = { gc.x.lower + local_dims.x + gc.x.upper,
                            gc.y.lower + local_dims.y + gc.y.upper };
-        local_pos  = local_chunk_offset * granularity;
+        local_start  = local_chunk_offset * granularity;
 
         offset = gc.y.lower * local_ext_dims.x + gc.x.lower;
 
@@ -127,9 +125,9 @@ class basic_grid{
         d_buffer = memory::malloc<T>( buffer_size() );
 
         // Get maximum message size
-        int max_msg_size = max(
-            ( local_ext_dims.y ) * max( gc.x.lower, gc.x.upper ),
-            max( gc.y.lower, gc.y.upper ) * ( local_ext_dims.x )
+        int max_msg_size = std::max(
+            ( local_ext_dims.y ) * std::max( gc.x.lower, gc.x.upper ),
+            std::max( gc.y.lower, gc.y.upper ) * ( local_ext_dims.x )
         );
 
         // Allocate message buffers
@@ -140,30 +138,107 @@ class basic_grid{
     }
 
     /**
+     * @brief Move constructor
+     *
+     * @note Transfers ownership of the data buffer and message buffers from
+     *       `other`. After the move, `other` is left in a valid but empty
+     *       state: its pointers are null so its destructor is a no-op.
+     *
+     * @param other     Source grid (will be left empty)
+     */
+    ghosted( ghosted && other ) noexcept :
+        part( other.part ),
+        local_dims( other.local_dims ),
+        local_ext_dims( other.local_ext_dims ),
+        local_start( other.local_start ),
+        local_periodic( other.local_periodic ),
+        offset( other.offset ),
+        msg_send( other.msg_send ),
+        msg_recv( other.msg_recv ),
+        d_buffer( other.d_buffer ),
+        global_dims( other.global_dims ),
+        gc( other.gc ),
+        name( std::move( other.name ) ) {
+            
+        // Leave `other` in a destructible but empty state.
+        other.d_buffer       = nullptr;
+        other.msg_send.lower = nullptr;
+        other.msg_send.upper = nullptr;
+        other.msg_recv.lower = nullptr;
+        other.msg_recv.upper = nullptr;
+    }
+
+    ghosted( uint2 const global_dims, uint2 const local_dims_, uint2 const local_start_, const Partition & part ) :
+        part( part ),
+        d_buffer( nullptr ), 
+        global_dims( global_dims ),
+        gc( bounds_2d<unsigned int>{0} ) {
+
+        local_dims = local_dims_;
+        local_ext_dims = local_dims;
+        local_start = local_start_;
+        offset = 0;
+
+        // Get local periodic flag
+        local_periodic.x = part.periodic.x && (part.dims.x == 1);
+        local_periodic.y = part.periodic.y && (part.dims.y == 1);
+
+        // Allocate main data buffer
+        d_buffer = memory::malloc<T>( buffer_size() );
+
+        // Messages are not required
+        msg_send.lower = nullptr;
+        msg_send.upper = nullptr;
+        msg_recv.lower = nullptr;
+        msg_recv.upper = nullptr;
+    }
+
+    /**
      * @brief Destroy the basic grid object
      * 
      */
-    ~basic_grid() {
+    ~ghosted() {
 
         delete msg_recv.lower;
         delete msg_recv.upper;
         delete msg_send.lower;
         delete msg_send.upper;
 
-        memory::free( d_buffer );
+        if ( d_buffer != nullptr ) memory::free( d_buffer );
     }
 
     /**
      * @brief Delete default copy constructor
      * 
      */
-    basic_grid(const basic_grid&) = delete;
+    ghosted(const ghosted&) = delete;
 
     /**
      * @brief Delete default copy constructor
      * 
      */
-    basic_grid& operator=(const basic_grid&) = delete;
+    ghosted& operator=(const ghosted&) = delete;
+
+    /**
+     * @brief Get a pointer to the data buffer
+     * 
+     * @return T* 
+     */
+    T* data() const noexcept { return d_buffer; }
+
+    /**
+     * @brief Get the global dims object
+     * 
+     * @return uint2 
+     */
+    uint2 get_global_dims() const noexcept { return global_dims; }
+
+    /**
+     * @brief Get the gc object
+     * 
+     * @return uint2 
+     */
+    bounds_2d<unsigned int> get_gc() const noexcept { return gc; }
 
     /**
      * @brief Get the local dims object
@@ -180,11 +255,11 @@ class basic_grid{
     uint2 get_local_ext_dims() const noexcept { return local_ext_dims; }
 
     /**
-     * @brief Get the local pos object
+     * @brief Get the position of the local grid on the global grid
      * 
      * @return uint2 
      */
-    uint2 get_local_pos() const noexcept { return local_pos; }
+    uint2 get_local_start() const noexcept { return local_start; }
 
     /**
      * @brief Get the offset object
@@ -192,6 +267,8 @@ class basic_grid{
      * @return unsigned int 
      */
     unsigned int get_offset() const noexcept { return offset; }
+
+    const Partition & get_part() const noexcept { return  part; }
 
     /**
      * @brief Buffer size
@@ -209,13 +286,12 @@ class basic_grid{
      * @param obj 
      * @return std::ostream& 
      */
-    friend std::ostream& operator<<(std::ostream& os, const basic_grid<T>& obj) {
-        os << obj.name << '{'
+    friend std::ostream& operator<<(std::ostream& os, const ghosted<T>& obj) {
+        return os << obj.name << '{'
            << "local: " << obj.local_dims
-           << ", position: " << obj.local_pos
+           << ", start: " << obj.local_start
            << ", global: " << obj.global_dims
            << '}';
-        return os;
     }
 
     /**
@@ -243,7 +319,7 @@ class basic_grid{
      * 
      * @param rhs         Other object to add
      */
-    void add( const basic_grid<T> &rhs ) {
+    void add( const ghosted<T> &rhs ) {
         if ( rhs.local_ext_dims != local_ext_dims ) {
             std::cerr << "add(): incompatible grid sizes (" << name << ": " << local_ext_dims
                       << " vs " << rhs.name << ": " << rhs.local_ext_dims << ")\n";
@@ -259,9 +335,9 @@ class basic_grid{
      * @brief Operator +=
      * 
      * @param rhs           Other grid to add
-     * @return basic_grid<T>& 
+     * @return ghosted<T>& 
      */
-    basic_grid<T>& operator+=(const basic_grid<T>& rhs) {
+    ghosted<T>& operator+=(const ghosted<T>& rhs) {
         add( rhs );
         return *this;
     }
@@ -754,13 +830,92 @@ class basic_grid{
     }
 
     /**
+     * @brief Transpose the grid
+     * 
+     * @note The operation requires a temporary buffer that must be at least
+     *       local_dim.x * local_dim.y size
+     * 
+     * @param send_buffer   Temporary buffer for transpose operation
+     */
+    void transpose( T * send_buffer) {
+        // Check parallel partition
+        if ( part.dims.x != 1 ) {
+            std::cerr << "only 1D parallel partitions along y are supported\n";
+            mpi::abort(1);
+        }
+
+        if ( local_dims.x % part.dims.y != 0 ) {
+            std::cerr << "The x dimension must divide evenly by the number of y parallel nodes \n";
+            mpi::abort(1);
+        }
+
+        int2 block_dims = make_int2( local_dims.x / part.dims.y, local_dims.y );
+        std::size_t block_size = static_cast<std::size_t> ( block_dims.x ) * block_dims.y;
+
+        // Transpose data and pack send message buffer
+        const T* __restrict__ data = &d_buffer[ offset ];
+        for( int p = 0; p < part.dims.y; p++ ) {
+            // The loop order is optimized for the memory writes to be contiguous
+            for( int ix = 0; ix < block_dims.x; ix++ ) {
+                for( int iy = 0; iy < block_dims.y; iy++ ) {
+                    send_buffer[ p * block_size + ix * block_dims.y + iy ] = 
+                        data[ iy * local_ext_dims.x + ( p * block_dims.x + ix ) ];
+                }
+            }
+        }
+
+        // Reshape grid - only grid parameters are modified, the data buffer remains unchanged
+        local_start.y = (local_start.y * global_dims.x ) / global_dims.y;
+        global_dims = { global_dims.y, global_dims.x };
+        local_dims  = make_uint2( global_dims.x, block_dims.x );       
+        std::swap( gc.x, gc.y );
+        local_ext_dims = make_uint2(
+            gc.x.lower + local_dims.x + gc.x.upper,
+            gc.y.lower + local_dims.y + gc.y.upper
+        );
+        offset = gc.y.lower * local_ext_dims.x + gc.x.lower;
+
+        // Prepare receive MPI type
+        MPI_Datatype tmp_type, recv_type;
+        MPI_Type_vector( block_dims.x, block_dims.y, local_ext_dims.x, mpi::data_type<T>(), &tmp_type);
+        MPI_Type_create_resized( tmp_type, 0, block_dims.y * sizeof(T), &recv_type );
+        MPI_Type_free( &tmp_type );
+        MPI_Type_commit( &recv_type );
+        
+        // Exchange data and unpack
+        auto * __restrict__ out_data = & d_buffer[ offset ];
+        MPI_Alltoall( 
+            send_buffer, block_size, mpi::data_type<T>(), 
+            out_data, 1, recv_type, 
+            part.get_comm()
+        );
+
+        // Free receive type
+        MPI_Type_free( &recv_type );
+    }
+
+    /**
+     * @brief Transpose the data
+     * 
+     * @note Guard cells are not correct after transpose, if required call
+     *       copy_to_gc().
+     * 
+     */
+    void transpose() {
+        T* tmp = memory::malloc<T>( local_dims.x * local_dims.y );
+        transpose( tmp );
+        memory::free( tmp );
+    }
+
+    /**
      * @brief Save grid values to disk
      * 
      * @param filename      Output file name (includes path)
      */
-    void save( std::string filename ) {
+    template< typename T2 = T >
+    void save( const std::string & filename ) {
         // Allocate buffer on host to gather data
-        T * out = memory::malloc<T>( local_dims.x * local_dims.y );
+        T2 * out = memory::malloc<T2>( local_dims.x * local_dims.y );
 
         // Gather data on contiguous grid
         #pragma omp parallel for
@@ -771,7 +926,7 @@ class basic_grid{
         }
 
         uint64_t global[2] = { global_dims.x, global_dims.y };
-        uint64_t start[2]  = { local_pos.x, local_pos.y };
+        uint64_t start[2]  = { local_start.x, local_start.y };
         uint64_t local[2]  = { local_dims.x, local_dims.y };
 
         zdf::save_grid( out, 2, global, start, local, name, filename, part.get_comm() );
@@ -781,4 +936,4 @@ class basic_grid{
     }
 };
 
-#endif
+}

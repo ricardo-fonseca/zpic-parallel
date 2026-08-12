@@ -2,6 +2,8 @@
 #define ZDF_CPP_H_
 
 #include <string>
+#include <complex>
+#include <iostream>
 
 namespace zdf {
 
@@ -32,6 +34,11 @@ template<> constexpr t_zdf_data_type data_type<uint32_t>() { return zdf_uint32; 
 template<> constexpr t_zdf_data_type data_type<float   >() { return zdf_float32; };
 template<> constexpr t_zdf_data_type data_type<double  >() { return zdf_float64; };
 
+// Complex datatypes
+template<> constexpr t_zdf_data_type data_type<std::complex<float >>() { return zdf_complex64; };
+template<> constexpr t_zdf_data_type data_type<std::complex<double>>() { return zdf_complex128; };
+
+
 /**
  * @brief Save grid data to disk
  * 
@@ -46,6 +53,63 @@ template< typename T>
 int save_grid( T *buffer, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path ) {
     static_assert( data_type<T>() != zdf_null, "Unsupported data type");
     return zdf_save_grid( (void*) buffer, data_type<T>(), &info, &iter, path.c_str() );
+}
+
+/**
+ * @brief Save grid data to disk, minimal metadata
+ * 
+ * @tparam T        Datatype
+ * @param buffer    Data buffer
+ * @param ndims     Number of dimensions
+ * @param dims      Grid dimensions
+ * @param name      Grid name
+ * @param filename  File name
+ * @return int      0 on success, -1 on error
+ */
+template< typename T >
+int save_grid( T *buffer, unsigned ndims, uint64_t dims[], 
+               std::string name, std::string filename )
+{
+    if( data_type<T>() == zdf_null ) {
+        std::cerr << "(*error*) Unsupported datatype, aborting.\n";
+        return(-1);
+    }
+
+    // Create ZDF file
+    t_zdf_file zdf;
+    if ( !zdf_open_file( &zdf, filename.c_str(), ZDF_CREATE ) ) {
+        std::cerr << "(*error*) Unable to open ZDF file, aborting.\n";
+        return(-1);
+    }
+
+    // Add file type
+    if ( !zdf_add_string( &zdf, "TYPE", "grid") ) return(0);
+
+    // Add grid info
+    t_zdf_grid_info info;
+    info.name  = (char *) name.c_str();
+    info.ndims = ndims;
+    for( unsigned i = 0; i < ndims; i++ ) info.count[i] = dims[i];
+    info.label = nullptr;
+    info.units = nullptr;
+    info.axis  = nullptr;
+
+    if ( !zdf_add_grid_info( &zdf, &info ) ) return(0);
+
+    // No iteration data
+
+    // Add dataset
+    t_zdf_dataset dataset;
+    dataset.name = info.name;
+    dataset.data_type = data_type<T>();
+    dataset.ndims = info.ndims;
+    dataset.data = (void *) buffer;
+    for( unsigned i = 0; i < info.ndims; i ++) dataset.count[i] = info.count[i];
+
+    if ( !zdf_add_dataset( &zdf, &dataset ) ) return(0);
+
+    // Close ZDF file and return
+    return( zdf_close_file( &zdf ) );
 }
 
 /**
@@ -87,20 +151,38 @@ int close_file( t_zdf_file &file ) { return zdf_close_file(&file);};
  * @return int      Returns 1 on success, 0 on error
  */
 template< typename T>
-int save_grid( t_zdf_chunk &chunk, t_zdf_grid_info &info,
-    t_zdf_iteration &iter, std::string path, MPI_Comm comm,
-    t_zdf_parallel_io_mode par_io_mode = ZDF_MPI )
+int save_grid( t_zdf_chunk &chunk, const t_zdf_grid_info &info,
+    const t_zdf_iteration &iter, const std::string & path, const MPI_Comm comm,
+    const t_zdf_parallel_io_mode par_io_mode = ZDF_MPI )
 {
     static_assert( data_type<T>() != zdf_null, "Unsupported data type");
     return zdf_par_save_grid( &chunk, data_type<T>(), &info, &iter, path.c_str(), comm, par_io_mode );
 }
 
+/**
+ * @brief Saves a distributed parallel grid in a zdf file, minimal metadata
+ * 
+ * @tparam T            Template datatype
+ * @param buffer        Data buffer   
+ * @param ndims         Number of dimensions
+ * @param global        Global grid size
+ * @param start         Position of local chunck on global grid
+ * @param local         Local grid size
+ * @param name          Grid name (metadata)
+ * @param filename      File name
+ * @param comm          MPI communicator
+ * @param par_io_mode   Parallel I/O mode, defaults to ZDF_MPI
+ * @return int 
+ */
 template< typename T >
-int save_grid( T *buffer, unsigned ndims,
-               uint64_t global[], uint64_t start[], uint64_t local[], 
-               std::string name, std::string filename, MPI_Comm comm,
-    t_zdf_parallel_io_mode par_io_mode = ZDF_MPI )
+int save_grid( 
+    T *buffer, const unsigned ndims,
+    const uint64_t global[], const uint64_t start[], const uint64_t local[], 
+    const std::string & name, const std::string & filename, const MPI_Comm comm,
+    const t_zdf_parallel_io_mode par_io_mode = ZDF_MPI )
 {
+    static_assert( data_type<T>() != zdf_null, "Unsupported data type");
+
     t_zdf_grid_info info;
     info.name  = (char *) name.c_str();
     info.ndims = ndims;

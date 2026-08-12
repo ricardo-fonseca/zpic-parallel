@@ -1,5 +1,4 @@
-#ifndef UTILS_H_
-#define UTILS_H_
+#pragma once
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -40,50 +39,6 @@ T roundup( T a ) {
 };
 
 /**
- * @brief Swaps 2 pointer values
- * 
- * @tparam T    Value type
- * @param a     Value a
- * @param b     Value b
- */
-template < typename T >
-void swap( T* &a, T* &b ) {
-    T * tmp = a; a = b; b = tmp;
-}
-
-/**
- * @brief Returns maximum of 2 values
- * 
- * @tparam T    Value type
- * @param a     Value a
- * @param b     Value b
- * @return T    Maximum of a, b
- */
-template < typename T >
-T max( T a, T b ) {
-    return ( b > a ) ? b : a ;
-}
-
-/**
- * @brief Dummy atomicAdd function
- * 
- * @warning This function does not insure atomicity, it is only used as a placeholder
- * to ensure that when porting to other architectures we use a proper atomic operation.
- * 
- * @note The syntax is similar to that of the CUDA atomicAdd() operation, but we use a reference
- * instead of a memory address.
- * 
- * @tparam T    Data type
- * @param a     Reference to data value
- * @param b     Value to be added (atomically)
- * @return T    Data value before operation
- */
-template < typename T >
-inline T atomicAdd( T & a, T b ) {
-    T tmp = a; a += b; return tmp;
-}
-
-/**
  * @brief Prints a 2D array
  * 
  * @tparam T        Data type
@@ -109,19 +64,19 @@ namespace ops {
  * Multiply-add operation: f = (x * y) + z
  * 
  * @note
- * If the FP_FAST_FMA macro is defined then the routine will call std::fma()
- * which is supposed to implement a (faster) fused multply-add operation.
+ * If the `FP_FAST_FMA` macro is defined then the routine will call `std::fma()`
+ * which is supposed to implement a (faster) fused multiply-add operation.
  * Otherwise, we just do the normal operation to avoid calling the much slower
- * fma operation in libm.
+ * `fma` operation in `libm`.
  * 
  * @tparam T 
- * @param x 
- * @param y 
- * @param z 
- * @return auto 
+ * @param x     x value
+ * @param y     y value
+ * @param z     z value
+ * @return T 
  */
 template<typename T>
-constexpr auto fma( T const x, T const y, T const z ) {
+constexpr T fma( T const x, T const y, T const z ) {
 
 #ifdef FP_FAST_FMA
     return std::fma( x, y, z );
@@ -139,7 +94,7 @@ namespace memory {
  * @brief Allocates aligned block of memory
  * 
  * @tparam T        Data type
- * @tparam align    Memory aligment, defaults to 64 bit. Must be a power of 2.
+ * @tparam align    Memory alignment, defaults to 64 bit. Must be a power of 2.
  * @param size      Number of elements (not bytes)
  * @return T*       Pointer to allocated memory
  */
@@ -155,7 +110,7 @@ T * malloc( std::size_t const size ) {
     if ( buffer == nullptr ) {
         std::cerr << "(*error*) Unable to allocate " << size << " elements of type " << typeid(T).name();
         std::cerr << " (" << (size_align) << " bytes)\n";
-        exit(1);
+        std::exit(1);
     }
 
     return buffer;
@@ -211,8 +166,9 @@ namespace omp {
 /**
  * @brief Atomic fetch/add operation
  * 
- * @note If OpenMP support is not enabled this just performs a standard 
- *       fetch/add operation
+ * @note 
+ * If OpenMP support is not enabled this just performs a standard 
+ * fetch/add operation
  * 
  * @tparam T    Template data type
  * @param addr  Target value address
@@ -234,17 +190,17 @@ inline T atomic_fetch_add( T * addr, T val ) {
  * 
  */
 namespace ansi {
-    static const std::string bold(  "\033[1m" );
-    static const std::string reset( "\033[0m" );
+    inline const std::string bold(  "\033[1m" );
+    inline const std::string reset( "\033[0m" );
 
-    static const std::string black   ( "\033[30m" );
-    static const std::string red     ( "\033[31m" );
-    static const std::string green   ( "\033[32m" );
-    static const std::string yellow  ( "\033[33m" );
-    static const std::string blue    ( "\033[34m" );
-    static const std::string magenta ( "\033[35m" );
-    static const std::string cyan    ( "\033[36m" );
-    static const std::string white   ( "\033[37m" );
+    inline const std::string black   ( "\033[30m" );
+    inline const std::string red     ( "\033[31m" );
+    inline const std::string green   ( "\033[32m" );
+    inline const std::string yellow  ( "\033[33m" );
+    inline const std::string blue    ( "\033[34m" );
+    inline const std::string magenta ( "\033[35m" );
+    inline const std::string cyan    ( "\033[36m" );
+    inline const std::string white   ( "\033[37m" );
 
 }
 
@@ -258,7 +214,7 @@ namespace debug {
  * @brief Print the callstack
  * 
  */
-static inline void stack_trace() {
+inline void stack_trace() {
     const int maxFrames = 64;
     void* addrlist[maxFrames];
 
@@ -284,5 +240,3 @@ static inline void stack_trace() {
               << ") not implemented yet, aborting...\n"; \
     std::exit(1);\
 }
-
-#endif

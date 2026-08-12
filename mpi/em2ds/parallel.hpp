@@ -1,52 +1,60 @@
+#pragma once
 
-#ifndef PARALLEL_H_
-#define PARALLEL_H_
-
-#include "zpic.h"
-#include "vec_types.h"
+#include "zpic.hpp"
+#include "vec_types.hpp"
 
 #include <mpi.h>
 #include <iostream>
 #include <cstdint>
+#include <cstdlib>
 
 namespace mpi {
 
-namespace {
-    class _mpi_cout : private std::streambuf, public std::ostream
-    {   
-        public:
-        _mpi_cout() : std::ostream(this), new_line(true) {}
-    
-        private:
+/**
+ * @brief stream class that prepends [ MPI rank ] to every line
+ * 
+ */
+class mpi_ostream : private std::streambuf, public std::ostream
+{   
+    public:
+    mpi_ostream() : std::ostream(this), new_line(true), rank(-1) {}
 
-        bool new_line;
+    private:
 
-        int overflow(int c) override
-        {
-            if (c != std::char_traits<char>::eof() && new_line ) {
-                int rank;
-                int ierr = MPI_Comm_rank( MPI_COMM_WORLD, &rank );
-                if ( ierr == MPI_SUCCESS ) {
-                    std::cout << "[" << rank << "] ";
-                } else {
-                    std::cout << "[--] ";
-                }
+    bool new_line;
+    int rank;
+
+    int overflow(int c) override
+    {
+        if (c != std::char_traits<char>::eof() && new_line ) {
+            if ( rank < 0 ) {
+                if ( MPI_Comm_rank( MPI_COMM_WORLD, &rank ) != MPI_SUCCESS )
+                    rank = -1;
             }
-            
-            new_line = ( c == '\n' );
-            std::cout.put(c);
-    
-            return 0;
+            if ( rank >= 0 ) {
+                std::cout << "[" << rank << "] ";
+            } else {
+                std::cout << "[--] ";
+            }
         }
-    
-    };
-}
+        
+        new_line = ( c == '\n' );
+        std::cout.put(c);
 
-static _mpi_cout cout;
+        return std::char_traits<char>::to_int_type(c);
+    }
+
+};
+
+/**
+ * @brief std::cout replacement, prepends [ MPI rank ] to every line
+ * 
+ */
+inline mpi_ostream cout;
 
 template< typename T > 
 MPI_Datatype data_type () { 
-    // static_assert(0,"Invalid data type"); 
+    static_assert( sizeof(T) == 0,"No MPI data type for T"); 
     return MPI_DATATYPE_NULL;
 };
 
@@ -64,21 +72,24 @@ template<> inline MPI_Datatype data_type<uint64_t>(void) { return MPI_UINT64_T; 
 template<> inline MPI_Datatype data_type<float   >(void) { return MPI_FLOAT; };
 template<> inline MPI_Datatype data_type<double  >(void) { return MPI_DOUBLE; };
 
-static const MPI_Op sum = MPI_SUM;
-static const int proc_null = MPI_PROC_NULL;
+template<> inline MPI_Datatype data_type<std::complex<float >>(void) { return MPI_C_FLOAT_COMPLEX ; };
+template<> inline MPI_Datatype data_type<std::complex<double >>(void) { return MPI_C_DOUBLE_COMPLEX ; };
+
+inline const MPI_Op sum = MPI_SUM;
+inline constexpr int proc_null = MPI_PROC_NULL;
 
 namespace type {
-    extern MPI_Datatype int2;
-    extern MPI_Datatype float2;
-    extern MPI_Datatype float3;
-    extern MPI_Datatype double3;
+    inline MPI_Datatype mpi_int2    = MPI_DATATYPE_NULL;
+    inline MPI_Datatype mpi_float2  = MPI_DATATYPE_NULL;
+    inline MPI_Datatype mpi_float3  = MPI_DATATYPE_NULL;
+    inline MPI_Datatype mpi_double3 = MPI_DATATYPE_NULL;
 }
 
 // These cannot be declared constexpr as their value is unknown at compile time
-template<> inline MPI_Datatype data_type<int2 >(void)   { return mpi::type::int2; };
-template<> inline MPI_Datatype data_type<float2 >(void) { return mpi::type::float2; };
-template<> inline MPI_Datatype data_type<float3 >(void) { return mpi::type::float3; };
-template<> inline MPI_Datatype data_type<double3>(void) { return mpi::type::double3; };
+template<> inline MPI_Datatype data_type<int2 >()   { return mpi::type::mpi_int2; };
+template<> inline MPI_Datatype data_type<float2 >() { return mpi::type::mpi_float2; };
+template<> inline MPI_Datatype data_type<float3 >() { return mpi::type::mpi_float3; };
+template<> inline MPI_Datatype data_type<double3>() { return mpi::type::mpi_double3; };
 
 /**
  * @brief Initialize MPI environment and extra MPI types
@@ -87,22 +98,31 @@ template<> inline MPI_Datatype data_type<double3>(void) { return mpi::type::doub
  * @param argv      Pointer to command line arguments
  * @return int      MPI_SUCCESS on success, MPI_ERROR on failure
  */
-static inline int init( int *argc, char ***argv ) {
+inline int init( int *argc, char ***argv ) {
+    #ifdef _OPENMP
+    int provided;
+    int ierr = MPI_Init_thread( argc, argv, MPI_THREAD_FUNNELED, &provided);
+    if ( provided < MPI_THREAD_FUNNELED ) {
+        std::cerr << "MPI library does not support MPI_THREAD_FUNNELED\n";
+        return -1;
+    }
+    #else
     int ierr = MPI_Init( argc, argv );
+    #endif
 
     if ( ierr == MPI_SUCCESS ) {
         // Initialize extra types
-        MPI_Type_contiguous( 2, MPI_INT,  &mpi::type::int2 ); 
-        MPI_Type_commit( &mpi::type::int2 );
+        MPI_Type_contiguous( 2, MPI_INT,  &mpi::type::mpi_int2 ); 
+        MPI_Type_commit( &mpi::type::mpi_int2 );
 
-        MPI_Type_contiguous( 2, MPI_FLOAT,  &mpi::type::float2 ); 
-        MPI_Type_commit( &mpi::type::float2 );
+        MPI_Type_contiguous( 2, MPI_FLOAT,  &mpi::type::mpi_float2 ); 
+        MPI_Type_commit( &mpi::type::mpi_float2 );
 
-        MPI_Type_contiguous( 3, MPI_FLOAT,  &mpi::type::float3 ); 
-        MPI_Type_commit( &mpi::type::float3 );
+        MPI_Type_contiguous( 3, MPI_FLOAT,  &mpi::type::mpi_float3 ); 
+        MPI_Type_commit( &mpi::type::mpi_float3 );
         
-        MPI_Type_contiguous( 3, MPI_DOUBLE, &mpi::type::double3 );
-        MPI_Type_commit( &mpi::type::double3 );
+        MPI_Type_contiguous( 3, MPI_DOUBLE, &mpi::type::mpi_double3 );
+        MPI_Type_commit( &mpi::type::mpi_double3 );
     } else {
         std::cerr << "Failed to initialize MPI\n";
     }
@@ -114,58 +134,62 @@ static inline int init( int *argc, char ***argv ) {
  * 
  * @return int  MPI_SUCCESS on success, MPI_ERROR on failure
  */
-static inline int finalize( void ) {
+inline int finalize( ) {
 
     // These aren't strictly necessary
-    MPI_Type_free( &mpi::type::int2 );
-    MPI_Type_free( &mpi::type::float2 );
-    MPI_Type_free( &mpi::type::float3 );
-    MPI_Type_free( &mpi::type::double3 );
+    if ( mpi::type::mpi_int2    != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_int2 );
+    if ( mpi::type::mpi_float2  != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_float2 );
+    if ( mpi::type::mpi_float3  != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_float3 );
+    if ( mpi::type::mpi_double3 != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_double3 );
 
     return MPI_Finalize();
 }
 
 /**
- * @brief Returns size of the global MPI communicator (MPI_COMM_WORLD)
+ * @brief Returns size of MPI communicator
  * 
- * @return int  Number of parallel nodes
+ * @param comm  MPI communicator, defaults to MPI_COMM_WORLD
+ * @return int 
  */
-static inline int world_size( void ) {
+inline int size( MPI_Comm comm = MPI_COMM_WORLD ) {
     int size;
-    MPI_Comm_size( MPI_COMM_WORLD, &size );
+    MPI_Comm_size( comm, &size );
     return size;
 }
 
 /**
- * @brief Returns MPI rank on the global MPI communicator (MPI_COMM_WORLD)
+ * @brief Returns process rank
  * 
- * @return int  Node rank
+ * @param comm  MPI communicator, defaults to MPI_COMM_WORLD
+ * @return int 
  */
-static inline int world_rank( void ) {
+inline int rank( MPI_Comm comm = MPI_COMM_WORLD ) {
     int rank;
-    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    MPI_Comm_rank( comm, &rank );
     return rank;
 }
 
 /**
- * @brief Returns true if the calling node is the root node of the global MPI
+ * @brief Returns true if the calling node is the root node of the MPI
  *        communicator
  * 
- * @return int  1 if the calling node is the root node, 0 otherwise 
+ * @param comm   MPI communicator, defaults to MPI_COMM_WORLD
+ * @return bool  1 if the calling node is the root node, 0 otherwise 
  */
-static inline int world_root( void ) { 
+inline bool root( MPI_Comm comm = MPI_COMM_WORLD ) {
     int rank;
-    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    MPI_Comm_rank( comm, &rank );
     return rank == 0;
 }
 
 /**
- * @brief Performs an MPI_Barrier on the global MPI communicator
+ * @brief Performs an MPI_Barrier on the MPI communicator
  * 
+ * @param comm   MPI communicator, defaults to MPI_COMM_WORLD
  * @return int 
  */
-static inline int world_barrier( void ) {
-    return MPI_Barrier( MPI_COMM_WORLD );
+inline int barrier( MPI_Comm comm = MPI_COMM_WORLD ) {
+    return MPI_Barrier( comm );
 }
 
 
@@ -173,10 +197,19 @@ static inline int world_barrier( void ) {
  * @brief Abort the parallel code using an MPI_Abort()
  * 
  * @param errorcode     Error code to return to invoking environment
+ * @param comm          MPI communicator, defaults to MPI_COMM_WORLD
  * @return int          MPI_Abort() return value (should not return)
  */
-static inline int abort( int errorcode ) { 
-    return MPI_Abort(MPI_COMM_WORLD, errorcode );
+inline int abort( int errorcode, MPI_Comm comm = MPI_COMM_WORLD ) {
+    return MPI_Abort( comm, errorcode );
+}
+
+[[noreturn]] inline void fatal(const std::string& msg) {
+    std::cerr << "(* fatal *) " 
+              << msg 
+              << "\n(* fatal *) aborting...\n";
+    MPI_Abort( MPI_COMM_WORLD, 1 );
+    std::exit(1); // unreachable, silences noreturn analysis
 }
 
 }
@@ -228,38 +261,38 @@ class Partition {
         int flag; MPI_Initialized( &flag );
 
         if ( ! flag ) {
-            std::cerr << "(*error*) Unable to create partition object, MPI has not been initialized\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Unable to create partition object, MPI has not been initialized\n"
+                      << "(*error*) aborting...\n";
+            // MPI hasn't been initialized so we use std::exit()
+            std::exit(1);
         }
 
         // Get communicator size
         if ( MPI_Comm_size( MPI_COMM_WORLD, &size ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to get communicator size, aborting\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Unable to get communicator size, aborting\n"
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         }
 
         // Check dimensions
         if ( dims.x < 1 ) {
-            std::cerr << "(*error*) Invalid partition dims.x = " << dims.x << "\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Invalid partition dims.x = " << dims.x << '\n'
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         }
 
         if ( dims.y < 1 ) {
-            std::cerr << "(*error*) Invalid partition dims.y = " << dims.x << "\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Invalid partition dims.y = " << dims.y << '\n'
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         }
 
         if ( dims.x * dims.y != (unsigned) size ) {
-            if ( mpi::world_root() ) {
-                std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of MPI parallel nodes (" << size << ") don't match\n";
-                std::cerr << "(*error*) aborting...\n";
+            if ( mpi::root() ) {
+                std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of MPI parallel nodes (" << size << ") don't match\n"
+                          << "(*error*) aborting...\n";
             }
-            mpi::world_barrier();
-            exit(1);
+            mpi::abort(1);
         }
 
         
@@ -268,29 +301,25 @@ class Partition {
 
         // Create partition
         if ( MPI_Cart_create(MPI_COMM_WORLD, 2, _dims, periods, 0, &comm ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to create cartesian topology\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Unable to create cartesian topology\n"
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         }
 
         // Get rank
         if ( MPI_Comm_rank( comm, & rank ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to get communicator rank, aborting\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Unable to get communicator rank, aborting\n"
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         }
 
         int lcoords[2];
         if ( MPI_Cart_coords( comm, rank, 2, lcoords ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to get cartesian coordinates, aborting\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Unable to get cartesian coordinates, aborting\n"
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         };
         coords = make_int2( lcoords[0], lcoords[1] );
-
-        if ( rank == 0 ) {
-            std::cout << "(*info*) Created " << dims << " Partition object\n";
-        }
 
         // Get neighbors
         // Since we also need the corner neighbors we cannot use MPI_Cart_shift()
@@ -325,11 +354,14 @@ class Partition {
 
         // Sanity check - this should never happen
         if ( neighbor[1][1] != rank ) {
-            std::cerr << "(*error*) Invalid neighbor (bad partition)\n";
-            std::cerr << "(*error*) aborting...\n";
-            exit(1);
+            std::cerr << "(*error*) Invalid neighbor (bad partition)\n"
+                      << "(*error*) aborting...\n";
+            mpi::abort(1);
         }; 
     };
+
+    Partition(const Partition&) = delete;
+    Partition& operator=(const Partition&) = delete;
 
     /**
      * @brief Destroy the Partition object
@@ -343,8 +375,8 @@ class Partition {
      * @brief Prints information about local node
      * 
      */
-    void info() {
-        std::cout << '[' << rank << '/' << size << "] - coords " << coords << '\n';
+    void info() const {
+        mpi::cout << '[' << rank << '/' << size << "] - coords " << coords << '\n';
     }
 
     /**
@@ -352,7 +384,7 @@ class Partition {
      * 
      * @return MPI_Comm     MPI Communicator
      */
-    MPI_Comm get_comm() const {
+    MPI_Comm get_comm() const noexcept  {
         return comm;
     }
 
@@ -361,7 +393,7 @@ class Partition {
      * 
      * @return int  Partition size
      */
-    int get_size() {
+    int get_size() const noexcept  {
         return size;
     }
 
@@ -370,7 +402,7 @@ class Partition {
      * 
      * @return int  Local process rank
      */
-    int get_rank() {
+    int get_rank() const noexcept {
         return rank;
     }
 
@@ -413,9 +445,9 @@ class Partition {
      * @param target_coords     Target coordinates
      * @return int              Target process rank
      */
-    int get_rank_coords( const int2 target_coords ) {
+    int get_rank_coords( const int2 target_coords ) const {
         int cart_rank;
-        int _coords[2] = { coords.x, coords.y };
+        int _coords[2] = { target_coords.x, target_coords.y };
         MPI_Cart_rank( comm, _coords, &cart_rank );
         return cart_rank;
     }
@@ -425,7 +457,7 @@ class Partition {
      * 
      * @return int 
      */
-    int coords_id( ) {
+    int coords_id( ) const {
         return coords.y * dims.x + coords.x;
     }
 
@@ -436,7 +468,7 @@ class Partition {
      * @param edge      Edge to check (edge::lower, edge::upper)
      * @return int      Returns 1 if node in on the requested edge
      */
-    int on_edge( coord::cart coord, edge::pos edge ) {
+    int on_edge( coord::cart coord, edge::pos edge ) const {
         switch (coord) {
         case coord::x:
             switch(edge) {
@@ -450,7 +482,9 @@ class Partition {
                 case edge::upper: return coords.y == (int) (dims.y-1);
             }
             break;
+        default: break;
         }
+        return 0;
     }
 
     /**
@@ -461,7 +495,7 @@ class Partition {
      * @param target_rank   Target node rank
      * @return int          Returns 1 if node in on the requested edge
      */
-    int on_edge( coord::cart coord, edge::pos edge, int target_rank ) {
+    int on_edge( coord::cart coord, edge::pos edge, int target_rank ) const {
         
         int2 target_coords = get_coords_rank( target_rank );
         
@@ -478,15 +512,17 @@ class Partition {
                 case edge::upper: return target_coords.y == (int)(dims.y-1);
             }
             break;
+        default: break;
         }
+        return 0;
     }
 
     /**
      * @brief Returns true if the local node is the root node
      * 
-     * @return int 
+     * @return bool 
      */
-    int root() { return rank == 0;}
+    bool root() const { return rank == 0;}
 
     /**
      * @brief Performs an MPI_Barrier accross the partition
@@ -507,10 +543,9 @@ class Partition {
      * @param count     Data size
      * @param op        MPI operation
      * @param root      Target node, defaults to 0
-     * @return int      Always returns 0
      */
     template< typename T >
-    int reduce( T * data, int count, MPI_Op op, int root = 0 ) {
+    void reduce( T * data, int count, MPI_Op op, int root = 0 ) {
 
         void *sendbuf = ( rank == root ) ? MPI_IN_PLACE : data;
 
@@ -519,8 +554,6 @@ class Partition {
             std::cerr << "MPI_Reduce operation failed, aborting\n";
             MPI_Abort( comm, 1 );
         }
-
-        return 0;
     }
 
     /**
@@ -532,17 +565,14 @@ class Partition {
      * @param recvbuf   Output data (reduction result)
      * @param count     Number of data elements
      * @param op        Reduction operation
-     * @return int      0 on success. On error the routine will abort the code.
      */
     template< typename T >
-    int allreduce( const T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
+    void allreduce( const T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
                 
         if ( MPI_Allreduce( sendbuf, recvbuf, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
             std::cerr << "MPI_Allreduce operation failed, aborting\n";
             MPI_Abort( comm, 1 );
         }
-
-        return 0;
     }
 
     /**
@@ -558,12 +588,11 @@ class Partition {
      * @return int 
      */
     template< typename T >
-    int allreduce( T * data, int count, MPI_Op op ) {
+    void allreduce( T * data, int count, MPI_Op op ) {
         if ( MPI_Allreduce( MPI_IN_PLACE, data, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
             std::cerr << "MPI_Allreduce operation failed, aborting\n";
             MPI_Abort( comm, 1 );
         }
-        return 0;
     }
 
     /**
@@ -576,7 +605,7 @@ class Partition {
      * @param global_size   Global grid size (x,y)
      * @return uint2        Local grid size (x,y)
      */
-    inline uint2 grid_size( const uint2 global_size ) {
+    inline uint2 grid_size( const uint2 global_size ) const {
         uint2 local_size{ global_size.x / dims.x, global_size.y / dims.y };
 
         if ( coords.x < (int) (global_size.x % dims.x) ) local_size.x += 1;
@@ -595,7 +624,7 @@ class Partition {
      * @param global_size   Global grid size (x,y)
      * @return uint2        Local offset on global grid (x,y)
      */
-    inline uint2 grid_off( const int2 global_size ) {
+    inline uint2 grid_off( const uint2 global_size ) const {
         uint2 grid_size = { global_size.x / dims.x, global_size.y / dims.y };
         uint2 grid_off  = { coords.x * grid_size.x, coords.y * grid_size.y };
 
@@ -623,26 +652,26 @@ class Partition {
      * 
      * @param global_size   Global grid size (x,y)
      * @param local_size    Local grid size (x,y)
-     * @param local_off     Local offset on global grid (x,y)
+     * @param local_start   Local start position on global grid (x,y)
      */
-    void grid_local( const uint2 global_size, uint2 & local_size, uint2 & local_off ) const {
+    void grid_local( const uint2 global_size, uint2 & local_size, uint2 & local_start ) const {
         // Size and offset for matched size / parallel dims
         local_size = { global_size.x / dims.x, global_size.y / dims.y };
-        local_off  = { coords.x * local_size.x, coords.y * local_size.y };
+        local_start  = { coords.x * local_size.x, coords.y * local_size.y };
 
         // Correct for unmatched global_size / parallel dims
         if ( coords.x < (int) (global_size.x % dims.x) ) {
             local_size.x += 1;
-            local_off.x += coords.x;
+            local_start.x += coords.x;
         } else {
-            local_off.x += global_size.x % dims.x;
+            local_start.x += global_size.x % dims.x;
         }
 
         if ( coords.y < (int) (global_size.y % dims.y) ) {
             local_size.y += 1;
-            local_off.y += coords.y;
+            local_start.y += coords.y;
         } else {
-            local_off.y += global_size.y % dims.y;
+            local_start.y += global_size.y % dims.y;
         }
     }
 };
@@ -662,7 +691,7 @@ class Message {
     public:
 
     /// @brief MPI communicator
-    MPI_Comm comm;
+    const MPI_Comm comm;
 
     /// @brief Data buffer
     T * buffer;
@@ -683,14 +712,17 @@ class Message {
         buffer = memory::malloc<T>( max_count );
     }
 
+    Message(const Message&) = delete;
+    Message& operator=(const Message&) = delete;
+
     /**
      * @brief Destroy the Message object
      * 
      */
     ~Message() {
         if ( active != Message::none ) {
-            MPI_Request tmp = request;
-            MPI_Cancel( &tmp );
+            MPI_Cancel( &request );
+            MPI_Wait( &request, MPI_STATUS_IGNORE );
         }
         memory::free( buffer );
     }
@@ -705,15 +737,6 @@ class Message {
      */
     int isend( int count, int recipient, int tag ) {
         
-/*
-        // debug
-        {
-            int rank; MPI_Comm_rank( comm, & rank );
-            std::cout << rank << " - sending message size " << count 
-                << " to node " << recipient << ", tag:" << tag << '\n';
-        }
-*/
-
         if ( count > max_count ) {
             std::cerr << "isend() - Message size too large\n";
             mpi::abort(1);
@@ -724,8 +747,9 @@ class Message {
             mpi::abort(1);
         }
 
-        active = Message::send;
-        return MPI_Isend( buffer, count, mpi::data_type<T>(), recipient, tag, comm, &request) ;
+        int ierr = MPI_Isend( buffer, count, mpi::data_type<T>(), recipient, tag, comm, &request);
+        active = ( ierr == MPI_SUCCESS) ? Message::send : Message::none;
+        return ierr;
     }
 
     /**
@@ -741,12 +765,13 @@ class Message {
     int irecv( int sender, int tag ) {
 
         if ( active != none ) {
-            std::cerr << "isend() - Tried to receive message before other message completes\n";
+            std::cerr << "irecv() - Tried to receive message before other message completes\n";
             mpi::abort(1);
         }
 
-        active = Message::receive;
-        return MPI_Irecv( buffer, max_count, mpi::data_type<T>(), sender, tag, comm, &request) ;
+        int ierr = MPI_Irecv( buffer, max_count, mpi::data_type<T>(), sender, tag, comm, &request);
+        active = ( ierr == MPI_SUCCESS) ? Message::receive : Message::none;
+        return ierr;
     }
 
     /**
@@ -779,11 +804,10 @@ class Message {
         int ierr = MPI_Wait( &request, &status );
         
         // Get number of received elements
-        MPI_Get_count( status, mpi::data_type<T>(), &count );
+        MPI_Get_count( &status, mpi::data_type<T>(), &count );
         
         active = Message::none;
         return ierr;
     }
 };
 
-#endif

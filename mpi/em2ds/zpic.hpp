@@ -1,9 +1,7 @@
-#ifndef ZPIC_H_
-#define ZPIC_H_
+#pragma once
 
-#include "utils.h"
-
-#include "vec_types.h"
+#include "utils.hpp"
+#include "vec_types.hpp"
 
 /**
  * @brief Coordinates (x,y)
@@ -99,4 +97,3 @@ inline float courant( const uint2 ntiles, const uint2 nx, const float2 box ) {
 
 }
 
-#endif

@@ -75,9 +75,9 @@ const unsigned size_zdf_double  = 8;    ///< size of zdf_double
 /**
  * IDs of ZDF records
  */
-#define ZDF_INT32_ID         0x00010000  ///< Int32 record ID
-#define ZDF_DOUBLE_ID        0x00020000  ///< Double record ID
-#define ZDF_STRING_ID        0x00030000  ///< String record ID
+#define ZDF_INT32_ID        0x00010000  ///< Int32 record ID
+#define ZDF_DOUBLE_ID       0x00020000  ///< Double record ID
+#define ZDF_STRING_ID       0x00030000  ///< String record ID
 
 #define ZDF_DATASET_ID      0x00100002  ///< Dataset record ID
 #define ZDF_CDSET_START_ID  0x00110000  ///< Chunked dataset start record ID
@@ -87,7 +87,7 @@ const unsigned size_zdf_double  = 8;    ///< size of zdf_double
 #define ZDF_ITERATION_ID     0x00200001  ///< Iteration record ID
 #define ZDF_GRID_INFO_ID     0x00210001  ///< Grid information record ID
 #define ZDF_PART_INFO_ID     0x00220002  ///< Particle set information record ID
-#define ZDF_TRACK_INFO_ID     0x00230001  ///< Particle tracks information record ID
+#define ZDF_TRACK_INFO_ID    0x00230001  ///< Particle tracks information record ID
 
 /* -----------------------------------------------------------------------------------------------
   recursively create path if required
@@ -151,7 +151,10 @@ size_t zdf_sizeof( enum zdf_data_type data_type ) {
         case zdf_int64:
         case zdf_uint64:
         case zdf_float64:
+        case zdf_complex64:
             return(8);
+        case zdf_complex128:
+            return(16);
     }
     return(0);
 }
@@ -674,10 +677,10 @@ size_t zdf_vector32_write( t_zdf_file* zdf,  void const * const data, size_t len
  * @param  len  Number of vector elements
  * @return      Returns number of bytes written on success, 0 on error
  */
-size_t zdf_vector64_write( t_zdf_file* zdf,  void const * const data, size_t len ) {
+size_t zdf_vector2x64_write( t_zdf_file* zdf,  void const * const data, size_t len ) {
     uint64_t buffer[ENDIAN_CONV_BUF_SIZE];
 
-    for( size_t offset = 0; offset < len; offset += ENDIAN_CONV_BUF_SIZE ) {
+    for( size_t offset = 0; offset < 2 * len; offset += ENDIAN_CONV_BUF_SIZE ) {
 
         // Number of values in chunk
         size_t chunk_len = (offset + ENDIAN_CONV_BUF_SIZE < len ) ? ENDIAN_CONV_BUF_SIZE : len - offset;
@@ -690,9 +693,8 @@ size_t zdf_vector64_write( t_zdf_file* zdf,  void const * const data, size_t len
             return(0);
     }
 
-    return( len * sizeof(uint64_t) );
+    return( 2 * len * sizeof(uint64_t) );
 }
-
 
 #else
 
@@ -701,8 +703,8 @@ size_t zdf_vector64_write( t_zdf_file* zdf,  void const * const data, size_t len
 #endif
 
 /**
- * Write arbitrary 8bit type vector to file. Adds padding at the end of the vector if
- * necessary to maintain alignment.
+ * @brief Write arbitrary 8bit type vector to file. Adds padding at the end of the vector if
+ *        necessary to maintain alignment.
  * @param  zdf ZDF file descriptor
  * @param  u   Pointer to 8 bit data
  * @param  len Number of vector elements
@@ -751,6 +753,14 @@ size_t zdf_vector_write( t_zdf_file* zdf, const void * data, enum zdf_data_type 
         case zdf_uint64:
         case zdf_float64:
             return ( zdf_vector64_write( zdf, data, len ) );
+
+        // Complex types are stored as float pairs (real,img)
+        case zdf_complex64:
+            return ( zdf_vector32_write( zdf, data, 2*len ) );
+
+        case zdf_complex128:
+            return ( zdf_vector64_write( zdf, data, 2*len ) );
+
         default:
             fprintf(stderr,"(*error*) zdf_vector_write: Unsupported datatype.\n");
      }
@@ -979,7 +989,7 @@ size_t zdf_add_iteration( t_zdf_file* zdf, const t_zdf_iteration* iter ){
     };
 
     // Default name
-    if ( ! rec.name ) rec.name = "Iteration";
+    if ( ! rec.name ) rec.name = (char *) "Iteration";
 
     size_t ok, len;
 
@@ -1512,7 +1522,6 @@ int zdf_open_grid_file( t_zdf_file *zdf, const t_zdf_grid_info *info,
 
     // Build filename
     sprintf( filename, "%s/%s-%06u.zdf", path, info->name, (unsigned) iteration -> n );
-    // printf("Saving filename %s\n", filename );
 
     // Create ZDF file
     if ( !zdf_open_file( zdf, filename, ZDF_CREATE ) ) {
@@ -1585,7 +1594,6 @@ int zdf_open_part_file( t_zdf_file *zdf, t_zdf_part_info *info,
 
     // Build filename
     sprintf( filename, "%s/%s-%s-%06u.zdf", path, "particles", info->name, (unsigned) iteration -> n );
-    //printf("Saving filename %s\n", filename );
 
     // Create ZDF file
     if ( !zdf_open_file( zdf, filename, ZDF_CREATE ) ) {
@@ -1670,75 +1678,6 @@ int main (int argc, const char * argv[]) {
 
     return 0;
 }
-
-
-#if 0
-int main (int argc, const char * argv[]) {
-
-    const unsigned NX = 128;
-    float buf[NX];
-
-    for(unsigned i = 0; i < NX; i++) {
-        float x = 8 * (M_PI/NX) * (i+1);
-        buf[i] = sin(x)/x;
-    }
-
-    t_zdf_grid_axis axis[1];
-    axis[0] = (t_zdf_grid_axis) {
-        .min = -1.0,
-        .max =  1.0,
-        .label = "axis label",
-        .units = "axis units"
-    };
-
-    t_zdf_grid_info info = {
-        .ndims = 1,
-        .label = "data label",
-        .units = "data units",
-        .axis = axis
-    };
-
-    info.count[0] = NX;
-
-    t_zdf_iteration iter = {
-        .n = 123,
-        .t = 12.3,
-        .time_units = "time units"
-    };
-
-    // Open file
-    t_zdf_file file;
-    zdf_open_grid_file( &file, &info, &iter, "chunk_test" );
-
-    // Write chunked dataset header
-    t_zdf_dataset dset = {
-        .data_type = zdf_float32,
-        .ndims = 1
-    };
-    dset.count[0] = 128;
-    zdf_start_cdset( &file, "DATA", &dset );
-
-    // Write chunks
-    t_zdf_chunk chunk;
-    chunk.count[0] = 16;
-    chunk.start[0] = 0;
-    chunk.stride[0] = 1;
-    for( int i = 0; i < 8; i ++) {
-        chunk.data = &buf[i*16];
-        zdf_write_cdset( &file, &dset, &chunk );
-        chunk.start[0] += 16;
-    }
-
-    // End dataset (optional)
-    zdf_end_cdset( &file, &dset );
-
-    // Close file
-    zdf_close_file( &file );
-
-    return 0;
-}
-
-#endif
 
 #endif
 
