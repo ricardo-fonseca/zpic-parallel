@@ -2,6 +2,7 @@
 
 #include "bounds.hpp"
 
+#include "current.hpp"
 #include "grid/grid.hpp"
 
 // #include "transpose.h"
@@ -593,6 +594,248 @@ void test_laser( ) {
 
 }
 
+#include "simulation.hpp"
+
+void test_inj( ) {
+
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    Partition parallel( partition );
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint2 ppc{ 8, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    parallel.barrier();
+    if ( mpi::root() ) std::cout << "Created species\n";
+
+    //electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
+    // electrons.set_density(Density::Slab(coord::y, 1.0, 5.0, 8.0));
+    electrons.set_density( Density::Sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
+
+    parallel.barrier();
+    if ( mpi::root() ) std::cout << "Density set\n";
+
+    electrons.set_udist( UDistribution::Thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+
+    electrons.initialize( box, ntiles, nx, dt, 0, parallel );
+
+    electrons.save_charge();
+    electrons.save();
+    electrons.save_phasespace(
+        phasespace::ux, float2{-1, 3}, 256,
+        phasespace::uz, float2{-1, 1}, 128
+    );
+
+    parallel.barrier();
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
+}
+
+void test_mov( ) {
+
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 2, 2 );
+
+    Partition parallel( partition );
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint2 ppc{ 8, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( Density::Sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
+    electrons.set_udist( UDistribution::Cold( float3{ -1, -2, -3 } ) );
+    electrons.initialize( box, ntiles, nx, dt, 0, parallel );
+
+    electrons.save_charge();
+    electrons.save();
+
+    int niter = 200; //200
+    for( auto i = 0; i < niter; i ++ ) {
+        auto np_global = electrons.np_global();
+        if ( parallel.root() ) std::cout << "i = " << i << ", total particles: " << np_global << '\n';
+        electrons.advance();
+    }
+
+    electrons.save_charge();
+    electrons.save();
+
+    parallel.barrier();
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
+}
+
+void test_current_charge( ) {
+
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition
+    uint2 partition = make_uint2( 1, 4 );
+
+    Partition parallel( partition );
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+
+    uint2 ppc{ 8, 8 };
+    Species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( Density::Sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
+    electrons.set_udist( UDistribution::Cold( float3{ 1, 2, 3 } ) );
+
+    electrons.initialize( box, ntiles, nx, dt, 0, parallel );
+
+    Current current( ntiles, nx, box, dt, parallel );
+    Charge charge( ntiles, nx, box, dt, parallel );
+
+    electrons.advance( current, charge );
+
+    current.advance( );
+    current.save( current::field::j, fcomp::x );
+    current.save( current::field::j, fcomp::y );
+    current.save( current::field::j, fcomp::z );
+    current.save( current::field::fj, fcomp::x );
+    current.save( current::field::fj, fcomp::y );
+    current.save( current::field::fj, fcomp::z );
+
+    charge.advance();
+    charge.save( charge::field::rho );
+    charge.save( charge::field::frho );
+
+    parallel.barrier();
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
+}
+
+void test_weibel( )
+{
+   
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition, must be 1 along x
+    uint2 partition = make_uint2( 1, 4 );
+
+    // Create simulation box
+    uint2 ntiles{16, 16};
+    uint2 nx{32, 32};                                                                                                                                                                     
+    float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+    float dt = 0.07;
+                                        
+    Simulation sim( ntiles, nx, box, dt, partition );
+                            
+    uint2 ppc{4, 4};
+
+    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        UDistribution::ThermalCorr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, 0.6 }
+        )
+    );
+
+    sim.add_species( electrons );
+
+    Species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        UDistribution::ThermalCorr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, -0.6 }
+        )
+    );
+
+    sim.add_species( positrons );
+
+    // Lambda function for diagnostic output
+    auto diag = [ & ]( ) {
+        sim.emf.save(emf::b, fcomp::x);
+        sim.emf.save(emf::b, fcomp::y);
+        sim.emf.save(emf::b, fcomp::z);
+
+        electrons.save_charge();
+        positrons.save_charge();
+
+        sim.energy_info();
+    };
+
+    // Run simulation    
+    int const imax = 500;
+        
+    if ( sim.parallel.root() )
+        std::cout << "Running large Weibel test up to n = " << imax << "...\n";
+                
+    timer::clock timer;
+                  
+    timer.start();
+
+    while (sim.get_iter() < imax)
+    {     
+        if ( sim.get_iter() % 50 == 0 ) {
+            diag();
+            if ( sim.parallel.root() ) 
+                std::cout << "i = " << sim.get_iter() << '\n';    
+        }       
+        sim.advance();
+    }
+
+    timer.stop();
+
+    diag();
+
+    auto nmove = sim.get_nmove();
+    if ( sim.parallel.root() ) {
+        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+        auto time = timer.elapsed(timer::units::s);
+        std::cout << "Elapsed time: " << time << " s\n";
+        auto perf = nmove / time / 1.e9;
+        std::cout << "Performance : " << perf << " GPart/s\n";
+    }                  
+}
 
 /**
  * @brief Print information about the environment
@@ -644,7 +887,13 @@ int main( int argc, char *argv[] ) {
 
     //test_fft_tile();
     // test_poisson();
-    test_laser();
+    //test_laser();
+
+    // test_inj();
+    // test_mov();
+    // test_current_charge();
+
+    test_weibel();
 
     grid::fft::cleanup();
 

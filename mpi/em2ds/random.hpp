@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vec_types.h"
+#include "vec_types.hpp"
 #include <cmath>
 
 namespace zrandom {
@@ -151,4 +151,3 @@ inline double rand_norm( uint2 & state, double & norm ) {
 }
 
 }
-

@@ -3,7 +3,7 @@
 #include "../utils.hpp"
 #include "../parallel.hpp"
 #include "../vec_types.hpp"
-#include "../zdf-cpp.h"
+#include "../zdf/zdf.hpp"
 
 
 namespace grid {
@@ -370,6 +370,31 @@ class flat{
         uint64_t local[2]  = { local_dims.x, local_dims.y };
 
         zdf::save_grid( d_buffer, 2, global, start, local, name, filename, part.get_comm() );
+    }
+
+    /**
+     * @brief Save grid values to disk with full metadata
+     * 
+     * @param info      Grid metadata
+     * @param iter      Iteration value
+     * @param path      File path
+     */
+    void save( zdf::grid_info &info, const zdf::iteration &iter, const std::string & path ) {
+        // Fill in global grid dimensions
+        info.ndims = 2;
+        info.count[0] = global_dims.x;
+        info.count[1] = global_dims.y;
+
+        // Information on local chunk of grid data
+        zdf::chunk chunk;
+        chunk.count[0] = local_dims.x;
+        chunk.count[1] = local_dims.y;
+        chunk.start[0] = local_start.x;
+        chunk.start[1] = local_start.y;
+        chunk.stride[0] = chunk.stride[1] = 1;
+        chunk.data = d_buffer;
+
+        zdf::save_grid<T>( chunk, info, iter, path, part.get_comm() );
     }
 };
 

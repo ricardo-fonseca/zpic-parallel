@@ -7,11 +7,8 @@
 #include "grid/flat3.hpp"
 #include "grid/fft.hpp"
 
-#if 0
-#error Not implemented yet
 #include "current.hpp"
 #include "charge.hpp"
-#endif
 
 #include <string>
 
@@ -177,8 +174,6 @@ class EMF {
      */
     void advance( );
     
-#if 0
-    #error Not implemented yet
     /**
      * @brief Advance EM field 1 iteration
      * 
@@ -186,12 +181,11 @@ class EMF {
      * @param charge    Electric charge densisty
      */
     void advance( Current & current, Charge & charge );
-#endif
 
     /**
      * @brief Save EM field component to file
      * 
-     * @param field     Which field to save (E or B)
+     * @param field     Which field to save (E, B, fEt, etc.)
      * @param fc        Which field component to save (x, y or z)
      */
     void save( emf::field const field, const fcomp::cart fc );

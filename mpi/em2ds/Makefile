@@ -72,16 +72,13 @@ CXXFLAGS += -Wall -std=c++20 -Wno-unknown-pragmas
 CXXFLAGS += -Wno-vla-extension
 
 # --------------------------------------------------------------------------- #
-
-#SOURCE = emf.cpp laser.cpp current.cpp charge.cpp \
-#         udist.cpp density.cpp particles.cpp species.cpp cathode.cpp
-
-SOURCE = emf.cpp laser.cpp
+SOURCE = emf.cpp laser.cpp current.cpp charge.cpp \
+         udist.cpp density.cpp particles.cpp species.cpp
 
 SOURCE += main.cpp
 
 # Add ZDF library
-SOURCE += zdf.c zdf-parallel.c
+SOURCE += zdf/zdf.c zdf/zdf-parallel.c
 
 TARGET = zpic
 

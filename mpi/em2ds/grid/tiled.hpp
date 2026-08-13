@@ -5,7 +5,7 @@
 #include "../vec_types.hpp"
 #include "../parallel.hpp"
 
-#include "../zdf-cpp.h"
+#include "../zdf/zdf.hpp"
 
 #include <iostream>
 

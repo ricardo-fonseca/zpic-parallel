@@ -139,6 +139,10 @@ class r2c_plan {
      */
     r2c_plan( const grid::tiled<float> & source, plan::rigor flag = plan::estimate ):
         r2c_plan( source.get_global_dims(), source.get_part().get_comm(), flag ) {
+        if ( source.get_part().dims.x != 1 ) {
+            std::cerr << "FFT operations require that the domain is only partitioned along the y direction\n";
+            mpi::abort(1);
+        }
     }
 
     /**
@@ -152,6 +156,10 @@ class r2c_plan {
      */
     r2c_plan( const grid::vec3_tiled<float> & source, plan::rigor flag = plan::estimate ):
         r2c_plan( source.get_global_dims(), source.get_part().get_comm(), flag ) {
+        if ( source.get_part().dims.x != 1 ) {
+            std::cerr << "FFT operations require that the domain is only partitioned along the y direction\n";
+            mpi::abort(1);
+        }
     }
 
     /**
@@ -322,7 +330,12 @@ class c2r_plan {
      * @param flag 
      */
     c2r_plan( const grid::tiled<float> & dest, plan::rigor flag = plan::estimate ):
-        c2r_plan( dest.get_global_dims(), dest.get_part().get_comm(), flag ) { }
+        c2r_plan( dest.get_global_dims(), dest.get_part().get_comm(), flag ) {
+        if ( dest.get_part().dims.x != 1 ) {
+            std::cerr << "FFT operations require that the domain is only partitioned along the y direction\n";
+            mpi::abort(1);
+        }
+    }
 
     /**
      * @brief Construct a new c2r plan object
@@ -331,7 +344,12 @@ class c2r_plan {
      * @param flag 
      */
     c2r_plan( const grid::vec3_tiled<float> & dest, plan::rigor flag = plan::estimate ):
-        c2r_plan( dest.get_global_dims(), dest.get_part().get_comm(), flag ) { }
+        c2r_plan( dest.get_global_dims(), dest.get_part().get_comm(), flag ) {
+        if ( dest.get_part().dims.x != 1 ) {
+            std::cerr << "FFT operations require that the domain is only partitioned along the y direction\n";
+            mpi::abort(1);
+        }
+    }
 
     /**
      * @brief Destroy the c2r plan object
@@ -496,6 +514,10 @@ inline grid::flat<std::complex<float>> complex_grid( const grid::tiled<float>& i
         out_global_dims, out_local_dims, out_local_start,
         in.get_part()
     );
+}
+
+inline grid::flat<std::complex<float>>* new_complex_grid( const grid::tiled<float>& in ) {
+    return new grid::flat<std::complex<float>>( complex_grid( in ) );
 }
 
 /**

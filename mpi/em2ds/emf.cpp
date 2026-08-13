@@ -2,7 +2,6 @@
 #include "grid/fft.hpp"
 
 #include <iostream>
-#include "zdf-cpp.h"
 
 /**
 * @brief Construct a new EMF object
@@ -292,8 +291,6 @@ void EMF::advance() {
     iter += 1;
 }
 
-#if 0
-#error Not implemented yet
 /**
  * @brief Advance EM fields 1 time step including current
  * 
@@ -303,19 +300,14 @@ void EMF::advance() {
 void EMF::advance( Current & current, Charge & charge ) {
 
     // Advance transverse fields
-    advance_psatd ( 
-        fEt -> d_buffer,
-        fB -> d_buffer,
-        current.fJ -> d_buffer,
-        fEt -> dims, fft::dk( box ), dt
-    );
+    advance_psatd ( *fEt , *fB,*current.fJ,grid::fft::dk( box ), dt );
 
     // Update total E-field
     update_fE ( 
-        fE -> d_buffer,
-        fEt -> d_buffer,
-        charge.frho -> d_buffer,
-        fE -> dims, fft::dk( box )
+        *fE,
+        *fEt,
+        *charge.frho,
+        grid::fft::dk( box )
     );
 
     // Transform to real fields
@@ -325,7 +317,6 @@ void EMF::advance( Current & current, Charge & charge ) {
     // Advance internal iteration number
     iter += 1;
 }
-#endif
 
 /**
  * @brief Save EMF data to diagnostic file
@@ -369,7 +360,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             break;
         default:
             std::cerr << "Invalid field type selected, aborting\n";
-            std::exit(1);
+            mpi::abort(1);
     }
 
     switch ( fc ) {
@@ -440,7 +431,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         axis[1] = (zdf::grid_axis) {
             .name = (char *) "kx",
             .min = 0.0,
-            .max = (fEt -> get_global_dims().y - 1) * dk.x,
+            .max = (cf -> get_global_dims().y - 1) * dk.x,
             .label = (char *) "k_x"
         };
 

@@ -4,7 +4,7 @@
 
 #include "../vec_types.hpp"
 #include "../bounds.hpp"
-#include "../zdf-cpp.h"
+#include "../zdf/zdf.hpp"
 
 
 namespace grid {

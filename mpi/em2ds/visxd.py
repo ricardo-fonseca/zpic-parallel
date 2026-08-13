@@ -72,7 +72,7 @@ def plot1d( x, y, marker : str = None, ms = None, alpha = None, c : str = None,
 def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
     vsim = False, vmin = None, vmax = None, scale = None, shift = None,
     title = None, xtitle = None, ytitle = None, vtitle = None,
-    show = True ):
+    show = True, save = None ):
     """Generate a 2D image map plot
 
     Args:
@@ -146,6 +146,10 @@ def plot2d( data, range = None, xlim = None, ylim = None, grid = False, cmap = N
         plt.ylim( ylim )
 
     plt.grid(grid)
+
+    if ( save ):
+        plt.savefig(save, format="pdf", bbox_inches="tight")
+    
     if ( show ):
         plt.show()
 
@@ -201,129 +205,8 @@ def grid1d( filename : str, xlim = None, grid : bool = None, scale = None ):
     plt.grid(True)
     plt.show()
 
-def grid2d( filename : str, xlim = None, ylim = None, grid = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None, save = None ):
-    """Generates a colormap plot from a 2D grid zdf file
 
-    Args:
-        filename (str):
-            Name of ZDF file to open
-        xlim (tuple, optional):
-            Lower and upper limits of x axis. Defaults to the x limits of the
-            grid data.
-        ylim (tuple, optional):
-            Lower and upper limits of y axis. Defaults to the y limits of the
-            grid data.
-        grid (bool, optional):
-            Display a grid on top of colormap. Defaults to False.
-        cmap (str, optional):
-            Name of the colormap to use. Defaults to the matplotlib imshow() 
-            colormap.
-        vsim:
-            Setup a symmetric value scale [ -max(|val|), max(|val|) ]. Defaults to setting
-            the value scale to [ min, max ]
-    """
-
-    if ( not os.path.exists(filename) ):
-        # raise FileNotFoundError( filename ) 
-        print("(*error*) file {} not found.".format(filename), file = sys.stderr )
-        return
-
-    (data, info) = zdf.read(filename)
-
-    if ( info.type != "grid" ):
-        print("(*error*) file {} is not a grid file".format(filename))
-        return
-    
-    if ( info.grid.ndims != 2 ):
-        print("(*error*) file {} is not a 2D grid file".format(filename))
-        return
-
-    if ( data.dtype == np.complex64 or data.dtype == np.complex128  ):
-        print("(*error*) file {} - unsupported complex datatype".format(filename))
-        return
-
-    if ( not info.grid.axis ):
-        range = [
-            [ 0, info.grid.nx[0] ],
-            [ 0, info.grid.nx[1] ]
-        ]
-    else:
-        range = [
-            [info.grid.axis[0].min, info.grid.axis[0].max],
-            [info.grid.axis[1].min, info.grid.axis[1].max]
-        ]
-
-    # Linearly scale data if requested
-    if ( scale ):
-        data = data * scale[0] + scale[1]
-    
-    if ( shift ):
-        data = np.roll( data, shift, axis=(1,0) )
-
-    if ( vsim ):
-        amax = np.amax( np.abs(data) )
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = -amax, vmax = +amax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-    else:
-        plt.imshow( data, interpolation = 'nearest', origin = 'lower',
-            vmin = vmin, vmax = vmax, norm = norm,
-            extent = ( range[0][0], range[0][1], range[1][0], range[1][1] ),
-            aspect = 'auto', cmap=cmap )
-
-    if ( info.grid.label and info.grid.units ):
-        zlabel = "{}\\,[{:s}]".format( info.grid.label, info.grid.units )
-        plt.colorbar().set_label(r'$\sf{' + zlabel + r'}$')
-    elif ( info.grid.label ):
-        plt.colorbar().set_label(r'$\sf{' + info.grid.label.replace(" ","\\;") + r'}$')
-    else:
-        plt.colorbar()
-
-    if ( info.grid.axis ):
-        if ( info.grid.axis[0].units ):
-            xlabel = "{}\\,[{:s}]".format( info.grid.axis[0].label, info.grid.axis[0].units )
-        else:
-            xlabel = info.grid.axis[0].label
-
-        if ( info.grid.axis[1].units ):
-            ylabel = "{}\\,[{:s}]".format( info.grid.axis[1].label, info.grid.axis[1].units )
-        else:
-            ylabel = info.grid.axis[1].label
-
-        plt.xlabel(r'$\sf{' + xlabel + r'}$')
-        plt.ylabel(r'$\sf{' + ylabel + r'}$')
-
-    if ( info.iteration ):
-        if ( info.iteration.tunits ):
-            plt.title("$\\sf {} $\nt = ${:g}$ [$\\sf {}$]".format(
-                info.grid.label.replace(" ","\\;"),
-                info.iteration.t,
-                info.iteration.tunits))
-        else:
-            plt.title("$\\sf {} $\nt = ${:g}$".format(
-                info.grid.label.replace(" ","\\;"),
-                info.iteration.t ))
-    else:
-        if ( info.grid.label ):
-            plt.title("$\\sf {}".format( info.grid.label))
-        else:
-            plt.title( info.grid.name )
-
-    if ( xlim ):
-        plt.xlim(xlim)
-    if ( ylim ):
-        plt.ylim(ylim)
-
-    plt.grid(grid)
-
-    if ( save ):
-        plt.savefig(save, format="pdf", bbox_inches="tight")
-
-    plt.show()
-
-def complex_grid2d( filename : str, part = 'real', **kwargs ):
+def grid2d( filename : str, part = 'real', **kwargs ):
     """Generates a colormap plot from a 2D complex grid zdf file
 
     Args:
@@ -352,9 +235,22 @@ def complex_grid2d( filename : str, part = 'real', **kwargs ):
         print("(*error*) file {} is not a 2D grid file".format(filename))
         return
 
-    if ( data.dtype != np.complex64 and data.dtype != np.complex128  ):
-        print("(*error*) file {} is not a 2D complex grid file".format(filename))
-        return
+    if ( data.dtype == np.complex64 or data.dtype == np.complex128  ):
+        complex_data = True
+        # Get complex number part
+        if ( part == 'real' ):
+            data = np.real( data )
+        elif ( part == 'imag' ):
+            data = np.imag( data )
+        elif ( part == 'abs'):
+            data = np.abs( data )
+        elif ( part == 'angle' ):
+            data = np.angle( data )
+        else:
+            print("(*error*) Invalid part option, must be one of 'real', 'imag', 'abs' or 'angle'")
+            return
+    else:
+        complex_data = False
 
     # Axis information
     if ( not info.grid.axis ):
@@ -367,19 +263,6 @@ def complex_grid2d( filename : str, part = 'real', **kwargs ):
             [info.grid.axis[0].min, info.grid.axis[0].max],
             [info.grid.axis[1].min, info.grid.axis[1].max]
         ]
-
-    # Get complex number part
-    if ( part == 'real' ):
-        data = np.real( data )
-    elif ( part == 'imag' ):
-        data = np.imag( data )
-    elif ( part == 'abs'):
-        data = np.abs( data )
-    elif ( part == 'angle' ):
-        data = np.angle( data )
-    else:
-        print("(*error*) Invalid part option, must be one of 'real', 'imag', 'abs' or 'angle'")
-        return
 
     # Get x-y axis labels
     if ( info.grid.axis ):
@@ -410,14 +293,16 @@ def complex_grid2d( filename : str, part = 'real', **kwargs ):
     else:
         title = info.grid.name
 
-    if ( part == 'real' ):
-        title = "\\Re \\; {:s}".format(title)
-    elif ( part == 'imag' ):
-        title = "\\Im \\; {:s}".format(title)
-    elif ( part == 'abs'):
-        title = "\\left| {:s} \\right|".format(title)
-    elif ( part == 'angle' ):
-        title = "Arg \\; \\,{:s}".format(title)
+    # Add complex data information
+    if complex_data:
+        if ( part == 'real' ):
+            title = "\\Re \\; {:s}".format(title)
+        elif ( part == 'imag' ):
+            title = "\\Im \\; {:s}".format(title)
+        elif ( part == 'abs'):
+            title = "\\left| {:s} \\right|".format(title)
+        elif ( part == 'angle' ):
+            title = "Arg \\; \\,{:s}".format(title)
 
     if ( info.iteration ):
         if ( info.iteration.tunits ):
@@ -440,22 +325,13 @@ def complex_grid2d( filename : str, part = 'real', **kwargs ):
             **kwargs
     )
 
-def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = None, norm = None,
-    vsim = False, vmin = None, vmax = None, scale = None, shift = None, save = None ):
+def grid( filename : str, **kwargs ):
     """Generates a plot from 1D or 2D grids.
 
     This works as driver for grid1d and grid2d routines.
 
     Args:
         filename (str): _description_
-        xlim (_type_, optional): _description_. Defaults to None.
-        ylim (_type_, optional): _description_. Defaults to None.
-        grid (bool, optional): _description_. Defaults to False.
-        cmap (_type_, optional): _description_. Defaults to None.
-        vsim (bool, optional): _description_. Defaults to False.
-        vmin (_type_, optional): _description_. Defaults to None.
-        vmax (_type_, optional): _description_. Defaults to None.
-        scale (_type_, optional): _description_. Defaults to None.
     """
 
     info = zdf.info(filename)
@@ -463,10 +339,9 @@ def grid( filename : str, xlim = None, ylim = None, grid : bool = False, cmap = 
     if ( info.type != "grid" ):
         print("(*error*) file {} is not a grid file".format(filename))
     elif ( info.grid.ndims == 1 ):
-        grid1d( filename, xlim = xlim, grid = grid, scale = scale )
+        grid1d( filename, **kwargs )
     elif ( info.grid.ndims == 2 ):
-        grid2d( filename, xlim = xlim, ylim = ylim, grid = grid, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift, save = save )
+        grid2d( filename, **kwargs )
     else:
         print("(*error*) file {} - unsupported grid dimensions ({}).".format(filename, info.grid.ndims))
 
@@ -587,29 +462,6 @@ def vfield2d( filex, filey, xlim = None, ylim = None, grid = False, cmap = None,
 
     plt.show()
 
-def cyl_part_quant( particles, info, quant ):
-
-    if ( quant == 'x' or quant == 'y' ):
-        r = particles['r']
-        if ( quant == 'x' ):
-            return particles['cosθ'] * r
-        else:
-            return particles['sinθ'] * r
-    else:
-        return particles[quant]
-
-def cyl_part_label( info, quant ):
-    if ( quant == 'x' or quant == 'y' ):
-        return quant
-    else:
-        return info.particles.qlabels[quant]
-
-def cyl_part_unit( info, quant ):
-    if ( quant == 'x' or quant == 'y' ):
-        return info.particles.qunits['r']
-    else:
-        return info.particles.qunits[quant]
-
 def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True, 
     marker = '.', ms = 1, alpha = 1 ):
     """Generates an (x,y) scatter plot from a ZDF particle file.
@@ -618,9 +470,9 @@ def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True,
         filename (str):
             Name of ZDF file to open
         qx (str):
-            X axis quantity, usually one of "z", "r", "ux", "uy", "uz", etc.
+            X axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
         qy (str): _description_
-            Y axis quantity, usually one of "z", "r", "ux", "uy", "uz", etc.
+            Y axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
         xlim (tuple, optional):
             Lower and upper limits of x axis. Defaults to the limits of the "qx" particle data.
         ylim (tuple, optional):
@@ -646,18 +498,26 @@ def part2D( filename, qx, qy, xlim = None, ylim = None, grid = True,
         print("(*error*) file {} is not a particles file".format(filename))
         return
     
-    x = cyl_part_quant( particles, info, qx )
-    y = cyl_part_quant( particles, info, qy )
+    if ( not qx in info.particles.quants ):
+        print("(*error*) '{}' quantity (q1) is not present in file".format(qx) )
+        return
+
+    if ( not qy in info.particles.quants ):
+        print("(*error*) '{}' quantity (q2) is not present in file".format(qy) )
+        return
+
+    x = particles[qx]
+    y = particles[qy]
 
     plt.plot(x, y, marker, ms=ms, alpha = alpha)
 
-    title = "{}/{}".format( cyl_part_label(info,qy), cyl_part_label(info,qx))
+    title = "{}/{}".format( info.particles.qlabels[qy], info.particles.qlabels[qx])
     timeLabel = "t = {:g}\\,[{:s}]".format(info.iteration.t, info.iteration.tunits)
 
     plt.title(r'$\sf{' + title + r'}$' + '\n' + r'$\sf{' + timeLabel + r'}$')
 
-    xlabel = "{}\\,[{:s}]".format( cyl_part_label(info,qx), cyl_part_unit(info,qx) )
-    ylabel = "{}\\,[{:s}]".format( cyl_part_label(info,qy), cyl_part_unit(info,qy) )
+    xlabel = "{}\\,[{:s}]".format( info.particles.qlabels[qx], info.particles.qunits[qx] )
+    ylabel = "{}\\,[{:s}]".format( info.particles.qlabels[qy], info.particles.qunits[qy] )
 
     plt.xlabel(r'$\sf{' + xlabel + r'}$')
     plt.ylabel(r'$\sf{' + ylabel + r'}$')
@@ -817,30 +677,22 @@ def grid2d_fft( filename : str, xlim = None, ylim = None, grid = False, cmap = N
     plt.show()
 
 
-def plot_part( part, iter = None, qx = "z", qy = "r", xlim = None, ylim = None, grid = True, 
-    marker = '.', ms = 1, alpha = 1 ):
+def plot_data( data, iter = None, **kwargs ):
     
-    file = "{}-{:06d}.zdf".format(part, iter)
+    filename = "{}-{:06d}.zdf".format(data, iter)
 
-    if ( os.path.exists(file) ):
-        print("Plotting {}".format(file))
-        part2D( file, qx, qy, xlim = xlim, ylim = ylim, grid = grid,
-               marker = marker, ms = ms, alpha = alpha )
+    if ( os.path.exists(filename) ):
+        print("Plotting {}".format(filename))
+        info = zdf.info(filename)
+        if ( info.type == "grid" ):
+            grid( filename, **kwargs )
+        elif( info.type == "particles" ):
+            part2D( filename, **kwargs )
+        else:
+            print("(*error*) unsupported file type: {}".format( info.type ) )
     else:
-        print("(*error*) file {} not found.".format(file), file = sys.stderr )
+        print("(*error*) file {} not found.".format(filename), file = sys.stderr )
 
-
-def plot_data( fld, iter = None, xlim = None, ylim = None, cmap = None, norm = None,
-    vsim = None, vmin = None, vmax = None, scale = None, shift = None ):
-    
-    file = "{}-{:06d}.zdf".format(fld, iter)
-
-    if ( os.path.exists(file) ):
-        print("Plotting {}".format(file))
-        grid( file, xlim = xlim, ylim = ylim, grid = False, cmap = cmap, norm = norm,
-            vsim = vsim, vmin = vmin, vmax = vmax, scale = scale, shift = shift )
-    else:
-        print("(*error*) file {} not found.".format(file), file = sys.stderr )
 
 def plot_vfield2d( fld, iter, xlim = None, ylim = None, grid = False, norm = None, cmap = None, shift = None ):
     print("Plotting {} in plane field for iteration {}.".format(fld,iter))

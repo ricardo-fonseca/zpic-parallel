@@ -1,10 +1,10 @@
-#include "particles.h"
+#include "particles.hpp"
 
 #include <iostream>
 #include <string>
 #include <cmath>
 
-#include "timer.h"
+#include "timer.hpp"
 
 /**
  * @brief Exchange number of particles in edge cells
@@ -87,7 +87,7 @@ void gather_quant(
     ParticleData part,
     float * const __restrict__ d_data )
 {
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
@@ -96,8 +96,8 @@ void gather_quant(
         auto ty = tid / ntiles.x;
 
         // Global spatial offsets of local tile
-        const int offx = (part.tile_off.x + tx) * part.nx.x;
-        const int offy = (part.tile_off.y + ty) * part.nx.y;
+        const int offx = (part.local_tile_start.x + tx) * part.tile_dims.x;
+        const int offy = (part.local_tile_start.y + ty) * part.tile_dims.y;
 
         const auto offset = part.offset[tid];
         const auto np     = part.np[tid];
@@ -163,7 +163,7 @@ void gather_quant(
     const float2 scale, 
     float * const __restrict__ d_data )
 {
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
@@ -172,8 +172,8 @@ void gather_quant(
         auto ty = tid / ntiles.x;
 
         // Global spatial offsets of local tile
-        const int offx = (part.tile_off.x + tx) * part.nx.x;
-        const int offy = (part.tile_off.y + ty) * part.nx.y;
+        const int offx = (part.local_tile_start.x + tx) * part.tile_dims.x;
+        const int offy = (part.local_tile_start.y + ty) * part.tile_dims.y;
 
         const auto offset = part.offset[tid];
         const auto np     = part.np[tid];
@@ -343,8 +343,8 @@ void bnd_check(
     ParticleData part, ParticleSortData sort, const part::bnd_type local_bnd)
 {
     // ntiles needs to be set to signed because of the comparisons below
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    const int2 lim = make_int2( part.nx.x, part.nx.y );
+    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
+    const int2 lim = make_int2( part.tile_dims.x, part.tile_dims.y );
 
     #pragma omp parallel for schedule(dynamic)
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
@@ -435,8 +435,8 @@ uint32_t update_tile_info(
     const int * __restrict__ new_np = sort.new_np;
 
     // Include ghost tiles in calculations
-    const auto ntiles     = part::local_tiles( tmp.ntiles );
-    const auto ntiles_all = part::all_tiles( tmp.ntiles );
+    const auto ntiles     = part::local_tiles( tmp.local_ntiles );
+    const auto ntiles_all = part::all_tiles( tmp.local_ntiles );
 
     int * __restrict__ offset = tmp.offset;
     int * __restrict__ np     = tmp.np;
@@ -461,8 +461,8 @@ uint32_t update_tile_info(
     }
 
     // Add incoming particles
-    const int ntx = tmp.ntiles.x;
-    const int nty = tmp.ntiles.y;
+    const int ntx = tmp.local_ntiles.x;
+    const int nty = tmp.local_ntiles.y;
 
     // Size of message according to direction
     auto tile_size = [ ntx, nty ]( int dir ) -> unsigned int {
@@ -535,8 +535,8 @@ void copy_out(
     ParticleData part, ParticleData tmp, const ParticleSortData sort,
     const part::bnd_type local_bnd )
 {
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    const int2 lim = make_int2( part.nx.x, part.nx.y );
+    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
+    const int2 lim = make_int2( part.tile_dims.x, part.tile_dims.y );
 
     #pragma omp parallel for schedule(dynamic)
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
@@ -699,7 +699,7 @@ void copy_out(
  */
 void copy_in( ParticleData part, ParticleData tmp )
 {
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
 
     #pragma omp parallel for schedule(dynamic)
     for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
@@ -771,8 +771,8 @@ void copy_sorted(
     const part::bnd_type local_bnd )
 {
     // Copy all particles to correct tile in tmp buffer
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-    const int2 lim = make_int2( part.nx.x, part.nx.y );
+    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
+    const int2 lim = make_int2( part.tile_dims.x, part.tile_dims.y );
 
     for( int ty = 0; ty < ntiles.y; ++ty ) {
         for( int tx = 0; tx < ntiles.x; ++tx ) {
@@ -957,7 +957,7 @@ void Particles::cell_shift( int2 const shift ) {
 
     // Loop over tiles
     #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+    for( unsigned tid = 0; tid < local_ntiles.y * local_ntiles.x; tid++ ) {
         const auto tile_off = offset[ tid ];
         const auto tile_np  = np[ tid ];
 
@@ -1004,10 +1004,10 @@ void Particles::validate( std::string msg, int const over ) {
 
     uint32_t err = 0;
     int2 const lb = make_int2( -over, -over );
-    int2 const ub = make_int2( nx.x + over, nx.y + over ); 
+    int2 const ub = make_int2( tile_dims.x + over, tile_dims.y + over ); 
 
     // Check offset / np buffer
-    for( unsigned tile_id = 0; tile_id < ntiles.x * ntiles.y; ++tile_id ) {
+    for( unsigned tile_id = 0; tile_id < local_ntiles.x * local_ntiles.y; ++tile_id ) {
         if ( np[tile_id] < 0 ) {
             mpi::cout << "\n tile[" << tile_id << "] - bad np (" << np[ tile_id ] << "), should be >= 0";
             err = 1;
@@ -1034,7 +1034,7 @@ void Particles::validate( std::string msg, int const over ) {
     }
 
     // Loop over tiles
-    for( unsigned tile_id = 0; tile_id < ntiles.x * ntiles.y; ++tile_id ) {
+    for( unsigned tile_id = 0; tile_id < local_ntiles.x * local_ntiles.y; ++tile_id ) {
         const auto tile_off = offset[ tile_id ];
         const auto tile_np  = np[ tile_id ];
 
@@ -1102,7 +1102,7 @@ void Particles::validate( std::string msg, int const over ) {
 
     uint32_t nerr = 0;
     int2 const lb = make_int2( -over, -over );
-    int2 const ub = make_int2( tiles.nx.x + over, tiles.nx.y + over );
+    int2 const ub = make_int2( tiles.tile_dims.x + over, tiles.tile_dims.y + over );
     const uint2 ntiles  = tiles.ntiles;
 
 
@@ -1197,7 +1197,7 @@ void Particles::isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &
     // Pack data
 
     // Offset to first "communication" tile
-    const auto tile_off = tmp.offset[ ntiles.x * ntiles.y ];
+    const auto tile_off = tmp.offset[ local_ntiles.x * local_ntiles.y ];
 
     int2   * const __restrict__ ix = &tmp.ix[ tile_off ];
     float2 * const __restrict__ x  = &tmp.x[ tile_off ];
@@ -1242,8 +1242,8 @@ void Particles::unpack_msg( ParticleSort &sort, ParticleMessage &recv ) {
     /// @brief number of particles per received tile
     int * __restrict__ msg_tile_np = sort.recv.buffer;
 
-    const int ntx = ntiles.x;
-    const int nty = ntiles.y;
+    const int ntx = local_ntiles.x;
+    const int nty = local_ntiles.y;
 
     // Number of tiles in message according to direction
     auto msg_ntiles = [ ntx, nty ]( int dir ) -> unsigned int {

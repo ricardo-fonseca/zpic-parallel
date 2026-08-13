@@ -3,7 +3,7 @@
 #include "../utils.hpp"
 #include "../parallel.hpp"
 #include "../vec_types.hpp"
-#include "../zdf-cpp.h"
+#include "../zdf/zdf.hpp"
 
 // Proveides fcomp::cart
 #include "vec3_tiled.hpp"
@@ -432,7 +432,14 @@ class flat3{
         }
     }
 
-
+    /**
+     * @brief Save grid values to disk with full metadata
+     * 
+     * @param fc        Field component to save
+     * @param info      Grid metadata
+     * @param iter      Iteration value
+     * @param path      File path
+     */
     void save( fcomp::cart fc, zdf::grid_info &info, const zdf::iteration &iter, const std::string & path ) {
         // Fill in global grid dimensions
         info.ndims = 2;
