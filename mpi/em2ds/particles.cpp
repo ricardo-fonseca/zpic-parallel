@@ -4,8 +4,6 @@
 #include <string>
 #include <cmath>
 
-#include "timer.hpp"
-
 /**
  * @brief Exchange number of particles in edge cells
  *
@@ -27,26 +25,28 @@ void ParticleSort::exchange_np() {
 
     // Post receives
     unsigned int idx = 0;
-    for( auto dir = 0; dir < 9; dir++ ) {            
+    for( int dir = 0; dir < 9; dir++ ) {            
+        int msg_size = size(dir);
         if ( neighbor[dir] >= 0 ) {
-            MPI_Irecv( &recv.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+            MPI_Irecv( &recv.buffer[idx], msg_size, MPI_INT, neighbor[dir],
                     source_tag(dir), comm, &recv.requests[dir]);
         } else {
             recv.requests[dir] = MPI_REQUEST_NULL;
         }
-        idx += size(dir);
+        idx += msg_size;
     }
 
     // Post sends
     idx = 0;
-    for( auto dir = 0; dir < 9; dir++ ) {
+    for( int dir = 0; dir < 9; dir++ ) {
+        int msg_size = size(dir);
         if ( neighbor[dir] >= 0 ) {
-            MPI_Isend( &send.buffer[idx], size(dir), MPI_INT, neighbor[dir],
+            MPI_Isend( &send.buffer[idx], msg_size, MPI_INT, neighbor[dir],
                 dest_tag(dir), comm, &send.requests[dir]);
         } else {
             send.requests[dir] = MPI_REQUEST_NULL;
         }
-        idx += size(dir);
+        idx += msg_size;
     }
 
     // Wait for receives to complete

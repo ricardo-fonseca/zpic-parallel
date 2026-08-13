@@ -71,6 +71,12 @@ CXXFLAGS += -Wall -std=c++20 -Wno-unknown-pragmas
 # CXXFLAGS += -Wno-vla-cxx-extension
 CXXFLAGS += -Wno-vla-extension
 
+# Debug with sanitize=address (debugging only!)
+# CXXFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -g -Og
+
+# In case of errors, output each process log to a different file using
+# ASAN_OPTIONS=log_path=asan.log mpirun -np N ./zpic
+
 # --------------------------------------------------------------------------- #
 SOURCE = emf.cpp laser.cpp current.cpp charge.cpp \
          udist.cpp density.cpp particles.cpp species.cpp

@@ -452,25 +452,28 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
  */
 void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
 
-    ene_E = make_double3(0,0,0);
-    ene_B = make_double3(0,0,0);
-
     const uint2 ntiles          = E -> get_local_ntiles();
     const uint2 tile_dims       = E -> tile_dims;
     const unsigned int ystride  = E -> tile_ext_dims.x;
 
+    double ex, ey, ez, bx, by, bz;
+    ex = ey = ez = 0;
+    bx = by = bz = 0;
+
     // Loop over tiles
-    #pragma omp parallel for collapse(2)
+    #pragma omp parallel for collapse(2) \
+        reduction(+:ex,ey,ez) \
+        reduction(+:bx,by,bz)
     for( unsigned ty = 0; ty < ntiles.y; ++ty ) {
         for( unsigned tx = 0; tx < ntiles.x; ++tx ) {
 
             float3 * const __restrict__ d_E = & E -> tile_data(tx, ty) [ E -> offset ];
-            float3 * const __restrict__ d_B = & E -> tile_data(tx, ty) [ E -> offset ];
+            float3 * const __restrict__ d_B = & B -> tile_data(tx, ty) [ B -> offset ];
 
-            auto tile_ene_E = make_double3(0,0,0);
-            auto tile_ene_B = make_double3(0,0,0);
+            double3 tile_ene_E = make_double3(0,0,0);
+            double3 tile_ene_B = make_double3(0,0,0);
 
-            // Loop over cells
+            // Loop over inner tile cells 
             for( unsigned iy = 0; iy < tile_dims.y; ++iy ) {
                 for( unsigned ix = 0; ix < tile_dims.y; ++ix ) {
                     float3 const efld = d_E[ iy * ystride + ix ];
@@ -486,16 +489,13 @@ void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
                 }
             }
             
-            // reduce(add) data inside tile
-            
-            {   // Only 1 thread per tile does this
-                // Atomic ops
-                ene_E += tile_ene_E;
-                ene_B += tile_ene_B;
-            }
-
+            ex += tile_ene_E.x; ey += tile_ene_E.y; ez += tile_ene_E.z;
+            bx += tile_ene_B.x; by += tile_ene_B.y; bz += tile_ene_B.z;
         }
     }
+
+    ene_E = make_double3(ex, ey, ez);
+    ene_B = make_double3(bx, by, bz);
 
     ene_E.x *= 0.5 * dx.x * dx.y;
     ene_E.y *= 0.5 * dx.x * dx.y;

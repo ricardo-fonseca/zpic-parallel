@@ -12,6 +12,11 @@
  */
 #include "parallel.hpp"
 
+/**
+ * SIMD support
+ */
+#include "simd/simd.hpp"
+
 #include "grid/fft.hpp"
 
 void test_tiled_grid( ) {

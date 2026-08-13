@@ -6,6 +6,7 @@
 #include "bounds.hpp"
 
 #include "zdf/zdf.hpp"
+#include <cstdlib>
 
 namespace part {
 
@@ -133,7 +134,7 @@ inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
  * @param ntiles    Number of local tiles (x,y)
  * @return int      Start of edge tiles in the specified direction
  */
-inline int edge_tile_start( const int dir, const uint2 ntiles ) {
+inline constexpr int edge_tile_start( const int dir, const uint2 ntiles ) {
     int a, b, c;
     a = b = c = 0;
 
@@ -355,7 +356,7 @@ class ParticleSort : public ParticleSortData {
     /**
      * @brief Message tag for incoming messages
      * 
-     * @param dir   - Communication direction (0-8)
+     * @param dir   Communication direction (0-8)
      * @return int 
      */
     inline int source_tag( int dir ) {
@@ -365,13 +366,12 @@ class ParticleSort : public ParticleSortData {
     /**
      * @brief Message tag for outgoing messages
      * 
-     * @param dir   - Communication direction (0-8) 
+     * @param dir   Communication direction (0-8) 
      * @return int 
      */
     inline int dest_tag( int dir ) {
         return dir | 0x100;
     }
-
     
     public:
 

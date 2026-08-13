@@ -1,8 +1,9 @@
 #include "species.hpp"
 #include <iostream>
+#include <string>
 
-
-#include "simd/simd.h"
+#include "particles.hpp"
+#include "simd/simd.hpp"
 
 /**
  * @brief Memory alignment of local buffers
@@ -331,6 +332,8 @@ inline void dep_charge( float * const __restrict__ rho, const int ystride, int2 
 
 #ifdef SIMD
 
+#warning Using SIMD accelerated code in species.cpp
+
 /**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
@@ -571,7 +574,7 @@ void move_deposit_kernel(
     float  * const __restrict__ d_charge, unsigned int const charge_offset, uint2 const charge_ext_nx,
     float2 const dt_dx, float const q, float2 const qnx ) 
 {
-    const uint2 ntiles  = part.ntiles;
+    const uint2 ntiles  = part.local_ntiles;
 
     const int tile_vol = roundup4( current_ext_nx.x * current_ext_nx.y );
 
@@ -814,7 +817,7 @@ void push_kernel (
     unsigned int const field_offset, uint2 const ext_nx,
     float const alpha, double * __restrict__ d_energy )
 {
-    const uint2 ntiles  = part.ntiles;
+    const uint2 ntiles  = part.local_ntiles;
 
     // Tile ID
     const int tid =  tile_idx.y * ntiles.x + tile_idx.x;
@@ -1468,7 +1471,6 @@ void Species::advance( EMF const &emf, Current &current, Charge & charge ) {
     
     // Sort particles according to tile
     particles -> tile_sort( *tmp, *sort );
-
 }
 
 
