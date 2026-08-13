@@ -7,6 +7,8 @@
 #include <iostream>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
+#include <array>
 
 namespace mpi {
 
@@ -145,6 +147,14 @@ inline int finalize( ) {
     return MPI_Finalize();
 }
 
+[[noreturn]] inline void fatal(const std::string& msg) {
+    std::cerr << "(* fatal *) " 
+              << msg 
+              << "\n(* fatal *) aborting...\n";
+    MPI_Abort( MPI_COMM_WORLD, 1 );
+    std::exit(1); // unreachable, silences noreturn analysis
+}
+
 /**
  * @brief Returns size of MPI communicator
  * 
@@ -153,7 +163,8 @@ inline int finalize( ) {
  */
 inline int size( MPI_Comm comm = MPI_COMM_WORLD ) {
     int size;
-    MPI_Comm_size( comm, &size );
+    if ( MPI_Comm_size( comm, &size ) != MPI_SUCCESS )
+        mpi::fatal( "Unable to get communicator size" );
     return size;
 }
 
@@ -165,7 +176,8 @@ inline int size( MPI_Comm comm = MPI_COMM_WORLD ) {
  */
 inline int rank( MPI_Comm comm = MPI_COMM_WORLD ) {
     int rank;
-    MPI_Comm_rank( comm, &rank );
+    if ( MPI_Comm_rank( comm, &rank ) != MPI_SUCCESS )
+        mpi::fatal( "Unable to get process rank");
     return rank;
 }
 
@@ -204,21 +216,150 @@ inline int abort( int errorcode, MPI_Comm comm = MPI_COMM_WORLD ) {
     return MPI_Abort( comm, errorcode );
 }
 
-[[noreturn]] inline void fatal(const std::string& msg) {
-    std::cerr << "(* fatal *) " 
-              << msg 
-              << "\n(* fatal *) aborting...\n";
-    MPI_Abort( MPI_COMM_WORLD, 1 );
-    std::exit(1); // unreachable, silences noreturn analysis
-}
 
-}
+
+
+template< typename T >
+class message {
+    private:
+
+    enum type { none, send, receive };
+
+    /// @brief Active message type
+    message::type active;
+
+    /// @brief Active / last completed message MPI handle
+    MPI_Request request;
+
+    public:
+
+    /// @brief MPI communicator
+    const MPI_Comm comm;
+
+    /// @brief Data buffer
+    T * buffer;
+
+    /// @brief Maximum message size
+    const int max_count;
+
+    /**
+     * @brief Construct a new Message object
+     * 
+     * @param max_count     Maximum message size
+     * @param comm          MPI communicator
+     */
+    message( int max_count, MPI_Comm comm ) : 
+        active( none ), request( MPI_REQUEST_NULL ), 
+        comm( comm ), max_count( max_count )
+    {
+        buffer = memory::malloc<T>( max_count );
+    }
+
+    message(const message&) = delete;
+    message& operator=(const message&) = delete;
+
+    /**
+     * @brief Destroy the Message object
+     * 
+     */
+    ~message() {
+        if ( active != message::none ) {
+            MPI_Cancel( &request );
+            MPI_Wait( &request, MPI_STATUS_IGNORE );
+        }
+        memory::free( buffer );
+    }
+
+    /**
+     * @brief Non-blocking send message
+     * 
+     * @param count         Message size (must be smaller than max_count)
+     * @param recipient     Target node
+     * @param tag           Message tag
+     * @return int          Error code from MPI_Isend (MPI_SUCCESS on success)
+     */
+    int isend( int count, int recipient, int tag ) {
+        
+        if ( count > max_count ) {
+            std::cerr << "isend() - Message size too large\n";
+            mpi::abort(1);
+        }
+
+        if ( active != none ) {
+            std::cerr << "isend() - Tried to send message before other message completes\n";
+            mpi::abort(1);
+        }
+
+        int ierr = MPI_Isend( buffer, count, mpi::data_type<T>(), recipient, tag, comm, &request);
+        active = ( ierr == MPI_SUCCESS) ? message::send : message::none;
+        return ierr;
+    }
+
+    /**
+     * @brief Non-blocking receive message
+     * 
+     * @note The received message size must be <= max_count. You can use the
+     *       .wait(count) method to get the received message size
+     * 
+     * @param sender    Source node
+     * @param tag       Message tag
+     * @return int      Error code from MPI_Irecv (MPI_SUCCESS on success)
+     */
+    int irecv( int sender, int tag ) {
+
+        if ( active != none ) {
+            std::cerr << "irecv() - Tried to receive message before other message completes\n";
+            mpi::abort(1);
+        }
+
+        int ierr = MPI_Irecv( buffer, max_count, mpi::data_type<T>(), sender, tag, comm, &request);
+        active = ( ierr == MPI_SUCCESS) ? message::receive : message::none;
+        return ierr;
+    }
+
+    /**
+     * @brief Wait for message to complete
+     * 
+     * @return int      Error code from MPI_Wait (MPI_SUCCESS on success)
+     */
+    int wait( ) {
+        if ( active == message::none ) {
+            std::cerr << "wait() - No active message\n";
+            mpi::abort(1);
+        }
+        int ierr = MPI_Wait( &request, MPI_STATUS_IGNORE );
+        active = message::none;
+        return ierr;
+    }
+
+    /**
+     * @brief Wait for receive message to complete and get message size
+     * 
+     * @param count     Received message size
+     * @return int      Error code from MPI_Wait (MPI_SUCCESS on success)
+     */
+    int wait( int & count ) {
+        if ( active != message::receive ) {
+            std::cerr << "wait() - No active message receive\n";
+            mpi::abort(1);
+        }
+        MPI_Status status;
+        int ierr = MPI_Wait( &request, &status );
+        
+        // Get number of received elements
+        MPI_Get_count( &status, mpi::data_type<T>(), &count );
+        
+        active = message::none;
+        return ierr;
+    }
+};
+
 
 /**
  * @brief Parallel partition
  * 
  */
-class Partition {
+class cart2d {
     private:
 
     /// @brief MPI Communicator
@@ -239,7 +380,7 @@ class Partition {
      * @note Organized as `neighbor[ydir][xdir]` where `ydir`/`xdir` take the
      * values: `0` - lower, `1` - central, `2` -upper
      */
-    int neighbor[3][3];
+    std::array<std::array<int, 3>, 3> neighbor;
 
     public:
 
@@ -250,47 +391,36 @@ class Partition {
     const int2 periodic;
 
     /**
-     * @brief Construct a new Partition object
+     * @brief Construct a new 2D cartesian topology object
      * 
      * @param dims      Partition dimension
      * @param periods   Peridocity (defaults to true on both directions)
      */
-    Partition( uint2 dims, int2 periodic = make_int2(1,1) ) : dims(dims), periodic(periodic) 
+    cart2d( uint2 dims, int2 periodic = make_int2(1,1) ) : dims(dims), periodic(periodic) 
     {
         // Check if MPI has been initialized
         int flag; MPI_Initialized( &flag );
 
         if ( ! flag ) {
-            std::cerr << "(*error*) Unable to create partition object, MPI has not been initialized\n"
-                      << "(*error*) aborting...\n";
-            // MPI hasn't been initialized so we use std::exit()
+            std::cerr << "(*fatal*) Unable to create partition object, MPI has not been initialized\n"
+                         "(*fatal*) aborting...\n";
             std::exit(1);
         }
 
         // Get communicator size
-        if ( MPI_Comm_size( MPI_COMM_WORLD, &size ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to get communicator size, aborting\n"
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
-        }
+        size = mpi::size( MPI_COMM_WORLD );
 
         // Check dimensions
-        if ( dims.x < 1 ) {
-            std::cerr << "(*error*) Invalid partition dims.x = " << dims.x << '\n'
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
-        }
+        if ( dims.x < 1 )
+            mpi::fatal( "Invalid partition dims.x = " + std::to_string( dims.x ) );
 
-        if ( dims.y < 1 ) {
-            std::cerr << "(*error*) Invalid partition dims.y = " << dims.y << '\n'
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
-        }
+        if ( dims.y < 1 )
+            mpi::fatal( "Invalid partition dims.y = " + std::to_string( dims.y ) );
 
         if ( dims.x * dims.y != (unsigned) size ) {
             if ( mpi::root() ) {
-                std::cerr << "(*error*) Partition size (" << dims.x * dims.y << ") and number of MPI parallel nodes (" << size << ") don't match\n"
-                          << "(*error*) aborting...\n";
+                std::cerr << "(*fatal*) Partition size (" << dims.x * dims.y << ") and number of MPI parallel nodes (" << size << ") don't match\n"
+                          << "(*fatal*) aborting...\n";
             }
             mpi::abort(1);
         }
@@ -301,23 +431,15 @@ class Partition {
 
         // Create partition
         if ( MPI_Cart_create(MPI_COMM_WORLD, 2, _dims, periods, 0, &comm ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to create cartesian topology\n"
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
+            mpi::fatal("Unable to create cartesian topology");
         }
 
         // Get rank
-        if ( MPI_Comm_rank( comm, & rank ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to get communicator rank, aborting\n"
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
-        }
+        rank = mpi::rank( comm );
 
         int lcoords[2];
         if ( MPI_Cart_coords( comm, rank, 2, lcoords ) != MPI_SUCCESS ) {
-            std::cerr << "(*error*) Unable to get cartesian coordinates, aborting\n"
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
+            mpi::fatal( "Unable to get cartesian coordinates" );
         };
         coords = make_int2( lcoords[0], lcoords[1] );
 
@@ -354,21 +476,51 @@ class Partition {
 
         // Sanity check - this should never happen
         if ( neighbor[1][1] != rank ) {
-            std::cerr << "(*error*) Invalid neighbor (bad partition)\n"
-                      << "(*error*) aborting...\n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid neighbor (bad partition)" );
         }; 
     };
 
-    Partition(const Partition&) = delete;
-    Partition& operator=(const Partition&) = delete;
-
     /**
-     * @brief Destroy the Partition object
+     * @brief Delete the default copy constructor
      * 
      */
-    ~Partition() {
-        MPI_Comm_free( & comm );
+    cart2d(const cart2d&) = delete;
+
+    /**
+     * @brief Delete the default copy constructor
+     * 
+     * @return cart2d& 
+     */
+    cart2d& operator=(const cart2d&) = delete;
+
+    /**
+     * @brief Move-construct a cart2d object
+     * 
+     * @note Leaves `other` in a valid but empty state (its destructor becomes
+     *       a no-op, since MPI_Comm_free() cannot be called twice on the same
+     *       communicator)
+     * 
+     * @param other     cart2d object to move from
+     */
+    cart2d( cart2d && other ) noexcept :
+        comm( other.comm ), size( other.size ), rank( other.rank ), coords( other.coords ), 
+        neighbor( other.neighbor ), dims( other.dims ), periodic( other.periodic )
+    {
+        other.comm = MPI_COMM_NULL;
+    }
+ 
+    // Move assignment is not available: `dims` and `periodic` are const
+    // members, so they cannot be reassigned after construction. If you need
+    // move-assignable cart2d objects, those members would have to lose
+    // their `const` qualifier.
+    cart2d& operator=(cart2d&&) = delete;
+
+    /**
+     * @brief Destroy the cart2d object
+     * 
+     */
+    ~cart2d() {
+        if ( comm != MPI_COMM_NULL ) MPI_Comm_free( & comm );
     };
 
     /**
@@ -434,7 +586,8 @@ class Partition {
      */
     int2 get_coords_rank( const int target_rank ) const {
         int _coords[2];
-        MPI_Cart_coords( comm, target_rank, 2, _coords );
+        if ( MPI_Cart_coords( comm, target_rank, 2, _coords ) != MPI_SUCCESS )
+            mpi::fatal("Unable to get coordinates for rank " + std::to_string(target_rank));
         int2 target_coords = make_int2( _coords[0], _coords[1] );
         return target_coords;
     }
@@ -448,7 +601,9 @@ class Partition {
     int get_rank_coords( const int2 target_coords ) const {
         int cart_rank;
         int _coords[2] = { target_coords.x, target_coords.y };
-        MPI_Cart_rank( comm, _coords, &cart_rank );
+        if ( MPI_Cart_rank( comm, _coords, &cart_rank ) != MPI_SUCCESS )
+            mpi::fatal( "Unable to get rank from coordinates " +
+                to_string(target_coords));
         return cart_rank;
     }
 
@@ -461,6 +616,38 @@ class Partition {
         return coords.y * dims.x + coords.x;
     }
 
+    private:
+
+    /**
+     * @brief Checks whether given coordinates lie on the requested edge of
+     *        the partition
+     * 
+     * @param coord         Coordinate to check (coord::x, coord::y)
+     * @param edge          Edge to check (edge::lower, edge::upper)
+     * @param node_coords   Coordinates to test
+     * @return int          Returns 1 if node_coords is on the requested edge
+     */
+    int on_edge_impl( coord::cart coord, edge::pos edge, int2 node_coords ) const {
+        switch (coord) {
+        case coord::x:
+            switch(edge) {
+                case edge::lower: return node_coords.x == 0;
+                case edge::upper: return node_coords.x == (int) (dims.x-1);
+            }
+            break;
+        case coord::y:
+            switch(edge) {
+                case edge::lower: return node_coords.y == 0;
+                case edge::upper: return node_coords.y == (int) (dims.y-1);
+            }
+            break;
+        default: break;
+        }
+        return 0;
+    }
+
+    public:
+
     /**
      * @brief Returns true if local node is on the edge of the partition
      * 
@@ -469,22 +656,7 @@ class Partition {
      * @return int      Returns 1 if node in on the requested edge
      */
     int on_edge( coord::cart coord, edge::pos edge ) const {
-        switch (coord) {
-        case coord::x:
-            switch(edge) {
-                case edge::lower: return coords.x == 0;
-                case edge::upper: return coords.x == (int) (dims.x-1);
-            }
-            break;
-        case coord::y:
-            switch(edge) {
-                case edge::lower: return coords.y == 0;
-                case edge::upper: return coords.y == (int) (dims.y-1);
-            }
-            break;
-        default: break;
-        }
-        return 0;
+        return on_edge_impl( coord, edge, coords );
     }
 
     /**
@@ -496,25 +668,7 @@ class Partition {
      * @return int          Returns 1 if node in on the requested edge
      */
     int on_edge( coord::cart coord, edge::pos edge, int target_rank ) const {
-        
-        int2 target_coords = get_coords_rank( target_rank );
-        
-        switch (coord) {
-        case coord::x:
-            switch(edge) {
-                case edge::lower: return target_coords.x == 0;
-                case edge::upper: return target_coords.x == (int)(dims.x-1);
-            }
-            break;
-        case coord::y:
-            switch(edge) {
-                case edge::lower: return target_coords.y == 0;
-                case edge::upper: return target_coords.y == (int)(dims.y-1);
-            }
-            break;
-        default: break;
-        }
-        return 0;
+        return on_edge_impl( coord, edge, get_coords_rank( target_rank ) );
     }
 
     /**
@@ -530,8 +684,7 @@ class Partition {
      */
     void barrier() {
         if ( MPI_Barrier( comm ) != MPI_SUCCESS ) {
-            std::cerr << "Error on MPI_Barrier() call\n";
-            MPI_Abort( comm, 1 );
+            mpi::fatal( "Barrier failed" );
         }
     }
 
@@ -551,8 +704,7 @@ class Partition {
 
         if ( MPI_Reduce( sendbuf, data, count, mpi::data_type<T>(), op, root,
                          comm ) != MPI_SUCCESS ) {
-            std::cerr << "MPI_Reduce operation failed, aborting\n";
-            MPI_Abort( comm, 1 );
+            mpi::fatal("Reduce operation failed");
         }
     }
 
@@ -570,8 +722,7 @@ class Partition {
     void allreduce( const T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
                 
         if ( MPI_Allreduce( sendbuf, recvbuf, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
-            std::cerr << "MPI_Allreduce operation failed, aborting\n";
-            MPI_Abort( comm, 1 );
+            mpi::fatal( "Allreduce operation failed");
         }
     }
 
@@ -590,8 +741,7 @@ class Partition {
     template< typename T >
     void allreduce( T * data, int count, MPI_Op op ) {
         if ( MPI_Allreduce( MPI_IN_PLACE, data, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
-            std::cerr << "MPI_Allreduce operation failed, aborting\n";
-            MPI_Abort( comm, 1 );
+            mpi::fatal( "Allreduce operation failed");
         }
     }
 
@@ -676,138 +826,9 @@ class Partition {
     }
 };
 
-template< typename T >
-class Message {
-    private:
+}
 
-    enum Type { none, send, receive };
 
-    /// @brief Active message type
-    Message::Type active;
 
-    /// @brief Active / last completed message MPI handle
-    MPI_Request request;
 
-    public:
-
-    /// @brief MPI communicator
-    const MPI_Comm comm;
-
-    /// @brief Data buffer
-    T * buffer;
-
-    /// @brief Maximum message size
-    const int max_count;
-
-    /**
-     * @brief Construct a new Message object
-     * 
-     * @param max_count     Maximum message size
-     * @param comm          MPI communicator
-     */
-    Message( int max_count, MPI_Comm comm ) : 
-        active( none ), request( MPI_REQUEST_NULL ), 
-        comm( comm ), max_count( max_count )
-    {
-        buffer = memory::malloc<T>( max_count );
-    }
-
-    Message(const Message&) = delete;
-    Message& operator=(const Message&) = delete;
-
-    /**
-     * @brief Destroy the Message object
-     * 
-     */
-    ~Message() {
-        if ( active != Message::none ) {
-            MPI_Cancel( &request );
-            MPI_Wait( &request, MPI_STATUS_IGNORE );
-        }
-        memory::free( buffer );
-    }
-
-    /**
-     * @brief Non-blocking send message
-     * 
-     * @param count         Message size (must be smaller than max_count)
-     * @param recipient     Target node
-     * @param tag           Message tag
-     * @return int          Error code from MPI_Isend (MPI_SUCCESS on success)
-     */
-    int isend( int count, int recipient, int tag ) {
-        
-        if ( count > max_count ) {
-            std::cerr << "isend() - Message size too large\n";
-            mpi::abort(1);
-        }
-
-        if ( active != none ) {
-            std::cerr << "isend() - Tried to send message before other message completes\n";
-            mpi::abort(1);
-        }
-
-        int ierr = MPI_Isend( buffer, count, mpi::data_type<T>(), recipient, tag, comm, &request);
-        active = ( ierr == MPI_SUCCESS) ? Message::send : Message::none;
-        return ierr;
-    }
-
-    /**
-     * @brief Non-blocking receive message
-     * 
-     * @note The received message size must be <= max_count. You can use the
-     *       .wait(count) method to get the received message size
-     * 
-     * @param sender    Source node
-     * @param tag       Message tag
-     * @return int      Error code from MPI_Irecv (MPI_SUCCESS on success)
-     */
-    int irecv( int sender, int tag ) {
-
-        if ( active != none ) {
-            std::cerr << "irecv() - Tried to receive message before other message completes\n";
-            mpi::abort(1);
-        }
-
-        int ierr = MPI_Irecv( buffer, max_count, mpi::data_type<T>(), sender, tag, comm, &request);
-        active = ( ierr == MPI_SUCCESS) ? Message::receive : Message::none;
-        return ierr;
-    }
-
-    /**
-     * @brief Wait for message to complete
-     * 
-     * @return int      Error code from MPI_Wait (MPI_SUCCESS on success)
-     */
-    int wait( ) {
-        if ( active == Message::none ) {
-            std::cerr << "wait() - No active message\n";
-            mpi::abort(1);
-        }
-        int ierr = MPI_Wait( &request, MPI_STATUS_IGNORE );
-        active = Message::none;
-        return ierr;
-    }
-
-    /**
-     * @brief Wait for receive message to complete and get message size
-     * 
-     * @param count     Received message size
-     * @return int      Error code from MPI_Wait (MPI_SUCCESS on success)
-     */
-    int wait( int & count ) {
-        if ( active != Message::receive ) {
-            std::cerr << "wait() - No active message receive\n";
-            mpi::abort(1);
-        }
-        MPI_Status status;
-        int ierr = MPI_Wait( &request, &status );
-        
-        // Get number of received elements
-        MPI_Get_count( &status, mpi::data_type<T>(), &count );
-        
-        active = Message::none;
-        return ierr;
-    }
-};
 

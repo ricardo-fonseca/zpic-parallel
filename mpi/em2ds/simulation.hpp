@@ -24,7 +24,7 @@ class Simulation {
     const float dt;
 
     /// @brief MPI parallel partition
-    Partition parallel;
+    mpi::cart2d parallel;
 
     /// @brief EM fields
     EMF emf;

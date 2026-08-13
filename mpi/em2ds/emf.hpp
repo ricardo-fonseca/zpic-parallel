@@ -80,7 +80,7 @@ class EMF {
      * @param dt                Time step
      * @param parallel          Parallel partition 
      */
-    EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, Partition & parallel );
+    EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, mpi::cart2d & parallel );
     
     /**
      * @brief Destroy the EMF object

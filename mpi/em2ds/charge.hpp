@@ -65,7 +65,7 @@ class Charge {
      * @param dt                Time step
      * @param parallel          Parallel partition 
      */
-    Charge( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, Partition & parallel ):
+    Charge( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, mpi::cart2d & parallel ):
         box(box), 
         // dx( { box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
         dt(dt)

@@ -63,7 +63,7 @@ class Current {
      * @param dt                Time step
      * @param parallel          Parallel partition 
      */
-    Current( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, Partition & parallel ):
+    Current( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, mpi::cart2d & parallel ):
         box(box), 
         // dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
         dt(dt)

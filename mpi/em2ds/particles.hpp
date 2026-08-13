@@ -387,7 +387,7 @@ class ParticleSort : public ParticleSortData {
      * @param max_part      Maximum number of particles in buffer
      * @param par           Parallel partition
      */
-    ParticleSort( uint2 const ntiles, uint32_t const max_part, Partition & par ) :
+    ParticleSort( uint2 const ntiles, uint32_t const max_part, mpi::cart2d & par ) :
         ParticleSortData( ntiles )
     {
         idx = memory::malloc<int>( max_part );
@@ -517,7 +517,7 @@ class ParticleMessage {
      * 
      * @param ntiles 
      */
-    ParticleMessage( Partition & par ) {
+    ParticleMessage( mpi::cart2d & par ) {
 
         // Buffers for particle data messages (initially empty)
         buffer = nullptr;
@@ -699,7 +699,7 @@ class Particles : public ParticleData {
     public:
 
     /// @brief Parallel partition
-    Partition & parallel;
+    mpi::cart2d & parallel;
 
     /**
      * @brief Construct a new Particles object
@@ -708,7 +708,7 @@ class Particles : public ParticleData {
      * @param tile_dims         Individual tile grid size
      * @param max_part          Maximum number of particles
      */
-    Particles( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part, Partition & parallel ) :
+    Particles( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part, mpi::cart2d & parallel ) :
         ParticleData( global_ntiles, tile_dims, max_part ),
         send( parallel ), recv( parallel ),
         parallel( parallel )
@@ -1021,7 +1021,7 @@ class Particles : public ParticleData {
      * @param extra     (optional) Additional space to add to each tile. Leaves
      *                  room for particles to be injected later.
      */
-    void tile_sort( Partition & parallel, const int * __restrict__ extra = nullptr ){
+    void tile_sort( mpi::cart2d & parallel, const int * __restrict__ extra = nullptr ){
         // Create temporary buffers
         Particles    tmp( global_ntiles, tile_dims, max_part, parallel );
         ParticleSort sort( local_ntiles, max_part, parallel );

@@ -42,7 +42,7 @@ void test_tiled_grid( ) {
     gc.x = {1,2};
     gc.y = {1,2};
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     grid::tiled<float> data( global_ntiles, tile_dims, gc, parallel );
 
@@ -115,7 +115,7 @@ void test_vec3_tiled_grid( ) {
     gc.x = {1,2};
     gc.y = {1,2};
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     grid::vec3_tiled< float > data( global_ntiles, tile_dims, gc, parallel );
 
@@ -189,7 +189,7 @@ void test_ghosted( ) {
     gc.x = {1,2};
     gc.y = {3,4};
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     grid::ghosted<float> data( global_dims, gc, parallel );
 
@@ -258,7 +258,7 @@ void test_flat( ) {
     gc.x = {1,2};
     gc.y = {3,4};
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     grid::flat<float> data( global_dims, parallel );
 
@@ -306,7 +306,7 @@ void test_fft_tile( ) {
         std::cout << ansi::reset << std::endl;
     }
 
-    Partition parallel( uint2 { 1, 4 } );
+    mpi::cart2d parallel( uint2 { 1, 4 } );
     const uint2 global_dims = { 1024, 512 };
     const uint2 tile_dims = {16, 16 };
 
@@ -435,7 +435,7 @@ void test_poisson(){
 
     const float2 box{1.0, 1.0};
 
-    Partition parallel( uint2 { 1, 4 } );
+    mpi::cart2d parallel( uint2 { 1, 4 } );
     const uint2 global_dims = { 1024, 1024 };
     const uint2 tile_dims = {16, 16 };
 
@@ -511,7 +511,7 @@ void test_laser( ) {
         std::cout << ansi::reset << std::endl;
     }
 
-    Partition parallel( uint2 { 1, 4 } );
+    mpi::cart2d parallel( uint2 { 1, 4 } );
 
     uint2 ntiles{ 64, 16 };
     uint2 nx{ 16, 16 };
@@ -612,7 +612,7 @@ void test_inj( ) {
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };
@@ -664,7 +664,7 @@ void test_mov( ) {
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };
@@ -712,7 +712,7 @@ void test_current_charge( ) {
     // Parallel partition
     uint2 partition = make_uint2( 1, 4 );
 
-    Partition parallel( partition );
+    mpi::cart2d parallel( partition );
 
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };

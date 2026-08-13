@@ -332,8 +332,6 @@ inline void dep_charge( float * const __restrict__ rho, const int ystride, int2 
 
 #ifdef SIMD
 
-#warning Using SIMD accelerated code in species.cpp
-
 /**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
@@ -1107,7 +1105,7 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
  * @param parallel          Parallel configuration
  */
 void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 const tile_dims,
-    float const dt_, int const id_, Partition & parallel ) {
+    float const dt_, int const id_, mpi::cart2d & parallel ) {
     
     // Store simulation box size
     box = box_;

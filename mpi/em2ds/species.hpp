@@ -165,7 +165,7 @@ public:
      * @param parallel          Parallel configuration
      */
     virtual void initialize( float2 const box_, uint2 const global_ntiles, uint2 const tile_dims,
-    float const dt_, int const id_, Partition & parallel );
+    float const dt_, int const id_, mpi::cart2d & parallel );
 
     /**
      * @brief Destroy the Species object

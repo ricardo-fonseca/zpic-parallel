@@ -12,7 +12,7 @@
 * @param dt                Time step
 * @param parallel          Parallel partition 
 */
-EMF::EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, Partition & parallel ) : 
+EMF::EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, mpi::cart2d & parallel ) : 
     dx( float2{ box.x / ( tile_dims.x * global_ntiles.x ), box.y / ( tile_dims.y * global_ntiles.y ) } ),
     dt( dt ), box(box)
 {
