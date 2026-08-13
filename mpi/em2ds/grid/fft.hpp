@@ -504,7 +504,7 @@ inline grid::flat<std::complex<float>> complex_grid( const grid::tiled<float>& i
     
     // Output grid local dims and start position
     uint2 out_local_dims, out_local_start;
-    fft::local_kdims_tranposed( 
+    size_t out_local_size = fft::local_kdims_tranposed( 
         global_dims, 
         in.get_part().get_comm(), 
         out_local_dims, 
@@ -512,7 +512,7 @@ inline grid::flat<std::complex<float>> complex_grid( const grid::tiled<float>& i
 
     return grid::flat<std::complex<float>> ( 
         out_global_dims, out_local_dims, out_local_start,
-        in.get_part()
+        in.get_part(), out_local_size
     );
 }
 
