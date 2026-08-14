@@ -90,7 +90,7 @@ class pulse {
      * @param emf   EMF object
      * @return      Returns 0 on success, -1 on error (invalid laser parameters)
      */
-    int add( EMF & emf );
+    int add( emf & emf );
 };
 
 /**

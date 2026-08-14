@@ -27,11 +27,11 @@ class Simulation {
     mpi::cart2d parallel;
 
     /// @brief EM fields
-    EMF emf;
+    emf emf;
     /// @brief Electric current density
-    Current current;
+    current current;
     /// @brief Charge density
-    Charge charge;
+    charge charge;
 
     /// @brief Vector of particle species
     std::vector <Species*> species;

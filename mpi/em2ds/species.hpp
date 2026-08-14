@@ -221,17 +221,17 @@ public:
         // Validate parameters
         if ( (new_bc.x.lower == species::bc::periodic) || (new_bc.x.upper == species::bc::periodic) ) {
             if ( new_bc.x.lower != new_bc.x.upper ) {
-                std::cerr << "(*error*) Species boundary type mismatch along x.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to species::bc::periodic.\n";
-                exit(1);
+                mpi::fatal( "Species boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
             }
         }
 
         if ( (new_bc.y.lower == species::bc::periodic) || (new_bc.y.upper == species::bc::periodic) ) {
             if ( new_bc.y.lower != new_bc.y.upper ) {
-                std::cerr << "(*error*) Species boundary type mismatch along y.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to species::bc::periodic.\n";
-                exit(1);
+                mpi::fatal( "Species boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
             }
         }
 
@@ -314,7 +314,7 @@ public:
      * 
      * @param current   Electric current density
      */
-    virtual void advance( Current &current, Charge &charge );
+    virtual void advance( current &current, charge &charge );
 
     /**
      * @brief Advance particles 1 timestep
@@ -324,7 +324,7 @@ public:
      * @param emf       EM fields
      * @param current   Electric current density
      */
-    virtual void advance( EMF const &emf, Current &current, Charge &charge );
+    virtual void advance( emf const &emf, current &current, charge &charge );
 
     /**
      * @brief Deposit species charge

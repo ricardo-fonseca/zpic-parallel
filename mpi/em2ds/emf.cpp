@@ -2,6 +2,7 @@
 #include "grid/fft.hpp"
 
 #include <iostream>
+#include <ostream>
 
 /**
 * @brief Construct a new EMF object
@@ -12,7 +13,7 @@
 * @param dt                Time step
 * @param parallel          Parallel partition 
 */
-EMF::EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, mpi::cart2d & parallel ) : 
+emf::emf( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, mpi::cart2d & parallel ) : 
     dx( float2{ box.x / ( tile_dims.x * global_ntiles.x ), box.y / ( tile_dims.y * global_ntiles.y ) } ),
     dt( dt ), box(box)
 {
@@ -21,10 +22,11 @@ EMF::EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, do
     // Regardless, this is required by the particle push
     auto cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
     if ( dt >= cour ){
-        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
-        std::cerr << "(*error*) For the current resolution [" << dx.x << "," << dx.y << "]\n";
-        std::cerr << " the maximum timestep is dt = " << cour <<'\n';
-        mpi::abort(1);
+        std::ostringstream msg;
+        msg << "Invalid timestep, courant condition violation."
+            << " For the current resolution " << dx
+            << " the maximum timestep is dt = " << cour;
+        mpi::fatal( msg.str() );
     }
 
     // Guard cells (1 below, 2 above)
@@ -277,7 +279,7 @@ void update_fE(
  * @brief Advance EM fields 1 time step (no current or charge)
  * 
  */
-void EMF::advance() {
+void emf::advance() {
 
     // Advance transverse fields
     advance_psatd_nocurr ( *fEt, *fB, grid::fft::dk( box ), dt );
@@ -297,7 +299,7 @@ void EMF::advance() {
  * @param current   Electric current
  * @param charge    Electric charge
  */
-void EMF::advance( Current & current, Charge & charge ) {
+void emf::advance( current & current, charge & charge ) {
 
     // Advance transverse fields
     advance_psatd ( *fEt , *fB,*current.fJ,grid::fft::dk( box ), dt );
@@ -324,7 +326,7 @@ void EMF::advance( Current & current, Charge & charge ) {
  * @param field     Field to save (0:E, 1:B)
  * @param fc        Field component to save (0, 1 or 2)
  */
-void EMF::save( const emf::field field, fcomp::cart const fc ) {
+void emf::save( const quantity quant, fcomp::cart const fc ) const {
 
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
@@ -332,35 +334,34 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
     grid::vec3_tiled<float> * f = nullptr;
     grid::flat3<std::complex<float>> * cf = nullptr;
 
-    switch (field ) {
-        case emf::e :
+    switch ( quant ) {
+        case quantity::e :
             f = E;
             vfname = "E";
             vflabel = "E_";
             break;
-        case emf::b :
+        case quantity::b :
             f = B;
             vfname = "B";
             vflabel = "B_";
             break;
-        case emf::fe :
+        case quantity::fe :
             cf = fE;
             vfname = "fE";
             vflabel = "\\mathcal{F}\\,E_";
             break;
-        case emf::fet :
+        case quantity::fet :
             cf = fEt;
             vfname = "fEt";
             vflabel = "\\mathcal{F}\\,E^\\perp_";
             break;
-        case emf::fb :
+        case quantity::fb :
             cf = fB;
             vfname = "fB";
             vflabel = "\\mathcal{F}\\,B_";
             break;
         default:
-            std::cerr << "Invalid field type selected, aborting\n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid quantity selected" );
     }
 
     switch ( fc ) {
@@ -377,8 +378,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             vflabel += 'z';
             break;
         default:
-            std::cerr << "Invalid field component (fc) selected, aborting\n";
-            std::exit(1);
+            mpi::fatal( "Invalid field component (fc) selected" );
     }
 
     zdf::iteration iteration = {
@@ -397,7 +397,8 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
 
     zdf::grid_axis axis[2];
 
-    if ( field == emf::e || field == emf::b ) {
+    if ( f != nullptr ) {
+        // Real field
         axis[0] = (zdf::grid_axis) {
             .name = (char *) "x",
             .min = 0.0,
@@ -419,6 +420,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         f -> save( fc, info, iteration, "EMF" );
 
     } else {
+        // Complex (FFT) field
         float2 dk = grid::fft::dk( box );
 
         axis[0] = (zdf::grid_axis) {
@@ -450,7 +452,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
  * @param ene_E     Total E-field energy (per component)
  * @param ene_B     Total B-field energy (per component)
  */
-void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
+void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
 
     const uint2 ntiles          = E -> get_local_ntiles();
     const uint2 tile_dims       = E -> tile_dims;

@@ -5,16 +5,16 @@
 
 #include "filter.hpp"
 
-namespace charge {
-    enum field  { rho, frho };
+class charge {
 
-    namespace bc {
+    public:
+
+    enum class quantity  { rho = 0, frho };
+
+    struct bc {
         enum type { none = 0, periodic, reflecting };
-    }
-    typedef bounds_2d<bc::type> bc_type;
-}
-
-class Charge {
+    };
+    using bc_type = bounds_2d<bc::type>;
 
     private:
 
@@ -65,7 +65,7 @@ class Charge {
      * @param dt                Time step
      * @param parallel          Parallel partition 
      */
-    Charge( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, mpi::cart2d & parallel ):
+    charge( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, mpi::cart2d & parallel ):
         box(box), 
         // dx( { box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
         dt(dt)
@@ -102,7 +102,7 @@ class Charge {
      * @brief Destroy the Charge object
      * 
      */
-    ~Charge() {
+    ~charge() {
         delete (filter);
         
         delete (rho);
@@ -129,28 +129,26 @@ class Charge {
         // Validate parameters
         if ( (new_bc.x.lower == charge::bc::periodic) || (new_bc.x.upper == charge::bc::periodic) ) {
             if ( new_bc.x.lower != new_bc.x.upper ) {
-                std::cerr << "(*error*) Chrarge boundary type mismatch along x.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to current::bc::periodic.\n";
-                exit(1);
+                mpi::fatal( "Charge boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to current::bc::periodic." );
             }
         }
 
         if ( (new_bc.y.lower == charge::bc::periodic) || (new_bc.y.upper == charge::bc::periodic) ) {
             if ( new_bc.y.lower != new_bc.y.upper ) {
-                std::cerr << "(*error*) Charge boundary type mismatch along y.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::fatal( "Charge boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to current::bc::periodic." );
             }
         }
 
         if ( rho -> get_part().periodic.x && new_bc.x.lower != charge::bc::periodic ) {
-            std::cerr << "(*error*) Only periodic x boundaries are supported with periodic x parallel partitions.\n";
-            mpi::abort(1);
+            mpi::fatal( "Only periodic x boundaries are supported with periodic x parallel partitions.");
         }
 
         if ( rho -> get_part().periodic.y && new_bc.y.lower != charge::bc::periodic ) {
-            std::cerr << "(*error*) Only periodic y boundaries are supported with periodic y parallel partitions.\n";
-            mpi::abort(1);
+            mpi::fatal( "Only periodic y boundaries are supported with periodic x parallel partitions.");
         }
 
         // Store new values
@@ -183,7 +181,7 @@ class Charge {
     /**
      * @brief Save charge density to disk
      * 
-     * @param field     Which field to save (rho or frho)
+     * @param quant     Which quantity to save (rho or frho)
      */
-    void save( const charge::field field );
+    void save( const quantity quant );
 };

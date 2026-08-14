@@ -1,21 +1,20 @@
 #pragma once
 
-
 #include "grid/vec3_tiled.hpp"
 #include "grid/fft.hpp"
 
 #include "filter.hpp"
 
-namespace current {
-    enum field  { j, fj };
 
-    namespace bc {
+class current {
+
+    public:
+
+    enum class quantity { j = 0, fj };
+    struct bc {
         enum type { none = 0, periodic, reflecting };
-    }
-    typedef bounds_2d<bc::type> bc_type;
-}
-
-class Current {
+    };
+    using bc_type = bounds_2d<bc::type>;
 
     private:
 
@@ -63,7 +62,7 @@ class Current {
      * @param dt                Time step
      * @param parallel          Parallel partition 
      */
-    Current( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, mpi::cart2d & parallel ):
+    current( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, float const dt, mpi::cart2d & parallel ):
         box(box), 
         // dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
         dt(dt)
@@ -101,7 +100,7 @@ class Current {
      * @brief Destroy the Current object
      * 
      */
-    ~Current() {
+    ~current() {
         delete (filter);
         
         delete (J);
@@ -127,28 +126,26 @@ class Current {
         // Validate parameters
         if ( (new_bc.x.lower == current::bc::periodic) || (new_bc.x.upper == current::bc::periodic) ) {
             if ( new_bc.x.lower != new_bc.x.upper ) {
-                std::cerr << "(*error*) Current boundary type mismatch along x.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to current::bc::periodic.\n";
-                mpi::abort(1);
+                mpi::fatal( "Current boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to current::bc::periodic." );
             }
         }
 
         if ( (new_bc.y.lower == current::bc::periodic) || (new_bc.y.upper == current::bc::periodic) ) {
             if ( new_bc.y.lower != new_bc.y.upper ) {
-                std::cerr << "(*error*) Current boundary type mismatch along y.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                mpi::abort(1);
+                mpi::fatal( "Current boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to current::bc::periodic." );
             }
         }
 
         if ( J -> part.periodic.x && new_bc.x.lower != current::bc::periodic ) {
-            std::cerr << "(*error*) Only periodic x boundaries are supported with periodic x parallel partitions.\n";
-            mpi::abort(1);
+            mpi::fatal( "Only periodic x boundaries are supported with periodic x parallel partitions.");
         }
 
         if ( J -> part.periodic.y && new_bc.y.lower != current::bc::periodic ) {
-            std::cerr << "(*error*) Only periodic y boundaries are supported with periodic y parallel partitions.\n";
-            mpi::abort(1);
+            mpi::fatal( "Only periodic y boundaries are supported with periodic x parallel partitions.");
         }
 
         // Store new values
@@ -184,8 +181,8 @@ class Current {
     /**
      * @brief Save electric current data to diagnostic file
      * 
-     * @param field     Which field to save (J or fJ)
+     * @param quant     Which field to save (J or fJ)
      * @param jc        Current component to save
      */
-    void save( const current::field field, const fcomp::cart jc );
+    void save( const quantity quant, const fcomp::cart jc );
 };

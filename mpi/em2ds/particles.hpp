@@ -572,8 +572,7 @@ class ParticleMessage {
      */
     void isend( ) {
         if ( active != MessageType::none ) {
-            std::cerr << "isend() - Tried to send messages before other messages complete\n";
-            mpi::abort(1);
+            mpi::fatal( "isend() - Tried to send messages before other messages complete." );
         }
 
         active = MessageType::send;
@@ -596,8 +595,7 @@ class ParticleMessage {
     void irecv( ) {
 
         if ( active != MessageType::none ) {
-            std::cerr << "irecv() - Tried to receive message before other message completes\n";
-            mpi::abort(1);
+            mpi::fatal( "irecv() - Tried to receive message before other message completes." );
         }
         active = MessageType::receive;
 
@@ -801,17 +799,15 @@ class Particles : public ParticleData {
         // Check x direction
         if ( ( new_periodic.x ) && 
              ( (! parallel.periodic.x ) && ( parallel.dims.x > 1 )) ) {
-            std::cerr << "Particles::set_periodic() - Attempting to set ";
-            std::cerr << "parallel x boundaries on non-parallel comm direction\n";
-            exit(1);
+            mpi::fatal( "Particles::set_periodic() - Attempting to set "
+                        "parallel x boundaries on non-parallel comm direction." );
         }
 
         // Check y direction
         if ( ( new_periodic.y ) && 
              ( (! parallel.periodic.y ) && ( parallel.dims.y > 1 )) ) {
-            std::cerr << "Particles::set_periodic() - Attempting to set ";
-            std::cerr << "parallel y boundaries on non-parallel comm direction\n";
-            exit(1);
+            mpi::fatal( "Particles::set_periodic() - Attempting to set "
+                        "parallel y boundaries on non-parallel comm direction" );
         }
 
         // Store new global periodic values

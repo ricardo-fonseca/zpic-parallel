@@ -53,8 +53,7 @@ namespace UDistribution {
         const int npmin;
         ThermalCorr( float3 const uth, float3 const ufl, int const npmin = 2 ) : uth(uth), ufl(ufl), npmin(npmin) {
             if ( npmin <= 1 ) {
-                std::cout << "(*error*) invalid npmin parameter, must be > 1\n";
-                exit(1);
+                mpi::fatal( "Invalid npmin (" + std::to_string(npmin) + " parameter, must be > 1" );
             }
         };
 

@@ -1,6 +1,7 @@
 #include "particles.hpp"
 
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <cmath>
 
@@ -273,8 +274,8 @@ void Particles::save( const part::quant quants[], zdf::part_info &metadata, zdf:
                 dsets[i].count[0]  = global; 
 
                 if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
-                    std::cerr << "Particles::save() - Unable to create chunked dataset " << metadata.quants[i] << '\n';
-                    exit(1);
+                    mpi::fatal( "Particles::save() - Unable to create chunked dataset " + 
+                        std::string(dsets[i].name) );
                 }
             }
 
@@ -913,10 +914,11 @@ void Particles::tile_sort( Particles & tmp, ParticleSort & sort, const int * __r
     auto total_np = update_tile_info ( tmp, sort, extra );
 
     if ( total_np > max_part ) { 
-        std::cerr << "Particles::tile_sort() - particle buffer requires growing,"
+        std::ostringstream msg;
+        msg << "Particles::tile_sort() - particle buffer requires growing,"
                   << "max_part: " << max_part << ", total_np: " << total_np
-                  << ", not implemented yet.\n";
-        mpi::abort(1);
+                  << ", not implemented yet.";
+        mpi::fatal(msg.str());
     }
 
     // Copy outgoing particles (and particles needing shifting) to staging area
@@ -1029,8 +1031,7 @@ void Particles::validate( std::string msg, int const over ) {
     }
 
     if ( err ) {
-        mpi::cout << "\n(*error*) Invalid tile information, aborting..." << std::endl;
-        mpi::abort(1);
+        mpi::fatal("\nInvalid tile information");
     }
 
     // Loop over tiles
@@ -1079,8 +1080,7 @@ void Particles::validate( std::string msg, int const over ) {
     }
 
     if ( err ) {
-        mpi::cout << "\n(*error*) Invalid particle(s) found, aborting..." << std::endl;
-        mpi::abort(1);
+        mpi::fatal("Invalid particle(s) found" );
     } else {
         mpi::cout << " particle set ok.\n";
     }
@@ -1130,8 +1130,7 @@ void Particles::validate( std::string msg, int const over ) {
     }
 
     if ( nerr > 0 ) {
-        std::cerr << "(*error*) " << msg << ": invalid particle, aborting...\n";
-        exit(1);
+        mpi::fatal( msg + ": invalid particle(s) found" );
     }
 }
 

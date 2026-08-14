@@ -79,13 +79,11 @@ inline void lon_x(
 int laser::pulse::validate() {
 
     if ( a0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser a0, must be > 0\n";
-        mpi::abort(1);
+        mpi::fatal("Invalid laser parameter (a0), must be > 0");
     }    
 
     if ( omega0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser OMEGA0, must be > 0\n";
-        mpi::abort(1);
+        mpi::fatal( "Invalid laser parameter (omega0), must be > 0" );
     }    
 
     if ( fwhm > 0 ) {
@@ -95,18 +93,15 @@ int laser::pulse::validate() {
         flat = 0.;
     } else {
         if ( rise <= 0 ) {
-            std::cerr << "(*error*) Invalid laser RISE, must be > 0\n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid laser parameter (rise), must be > 0" );
         }
 
         if ( flat < 0 ) {
-            std::cerr << "(*error*) Invalid laser FLAT, must be >= 0\n";
-            mpi::abort(1);
+            mpi::fatal("Invalid laser parameter (flat), must be >= 0" );
         }
 
         if ( fall <= 0 ) {
-            std::cerr << "(*error*) Invalid laser FALL, must be > 0\n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid laser parameter (fall), must be > 0" );
         }
     }
 
@@ -119,7 +114,7 @@ int laser::pulse::validate() {
  * @param emf   EMF object
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
-int laser::pulse::add( EMF & emf ) {
+int laser::pulse::add( emf & emf ) {
 
     grid::vec3_tiled<float> tmp_E( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
     grid::vec3_tiled<float> tmp_B( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );

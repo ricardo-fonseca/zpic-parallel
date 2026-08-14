@@ -7,8 +7,10 @@
 #include <iostream>
 #include <cstdint>
 #include <cstdlib>
+#include <ostream>
 #include <string>
 #include <array>
+#include <source_location>
 
 namespace mpi {
 
@@ -147,12 +149,23 @@ inline int finalize( ) {
     return MPI_Finalize();
 }
 
-[[noreturn]] inline void fatal(const std::string& msg) {
-    std::cerr << "(* fatal *) " 
-              << msg 
-              << "\n(* fatal *) aborting...\n";
+/**
+ * @brief Fatal error, outputs message and aborts the code
+ * 
+ * @param msg       Message to print
+ * @param location  (optional) source_location object, defaults to where the function was called
+ */
+[[noreturn]] inline void fatal(const std::string& msg, 
+    const std::source_location location =
+          std::source_location::current()) {
+    std::cerr << "(* fatal *) " << msg << '\n'
+              << "(* fatal * ) " << location.file_name() << ':' << location.line()
+              << " " << location.function_name() << '\n'
+              << "(* fatal *) aborting..." << std::endl;
     MPI_Abort( MPI_COMM_WORLD, 1 );
-    std::exit(1); // unreachable, silences noreturn analysis
+    
+    // unreachable, silences noreturn analysis
+    std::exit(1);
 }
 
 /**

@@ -12,17 +12,13 @@
 
 #include <string>
 
-namespace emf {
-    enum field  { e, b, fe, fet, fb };
+class emf {
 
-    struct bc {
-        enum type { none = 0, periodic, pec, pmc };
-    };
+    public:
 
-    typedef bounds_2d<bc::type> bc_type;
-}
-
-class EMF {
+    enum class quantity {e = 0, b, fe, fet, fb};
+    struct bc { enum type { none = 0, periodic, pec, pmc }; };
+    using bc_type = bounds_2d<bc::type>;
 
     private:
 
@@ -80,13 +76,13 @@ class EMF {
      * @param dt                Time step
      * @param parallel          Parallel partition 
      */
-    EMF( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, mpi::cart2d & parallel );
+    emf( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, double const dt, mpi::cart2d & parallel );
     
     /**
      * @brief Destroy the EMF object
      * 
      */
-    ~EMF() {
+    ~emf() {
         delete (E);
         delete (B);
 
@@ -104,7 +100,7 @@ class EMF {
      * @param obj 
      * @return std::ostream& 
      */
-    friend std::ostream& operator<<(std::ostream& os, const EMF & obj) {
+    friend std::ostream& operator<<(std::ostream& os, const emf & obj) {
         return os << "EMF object";
     }
 
@@ -113,14 +109,14 @@ class EMF {
      * 
      * @return auto 
      */
-    int get_iter() { return iter; }
+    int get_iter() const noexcept { return iter; }
 
     /**
      * @brief Get the boundary conditions
      * 
      * @return emf::bc_type 
      */
-    emf::bc_type get_bc( ) { return bc; }
+    emf::bc_type get_bc( ) const noexcept { return bc; }
 
     /**
      * @brief Set the boundary conditions
@@ -132,28 +128,26 @@ class EMF {
         // Validate parameters
         if ( (new_bc.x.lower == emf::bc::periodic) || (new_bc.x.upper == emf::bc::periodic) ) {
             if ( new_bc.x.lower != new_bc.x.upper ) {
-                std::cerr << "(*error*) EMF boundary type mismatch along x.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::fatal( "EMF boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to emf::bc::periodic." );
             }
         }
 
         if ( (new_bc.y.lower == emf::bc::periodic) || (new_bc.y.upper == emf::bc::periodic) ) {
             if ( new_bc.y.lower != new_bc.y.upper ) {
-                std::cerr << "(*error*) EMF boundary type mismatch along y.\n";
-                std::cerr << "(*error*) When choosing periodic boundaries both lower and upper types must be set to emf::bc::periodic.\n";
-                exit(1);
+                mpi::fatal( "EMF boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to emf::bc::periodic." );
             }
         }
 
         if ( E -> part.periodic.x && new_bc.x.lower != emf::bc::periodic ) {
-            std::cerr << "(*error*) Only periodic x boundaries are supported with periodic x parallel partitions.\n";
-            mpi::abort(1);
+            mpi::fatal( "Only periodic x boundaries are supported with periodic x parallel partitions." );
         }
 
         if ( E -> part.periodic.y && new_bc.y.lower != emf::bc::periodic ) {
-            std::cerr << "(*error*) Only periodic y boundaries are supported with periodic y parallel partitions.\n";
-            mpi::abort(1);
+            mpi::fatal( "Only periodic y boundaries are supported with periodic y parallel partitions." );
         }
 
         // Store new values
@@ -180,15 +174,15 @@ class EMF {
      * @param current   Electric current density
      * @param charge    Electric charge densisty
      */
-    void advance( Current & current, Charge & charge );
+    void advance( current & current, charge & charge );
 
     /**
      * @brief Save EM field component to file
      * 
-     * @param field     Which field to save (E, B, fEt, etc.)
+     * @param quant     Which field to save (E, B, fEt, etc.)
      * @param fc        Which field component to save (x, y or z)
      */
-    void save( emf::field const field, const fcomp::cart fc );
+    void save( quantity const quant, const fcomp::cart fc ) const;
     
     /**
      * @brief Get EM field energy
@@ -198,6 +192,6 @@ class EMF {
      * @param ene_E     Electric field energy (per component)
      * @param ene_b     Magnetic field energy (per component)
      */
-    void get_energy( double3 & ene_E, double3 & ene_b );
+    void get_energy( double3 & ene_E, double3 & ene_b ) const;
 };
 

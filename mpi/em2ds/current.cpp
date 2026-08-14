@@ -124,7 +124,7 @@ void current_bcy(
  * @brief Processes "physical" boundary conditions
  * 
  */
-void Current::process_bc() {
+void current::process_bc() {
 
     const uint2 ntiles          = J -> get_local_ntiles();
     const uint2 tile_dims       = J -> tile_dims;
@@ -181,7 +181,7 @@ void Current::process_bc() {
  * Adds up current deposited on guard cells and (optionally) applies digital filtering
  * 
  */
-void Current::advance() {
+void current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc( );
@@ -203,9 +203,9 @@ void Current::advance() {
 /**
  * @brief Save electric current data to diagnostic file
  * 
- * @param jc        Current component to save (0, 1 or 2)
+ * @param jc        current component to save (0, 1 or 2)
  */
-void Current::save( const current::field field, const fcomp::cart jc ) {
+void current::save( const quantity quant, const fcomp::cart jc ) {
 
     std::string vfname;      // Dataset name
     std::string vflabel;    // Dataset label (for plots)
@@ -213,20 +213,19 @@ void Current::save( const current::field field, const fcomp::cart jc ) {
     grid::vec3_tiled<float> * f = nullptr;
     grid::flat3<std::complex<float>> * cf = nullptr;
 
-    switch (field) {
-        case current::j :
+    switch (quant) {
+        case quantity::j :
             f = J;
             vfname = "J";
             vflabel = "J_";
             break;
-        case current::fj :
+        case quantity::fj :
             cf = fJ;
             vfname = "fJ";
             vflabel = "\\mathcal{F}\\,J_";
             break;
         default:
-            std::cerr << "Invalid field type selected, aborting\n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid field type selected" );
     }
 
     switch ( jc ) {
@@ -243,8 +242,7 @@ void Current::save( const current::field field, const fcomp::cart jc ) {
             vflabel += 'z';
             break;
         default:
-            std::cerr << "Invalid field component (fc) selected, aborting\n";
-            std::exit(1);
+            mpi::fatal( "Invalid field component (fc) selected" );
     }
 
     zdf::grid_info info = {

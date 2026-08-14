@@ -30,7 +30,7 @@ class tiled {
     struct dest   { enum tag { upper = 0, lower = 1 }; };
 
     /// @brief Parallel partition
-    const Partition & part;
+    const mpi::cart2d & part;
 
     /// @brief Local number of tiles
     uint2 local_ntiles;
@@ -45,10 +45,10 @@ class tiled {
     uint2 local_dims;
 
     /// @brief Buffers for sending messages
-    bounds< Message<T>* > msg_send;
+    bounds< mpi::message<T>* > msg_send;
 
     /// @brief Buffers for receiving messages
-    bounds< Message<T>* > msg_recv;
+    bounds< mpi::message<T>* > msg_recv;
 
     /// @brief Data buffer
     T * d_buffer;
@@ -82,10 +82,10 @@ class tiled {
         );
 
         // Allocate message buffers
-        msg_recv.lower = new Message<T>( max_msg_size, part.get_comm() );
-        msg_recv.upper = new Message<T>( max_msg_size, part.get_comm() );
-        msg_send.lower = new Message<T>( max_msg_size, part.get_comm() );
-        msg_send.upper = new Message<T>( max_msg_size, part.get_comm() );
+        msg_recv.lower = new mpi::message<T>( max_msg_size, part.get_comm() );
+        msg_recv.upper = new mpi::message<T>( max_msg_size, part.get_comm() );
+        msg_send.lower = new mpi::message<T>( max_msg_size, part.get_comm() );
+        msg_send.upper = new mpi::message<T>( max_msg_size, part.get_comm() );
 
     }
 
@@ -99,28 +99,26 @@ class tiled {
     void validate_parameters() {
         // Grid parameters
         if ( global_ntiles.x == 0 || global_ntiles.y == 0 ) {
-            std::cerr << "Invalid number of tiles " << global_ntiles << '\n';
-            mpi::abort(1);
+            mpi::fatal( "Invalid number of tiles: " + to_string(global_ntiles) );
         }
 
         if ( tile_dims.x == 0 || tile_dims.y == 0 ) {
-            std::cerr << "Invalid tile dimensions" << tile_dims << '\n';
-            mpi::abort(1);
+            mpi::fatal( "Invalid tile dimensions: " + to_string(tile_dims) );
         }
 
         // Parallel partition
         if ( part.dims.x > global_ntiles.x ) {
-            std::cerr << "Number of parallel nodes along x (" ;
-            std::cerr << part.dims.x << ") is larger than number of tiles along x(";
-            std::cerr << global_ntiles.x << '\n';
-            mpi::abort(1);
+            mpi::fatal ( "Number of parallel nodes along x (" +
+                         std::to_string(part.dims.x) +
+                         ") is larger than number of tiles along x(" +
+                         std::to_string(global_ntiles.x) + ')');
         }
 
         if ( part.dims.y > global_ntiles.y ) {
-            std::cerr << "Number of parallel nodes along y (" ;
-            std::cerr << part.dims.y << ") is larger than number of tiles along y(";
-            std::cerr << global_ntiles.y << '\n';
-            mpi::abort(1);
+            mpi::fatal ( "Number of parallel nodes along y (" +
+                         std::to_string(part.dims.y) +
+                         ") is larger than number of tiles along y(" +
+                         std::to_string(global_ntiles.y) + ')');
         }
     }
 
@@ -155,7 +153,7 @@ class tiled {
      * @param gc                Number of guard cells
      * @param part              Parallel partition
      */
-    tiled( uint2 const global_ntiles, uint2 const tile_dims, bounds_2d<unsigned int> const gc, const Partition & part ):
+    tiled( uint2 const global_ntiles, uint2 const tile_dims, bounds_2d<unsigned int> const gc, const mpi::cart2d & part ):
         part( part ),
         d_buffer( nullptr ), 
         global_ntiles( global_ntiles ),
@@ -183,7 +181,7 @@ class tiled {
      * @param tile_dims                Individual tile size
      * @param part              Parallel partition
      */
-    tiled( uint2 const global_ntiles, uint2 const tile_dims, const Partition & part ):
+    tiled( uint2 const global_ntiles, uint2 const tile_dims, const mpi::cart2d & part ):
         part( part ),
         d_buffer( nullptr ),
         global_ntiles( global_ntiles ),
@@ -326,7 +324,12 @@ class tiled {
      */
     uint2 get_local_dims() const noexcept { return local_dims; }
 
-    const Partition & get_part() const noexcept { return  part; }
+    /**
+     * @brief Get the parallel 
+     * 
+     * @return const mpi::cart2d& 
+     */
+    const mpi::cart2d & get_part() const noexcept { return  part; }
 
     /**
      * @brief Stream extraction
@@ -1325,8 +1328,7 @@ class tiled {
             copy_to_gc_x();
 
         } else {
-            std::cerr << "x_shift_left(), invalid shift value, must be 0 < shift <= gc.x.upper\n";
-            exit(1);
+            mpi::fatal( "x_shift_left(), invalid shift value, must be 0 < shift <= gc.x.upper" );
         }
     }
 
@@ -1378,8 +1380,7 @@ class tiled {
             copy_to_gc_x();
 
         } else {
-            std::cerr << "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
-            exit(1);
+            mpi::fatal( "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries." );
         }
 
     }
@@ -1432,8 +1433,7 @@ class tiled {
             copy_to_gc_y();
 
         } else {
-            std::cerr << "kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.\n";
-            exit(1);
+            mpi::fatal( "kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries." );
         }
 
     }

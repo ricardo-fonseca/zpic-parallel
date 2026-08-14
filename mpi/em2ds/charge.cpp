@@ -103,7 +103,7 @@ void charge_bcy(
  * @brief Processes "physical" boundary conditions
  * 
  */
-void Charge::process_bc() {
+void charge::process_bc() {
     const uint2 ntiles          = rho -> get_local_ntiles();
     const uint2 tile_dims       = rho -> tile_dims;
     const uint2 tile_ext_dims   = rho -> tile_ext_dims;
@@ -159,7 +159,7 @@ void Charge::process_bc() {
  * Adds up current deposited on guard cells and (optionally) applies digital filtering
  * 
  */
-void Charge::advance() {
+void charge::advance() {
 
     // Add up current deposited on guard cells
     rho ->  add_from_gc( );
@@ -168,9 +168,9 @@ void Charge::advance() {
     // Do additional bc calculations if needed
     // process_bc();
 
-	// Add neutralizing background
-	// This is preferable to initializing rho to this value before charge deposition
-	// because it leads to less roundoff errors
+    // Add neutralizing background
+    // This is preferable to initializing rho to this value before charge deposition
+    // because it leads to less roundoff errors
     if ( neutral ) rho -> add( *neutral );
     
     // Calculate frho
@@ -187,7 +187,7 @@ void Charge::advance() {
  * @brief Save charge density data to diagnostic file
  * 
  */
-void Charge::save( const charge::field field ) {
+void charge::save( const quantity quant ) {
 
     std::string name = "rho";      // Dataset name
     std::string label = "\\rho";    // Dataset label (for plots)
@@ -195,20 +195,19 @@ void Charge::save( const charge::field field ) {
     grid::tiled<float> * f = nullptr;
     grid::flat<std::complex<float>> * cf = nullptr;
 
-    switch (field) {
-        case charge::rho :
+    switch (quant) {
+        case quantity::rho :
             f = rho;
             name = "rho";
             label = "\\rho";
             break;
-        case charge::frho :
+        case quantity::frho :
             cf = frho;
             name = "frho";
             label = "\\mathcal{F}\\,\\rho";
             break;
         default:
-            std::cerr << "Invalid field type selected, aborting\n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid quantity selected");
     }
 
     zdf::grid_info info = {

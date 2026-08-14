@@ -238,5 +238,5 @@ inline void stack_trace() {
     std::cerr << "(*error*) " << __func__ \
               << '(' << __FILE__ << ':' << __LINE__ \
               << ") not implemented yet, aborting...\n"; \
-    std::exit(1);\
+    mpi::abort(1);\
 }

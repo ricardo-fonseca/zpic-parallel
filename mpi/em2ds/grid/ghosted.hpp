@@ -31,7 +31,7 @@ class ghosted{
     struct dest   { enum tag { upper = 0, lower = 1 }; };
 
     /// @brief Parallel partition
-    const Partition & part;
+    const mpi::cart2d & part;
 
     /// @brief Local grid size
     uint2 local_dims;
@@ -49,10 +49,10 @@ class ghosted{
     unsigned int offset;
 
     /// @brief Buffers for sending messages
-    bounds< Message<T>* > msg_send;
+    bounds< mpi::message<T>* > msg_send;
 
     /// @brief Buffers for receiving messages
-    bounds< Message<T>* > msg_recv;
+    bounds< mpi::message<T>* > msg_recv;
 
     /// @brief Data buffer   
     T * d_buffer;    
@@ -79,7 +79,7 @@ class ghosted{
      * @param part          Parallel partition
      * @param granularity   Granularity for splitting grid across parallel nodes
      */
-    ghosted( uint2 const global_dims, bounds_2d<unsigned int> const gc, const Partition & part, 
+    ghosted( uint2 const global_dims, bounds_2d<unsigned int> const gc, const mpi::cart2d & part, 
         uint2 const granularity = {1,1} ):
         part( part ),
         d_buffer( nullptr ), 
@@ -87,17 +87,15 @@ class ghosted{
         gc(gc) {
         
         if ( global_dims.x == 0 || global_dims.y == 0 ) {
-            std::cerr << "Invalid global grid dimension " << global_dims << '\n';
-            mpi::abort(1);
+            mpi::fatal( "Invalid global grid dimensions: "  + to_string(global_dims) );
         }
         
         /// @brief global number of chunks
         auto global_chunks = global_dims / granularity;
 
         if ( global_chunks.x * granularity.x != global_dims.x || global_chunks.y * granularity.y != global_dims.y  ) {
-            std::cerr << "Invalid granularity " << granularity 
-                      << ", the global_dims do not divide evenly by this value \n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid granularity (" + to_string(granularity) +
+                        "), the global_dims do not divide evenly by this value");
         }
         
         /// @brief local number of chunks
@@ -131,10 +129,10 @@ class ghosted{
         );
 
         // Allocate message buffers
-        msg_recv.lower = new Message<T>( max_msg_size, part.get_comm() );
-        msg_recv.upper = new Message<T>( max_msg_size, part.get_comm() );
-        msg_send.lower = new Message<T>( max_msg_size, part.get_comm() );
-        msg_send.upper = new Message<T>( max_msg_size, part.get_comm() );
+        msg_recv.lower = new mpi::message<T>( max_msg_size, part.get_comm() );
+        msg_recv.upper = new mpi::message<T>( max_msg_size, part.get_comm() );
+        msg_send.lower = new mpi::message<T>( max_msg_size, part.get_comm() );
+        msg_send.upper = new mpi::message<T>( max_msg_size, part.get_comm() );
     }
 
     /**
@@ -168,7 +166,7 @@ class ghosted{
         other.msg_recv.upper = nullptr;
     }
 
-    ghosted( uint2 const global_dims, uint2 const local_dims_, uint2 const local_start_, const Partition & part ) :
+    ghosted( uint2 const global_dims, uint2 const local_dims_, uint2 const local_start_, const mpi::cart2d & part ) :
         part( part ),
         d_buffer( nullptr ), 
         global_dims( global_dims ),
@@ -268,7 +266,12 @@ class ghosted{
      */
     unsigned int get_offset() const noexcept { return offset; }
 
-    const Partition & get_part() const noexcept { return  part; }
+    /**
+     * @brief Get the parallel topology
+     * 
+     * @return const mpi::cart2d& 
+     */
+    const mpi::cart2d & get_part() const noexcept { return part; }
 
     /**
      * @brief Buffer size
@@ -321,9 +324,10 @@ class ghosted{
      */
     void add( const ghosted<T> &rhs ) {
         if ( rhs.local_ext_dims != local_ext_dims ) {
-            std::cerr << "add(): incompatible grid sizes (" << name << ": " << local_ext_dims
-                      << " vs " << rhs.name << ": " << rhs.local_ext_dims << ")\n";
-            mpi::abort(1);
+            mpi::fatal( 
+                "add(): incompatible grid sizes (" + name + ": " + to_string(local_ext_dims) +
+                " vs " + rhs.name + ": " + to_string(rhs.local_ext_dims) + ')' 
+            );
         }
         
         size_t const size = buffer_size( );
@@ -742,8 +746,7 @@ class ghosted{
             copy_to_gc_x();
 
         } else {
-            std::cerr << "x_shift_left(), invalid shift value, must be 0 < shift <= gc.x.upper\n";
-            mpi::abort(1);
+            mpi::fatal( "x_shift_left(), invalid shift value, must be 0 < shift <= gc.x.upper" );
         }
     }
 
@@ -778,8 +781,7 @@ class ghosted{
             copy_to_gc();
 
         } else {
-            std::cerr << "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries.\n";
-            mpi::abort(1);
+            mpi::fatal( "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries." );
         }
 
     }
@@ -823,8 +825,7 @@ class ghosted{
             copy_to_gc();
 
         } else {
-            std::cerr << "kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries.\n";
-            mpi::abort(1);
+            mpi::fatal( "kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries." );
         }
 
     }
@@ -840,13 +841,11 @@ class ghosted{
     void transpose( T * send_buffer) {
         // Check parallel partition
         if ( part.dims.x != 1 ) {
-            std::cerr << "only 1D parallel partitions along y are supported\n";
-            mpi::abort(1);
+            mpi::fatal( "only 1D parallel partitions along y are supported." );
         }
 
         if ( local_dims.x % part.dims.y != 0 ) {
-            std::cerr << "The x dimension must divide evenly by the number of y parallel nodes \n";
-            mpi::abort(1);
+            mpi::fatal( "The x dimension must divide evenly by the number of y parallel nodes." );
         }
 
         int2 block_dims = make_int2( local_dims.x / part.dims.y, local_dims.y );

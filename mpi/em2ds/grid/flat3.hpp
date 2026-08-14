@@ -7,6 +7,8 @@
 
 // Proveides fcomp::cart
 #include "vec3_tiled.hpp"
+#include <sstream>
+#include <string>
 
 namespace grid {
 
@@ -21,7 +23,7 @@ class flat3{
     protected:
 
     /// @brief Parallel partition
-    const Partition & part;
+    const mpi::cart2d & part;
 
     /// @brief Local grid size
     uint2 local_dims;
@@ -61,24 +63,22 @@ class flat3{
      * @param part          Parallel partition
      * @param granularity   Granularity for splitting grid across parallel nodes
      */
-    flat3( uint2 const global_dims, const Partition & part, 
+    flat3( uint2 const global_dims, const mpi::cart2d & part, 
         uint2 const granularity = {1,1} ):
         part( part ),
         x_buffer( nullptr ), y_buffer( nullptr ), z_buffer( nullptr ), 
         global_dims( global_dims ) {
         
         if ( global_dims.x == 0 || global_dims.y == 0 ) {
-            std::cerr << "Invalid global grid dimension " << global_dims << '\n';
-            mpi::abort(1);
+            mpi::fatal( "Invalid global grid dimensions: " + to_string(global_dims) );
         }
         
         /// @brief global number of chunks
         auto global_chunks = global_dims / granularity;
 
         if ( global_chunks.x * granularity.x != global_dims.x || global_chunks.y * granularity.y != global_dims.y  ) {
-            std::cerr << "Invalid granularity " << granularity 
-                      << ", the global_dims do not divide evenly by this value \n";
-            mpi::abort(1);
+            mpi::fatal( "Invalid granularity (" + to_string(granularity) + 
+                        "), the global_dims do not divide evenly by this value" );
         }
         
         /// @brief local number of chunks
@@ -146,7 +146,7 @@ class flat3{
      * @param local_size        (optional) Size (in elements) to use for data
      *                          buffers, must be larger than local_dims.y * local_dims.x
      */
-    flat3( uint2 const global_dims, uint2 const local_dims, uint2 const local_start, const Partition & part, 
+    flat3( uint2 const global_dims, uint2 const local_dims, uint2 const local_start, const mpi::cart2d & part, 
         size_t local_size = 0 ) :
         part( part ),
         local_dims ( local_dims ),
@@ -164,9 +164,8 @@ class flat3{
 
         // If local_size was specified, verify that it is large enough
         if ( local_size < buffer_size() ) {
-            std::cerr << "Requested local_size for flat3<> grid is too small, "
-                         "must be at least " << buffer_size() << '\n';
-            mpi::abort(1);
+            mpi::fatal( "Requested local_size for flat3<> grid is too small, "
+                         "must be at least " + std::to_string(buffer_size()) );
         }
 
         // Allocate main data buffers using local_size
@@ -244,7 +243,7 @@ class flat3{
      * 
      * @return const Partition& 
      */
-    const Partition & get_part() const noexcept { return  part; }
+    const mpi::cart2d & get_part() const noexcept { return  part; }
 
     /**
      * @brief Buffer size
@@ -304,9 +303,10 @@ class flat3{
      */
     void add( const flat3<T> &rhs ) {
         if ( rhs.local_dims != local_dims ) {
-            std::cerr << "add(): incompatible grid sizes (" << name << ": " << local_dims
-                      << " vs " << rhs.name << ": " << rhs.local_dims << ")\n";
-            mpi::abort(1);
+            std::ostringstream msg;
+            msg << "add(): incompatible grid sizes (" << name << ": " << local_dims
+                      << " vs " << rhs.name << ": " << rhs.local_dims << ')';
+            mpi::fatal(msg.str());
         }
 
         size_t const size = buffer_size( );
@@ -344,13 +344,11 @@ class flat3{
 
         // Check parallel partition
         if ( part.dims.x != 1 ) {
-            std::cerr << "only 1D parallel partitions along y are supported\n";
-            mpi::abort(1);
+            mpi::fatal( "only 1D parallel partitions along y are supported" );
         }
 
         if ( local_dims.x % part.dims.y != 0 ) {
-            std::cerr << "The x dimension must divide evenly by the number of y parallel nodes \n";
-            mpi::abort(1);
+            mpi:.fatal( "The x dimension must divide evenly by the number of y parallel nodes" );
         }
 
         int2 block_dims = make_int2( local_dims.x / part.dims.y, local_dims.y );
@@ -427,8 +425,7 @@ class flat3{
             zdf::save_grid( x_buffer, 2, global, start, local, name + "-x", filename, part.get_comm() );
             break;
         default:
-            std::cerr << "flat3::save() - Invalid fc\n";
-            mpi::abort(1);
+            mpi::fatal( "flat3::save() - Invalid fc" );
         }
     }
 
@@ -465,8 +462,7 @@ class flat3{
             chunk.data = (void *) x_buffer;
             break;
         default:
-            std::cerr << "flat3::save() - Invalid fc\n";
-            mpi::abort(1);
+            mpi::fatal( "flat3::save() - Invalid fc" );
         }
 
         zdf::save_grid<T>( chunk, info, iter, path, part.get_comm() );

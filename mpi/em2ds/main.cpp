@@ -521,24 +521,24 @@ void test_laser( ) {
 
     if ( mpi::root() ) std::cout << "Creating EMF object...\n";
 
-    EMF emf( ntiles, nx, box, dt, parallel );
+    emf emf( ntiles, nx, box, dt, parallel );
 
     auto save_emf = [ & emf ]( ) {
-        emf.save( emf::e, fcomp::x );
-        emf.save( emf::e, fcomp::y );
-        emf.save( emf::e, fcomp::z );
+        emf.save( emf::quantity::e, fcomp::x );
+        emf.save( emf::quantity::e, fcomp::y );
+        emf.save( emf::quantity::e, fcomp::z );
 
-        emf.save( emf::b, fcomp::x );
-        emf.save( emf::b, fcomp::y );
-        emf.save( emf::b, fcomp::z );
+        emf.save( emf::quantity::b, fcomp::x );
+        emf.save( emf::quantity::b, fcomp::y );
+        emf.save( emf::quantity::b, fcomp::z );
 
-        emf.save( emf::fet, fcomp::x );
-        emf.save( emf::fet, fcomp::y );
-        emf.save( emf::fet, fcomp::z );
+        emf.save( emf::quantity::fet, fcomp::x );
+        emf.save( emf::quantity::fet, fcomp::y );
+        emf.save( emf::quantity::fet, fcomp::z );
 
-        emf.save( emf::fb, fcomp::x );
-        emf.save( emf::fb, fcomp::y );
-        emf.save( emf::fb, fcomp::z );
+        emf.save( emf::quantity::fb, fcomp::x );
+        emf.save( emf::quantity::fb, fcomp::y );
+        emf.save( emf::quantity::fb, fcomp::z );
 
     };
 
@@ -729,22 +729,22 @@ void test_current_charge( ) {
 
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
-    Current current( ntiles, nx, box, dt, parallel );
-    Charge charge( ntiles, nx, box, dt, parallel );
+    current current( ntiles, nx, box, dt, parallel );
+    charge charge( ntiles, nx, box, dt, parallel );
 
     electrons.advance( current, charge );
 
     current.advance( );
-    current.save( current::field::j, fcomp::x );
-    current.save( current::field::j, fcomp::y );
-    current.save( current::field::j, fcomp::z );
-    current.save( current::field::fj, fcomp::x );
-    current.save( current::field::fj, fcomp::y );
-    current.save( current::field::fj, fcomp::z );
+    current.save( current::quantity::j, fcomp::x );
+    current.save( current::quantity::j, fcomp::y );
+    current.save( current::quantity::j, fcomp::z );
+    current.save( current::quantity::fj, fcomp::x );
+    current.save( current::quantity::fj, fcomp::y );
+    current.save( current::quantity::fj, fcomp::z );
 
     charge.advance();
-    charge.save( charge::field::rho );
-    charge.save( charge::field::frho );
+    charge.save( charge::quantity::rho );
+    charge.save( charge::quantity::frho );
 
     parallel.barrier();
     if ( mpi::root() ) {
@@ -798,9 +798,9 @@ void test_weibel( )
 
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
-        sim.emf.save(emf::b, fcomp::x);
-        sim.emf.save(emf::b, fcomp::y);
-        sim.emf.save(emf::b, fcomp::z);
+        sim.emf.save(emf::quantity::b, fcomp::x);
+        sim.emf.save(emf::quantity::b, fcomp::y);
+        sim.emf.save(emf::quantity::b, fcomp::z);
 
         electrons.save_charge();
         positrons.save_charge();

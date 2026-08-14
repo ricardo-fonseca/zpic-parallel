@@ -428,7 +428,7 @@ inline vfloat3 vdudt_boris( const vfloat alpha, vfloat3 e, vfloat3 b, vfloat3 u,
 /**
  * @brief Deposit current from single particle (vector version)
  * 
- * @note Current will be deposited for all vector elements
+ * @note current will be deposited for all vector elements
  * 
  * @param J         Electric current buffer
  * @param ystride   y-stride for J
@@ -558,12 +558,12 @@ inline void vdep_charge(
  * 
  * @param tile_idx          Tile index
  * @param part              Particle data
- * @param d_current         Current grid (global)
+ * @param d_current         current grid (global)
  * @param current_offset    Offset to position [0,0] of the current grid
- * @param ext_nx            Current grid size (external)
+ * @param ext_nx            current grid size (external)
  * @param dt_dx             Ratio between time step and cell size
  * @param q                 Particle charge
- * @param qnx               Current normalization
+ * @param qnx               current normalization
  */
 void move_deposit_kernel(
     uint2 const tile_idx,
@@ -889,12 +889,12 @@ void push_kernel (
  * 
  * @param tile_idx          Tile index
  * @param part              Particle data
- * @param d_current         Current grid (global)
+ * @param d_current         current grid (global)
  * @param current_offset    Offset to position [0,0] of the current grid
- * @param ext_nx            Current grid size (external)
+ * @param ext_nx            current grid size (external)
  * @param dt_dx             Ratio between time step and cell size
  * @param q                 Particle charge
- * @param qnx               Current normalization
+ * @param qnx               current normalization
  */
 void move_deposit_kernel(
     uint2 const tile_idx,
@@ -1072,13 +1072,12 @@ Species::Species( std::string const name, float const m_q, uint2 const ppc ):
 
     // Validate parameters
     if ( m_q == 0 ) {
-        std::cerr << "(*error*) Invalid m_q value, must be not 0, aborting...\n";
-        exit(1);
+        mpi::fatal( "Invalid m_q value (0.0) must be not 0" );
     }
 
     if ( ppc.x < 1 || ppc.y < 1 ) {
-        std::cerr << "(*error*) Invalid ppc value, must be >= 1 in all directions\n";
-        exit(1);
+        mpi::fatal( "Invalid ppc value (" + to_string(ppc) + 
+            "), must be >= 1 in all directions" );
     }
 
     // Set default parameters
@@ -1365,9 +1364,8 @@ void species_bcy(
  */
 void Species::process_bc() {
 
-    std::cout << "(*error*) Species::process_bc() have not been implemented yet,"
-              << " aborting.\n";
-    exit(1);
+    NOT_IMPLEMENTED;
+    
     // x boundaries
     if ( bc.x.lower > species::bc::periodic || bc.x.upper > species::bc::periodic ) {
         
@@ -1425,7 +1423,7 @@ void Species::advance( ) {
  * @param emf       EM fields
  * @param current   Electric durrent density
  */
-void Species::advance( Current &current, Charge &charge ) {
+void Species::advance( current &current, charge &charge ) {
 
     // Advance positions and deposit current
     move( current.J, charge.rho );
@@ -1453,7 +1451,7 @@ void Species::advance( Current &current, Charge &charge ) {
  * @param emf       EM fields
  * @param current   Electric durrent density
  */
-void Species::advance( EMF const &emf, Current &current, Charge & charge ) {
+void Species::advance( emf const &emf, current &current, charge & charge ) {
 
     // Advance momenta
     push( emf.E, emf.B );
@@ -1475,9 +1473,9 @@ void Species::advance( EMF const &emf, Current &current, Charge & charge ) {
 /**
  * @brief Moves particles and deposit current
  * 
- * Current will be accumulated on existing data
+ * current will be accumulated on existing data
  * 
- * @param current   Current grid
+ * @param current   current grid
  */
 void Species::move( grid::vec3_tiled<float> * J, grid::tiled<float> * rho )
 {
@@ -1582,7 +1580,7 @@ void move_kernel(
  * This is usually used for test species: species that do not self-consistently
  * influence the simulation
  * 
- * @param current   Current grid
+ * @param current   current grid
  */
 void Species::move( )
 {
@@ -1804,8 +1802,9 @@ void Species::save() const {
                 dsets[i].count[0]  = global; 
 
                 if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
-                    std::cerr << "Particles::save() - Unable to create chunked dataset " << info.quants[i] << '\n';
-                    exit(1);
+                    mpi::fatal( 
+                        "Particles::save() - Unable to create chunked dataset " + 
+                        std::string(dsets[i].name) );
                 }
             }
 
