@@ -4,15 +4,13 @@
 #include <cstdint>
 #include <iostream>
 
-typedef float32x4_t vec_f32;
-typedef int32x4_t   vec_i32 ;
-typedef uint32x4_t  vec_mask32 ;
-
 /**
- * @brief Floating point (32 bit) SIMD types
+ * @brief ARM NEON SIMD vectors
  * 
- * @note For ARM Neon this corresponds to the vec_f32 vector
  */
+using vec_f32    = float32x4_t;
+using vec_i32    = int32x4_t;
+using vec_mask32 = uint32x4_t;
 
 /**
  * @brief Extract a single float from a vec_f32 vector
@@ -979,38 +977,3 @@ struct alignas(vec_mask32) vmask2 {
     vec_mask32 x, y;
 };
 
-class Vec4Float {
-    vec_f32 v;
-    public:
-    Vec4Float( const vec_f32 v ) : v(v) {};
-    Vec4Float( const float s ) : v( vdupq_n_f32(s) ) {};
-    float extract( const int i ) { return v[i]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec4Float& obj) { 
-        os << obj.v;
-        return os;
-    }
-};
-
-class Vec4Int {
-    vec_i32 v;
-    public:
-    Vec4Int( const vec_i32 v ) : v(v) {};
-    Vec4Int( const int s ) : v( vdupq_n_s32(s) ) {};
-    int extract( const int i ) { return v[i]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec4Int& obj) { 
-        os << obj.v;
-        return os;
-    }
-};
-
-class Vec4Mask {
-    vec_mask32 v;
-    public:
-    Vec4Mask( const vec_mask32 v ) : v(v) {};
-    Vec4Mask( const unsigned int s ) : v( vdupq_n_u32(s) ) {};
-    int extract( const int i ) { return v[i]; }
-    inline friend std::ostream& operator<<(std::ostream& os, const Vec4Mask& obj) { 
-        os << obj.v;
-        return os;
-    }
-};

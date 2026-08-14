@@ -58,12 +58,9 @@ void test_tiled_grid( ) {
     data.zero( );
     data.set( 1.0 );
 
-    auto ext_dims = data.tile_ext_dims;
-
     for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
         const uint2 tile_idx = { tid % ntiles.x, tid / ntiles.x  };
-        const size_t tile_off = tid * roundup4( ext_dims.x * ext_dims.y );
-        float * const __restrict__ tile_data = & data.data()[ tile_off + data.offset ];
+        float * const __restrict__ tile_data = data.tile_data(tid);
 
         const auto   tile_val = ( local_tile_start.y + tile_idx.y ) * global_ntiles.x + ( local_tile_start.x + tile_idx.x );
 
@@ -133,8 +130,7 @@ void test_vec3_tiled_grid( ) {
     // Set different value per tile
     for( unsigned int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid++ ) {
         const uint2 tile_idx = { tid % local_ntiles.x, tid / local_ntiles.x  };
-        const size_t tile_off = tid * roundup4( data.tile_ext_dims.x * data.tile_ext_dims.y );
-        auto * const __restrict__ tile_data = & data.data()[ data.offset + tile_off ];
+        auto * const __restrict__ tile_data = data.tile_data( tid );
 
         const auto   tile_val = ( local_tile_start.y + tile_idx.y ) * global_ntiles.x + ( local_tile_start.x + tile_idx.x );
 
@@ -331,7 +327,7 @@ void test_fft_tile( ) {
     #pragma omp parallel for collapse(2)
     for( unsigned int ty = 0; ty < local_ntiles.y; ty++ ) {
         for( unsigned int tx = 0; tx < local_ntiles.x; tx++ ) {
-            float * const __restrict__ tile_data = data.tile_data(tx,ty) + data.offset;
+            float * const __restrict__ tile_data = data.tile_data(tx,ty);
 
             unsigned int ix0 = ( tile_start.x + tx ) * tile_dims.x;
             unsigned int iy0 = ( tile_start.y + ty ) * tile_dims.y;
@@ -388,7 +384,7 @@ void set_charge( grid::tiled<float> & charge, const float2 dx, const float2 cent
     #pragma omp parallel for collapse(2)
     for( unsigned int ty = 0; ty < local_ntiles.y; ty++ ) {
         for( unsigned int tx = 0; tx < local_ntiles.x; tx++ ) {
-            float * const __restrict__ tile_data = &charge.tile_data(tx,ty)[charge.offset];
+            float * const __restrict__ tile_data = charge.tile_data(tx,ty);
 
             unsigned int ix0 = ( tile_start.x + tx ) * tile_dims.x;
             unsigned int iy0 = ( tile_start.y + ty ) * tile_dims.y;

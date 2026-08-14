@@ -98,6 +98,9 @@ class charge {
         neutral = nullptr;
     };
     
+    charge( const charge& ) = delete;
+    charge& operator=( const charge& ) = delete;
+
     /**
      * @brief Destroy the Charge object
      * 
@@ -115,7 +118,7 @@ class charge {
     /**
      * @brief Get the type of boundary conditions
      * 
-     * @return current::bc_type
+     * @return charge::bc_type
      */
     charge::bc_type get_bc( ) { return bc; }
 
@@ -148,7 +151,7 @@ class charge {
         }
 
         if ( rho -> get_part().periodic.y && new_bc.y.lower != charge::bc::periodic ) {
-            mpi::fatal( "Only periodic y boundaries are supported with periodic x parallel partitions.");
+            mpi::fatal( "Only periodic y boundaries are supported with periodic y parallel partitions.");
         }
 
         // Store new values

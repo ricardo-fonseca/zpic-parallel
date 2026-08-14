@@ -1,8 +1,10 @@
 #include "species.hpp"
+#include <array>
 #include <iostream>
 #include <string>
 
 #include "particles.hpp"
+#include "simd/neon.hpp"
 #include "simd/simd.hpp"
 
 /**
@@ -471,30 +473,30 @@ void vdep_current(
     vfloat S0y = vec_sub( c1_2, x.y );
     vfloat S1y = vec_add( c1_2, x.y );
 
-    VecFloat_s jx = vec_mul( vec_mul( u.x, rg ), q );
-    VecFloat_s jy = vec_mul( vec_mul( u.y, rg ), q );
-    VecFloat_s jz = vec_mul( vec_mul( u.z, rg ), q );
+    vfloat jx = vec_mul( vec_mul( u.x, rg ), q );
+    vfloat jy = vec_mul( vec_mul( u.y, rg ), q );
+    vfloat jz = vec_mul( vec_mul( u.z, rg ), q );
 
-    VecFloat_s a00 = vec_mul( S0y, S0x );
-    VecFloat_s a01 = vec_mul( S0y, S1x );
-    VecFloat_s a10 = vec_mul( S1y, S0x );
-    VecFloat_s a11 = vec_mul( S1y, S1x );
+    vfloat a00 = vec_mul( S0y, S0x );
+    vfloat a01 = vec_mul( S0y, S1x );
+    vfloat a10 = vec_mul( S1y, S0x );
+    vfloat a11 = vec_mul( S1y, S1x );
 
-    VecInt_s idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
+    vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
 
     for ( int i = 0; i < vecwidth; i++ ) {
 
-        float * __restrict__ Js = (float *) (&J[idx.extract(i)]);
+        float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
         int const stride3 = 3 * ystride;
 
-        float w00 = a00.extract(i);
-        float w01 = a01.extract(i);
-        float w10 = a10.extract(i);
-        float w11 = a11.extract(i);
+        float w00 = vec_extract( a00, i );
+        float w01 = vec_extract( a01, i );
+        float w10 = vec_extract( a10, i );
+        float w11 = vec_extract( a11, i );
 
-        float pjx = jx.extract(i);
-        float pjy = jy.extract(i);
-        float pjz = jz.extract(i);
+        float pjx = vec_extract( jx, i );
+        float pjy = vec_extract( jy, i );
+        float pjz = vec_extract( jz, i );
 
         Js[       0 + 0 + 0 ] += w00 * pjx;
         Js[       0 + 0 + 1 ] += w00 * pjy;
@@ -512,6 +514,8 @@ void vdep_current(
         Js[ stride3 + 3 + 1 ] += w11 * pjy;
         Js[ stride3 + 3 + 2 ] += w11 * pjz;
     }
+
+
 }
 
 
@@ -536,20 +540,20 @@ inline void vdep_charge(
     vfloat S0y = vec_sub( c1_2, x.y );
     vfloat S1y = vec_add( c1_2, x.y );
 
-    VecFloat_s rho00 = vec_mul( vec_mul( S0y, S0x ), q );
-    VecFloat_s rho01 = vec_mul( vec_mul( S0y, S1x ), q );
-    VecFloat_s rho10 = vec_mul( vec_mul( S1y, S0x ), q );
-    VecFloat_s rho11 = vec_mul( vec_mul( S1y, S1x ), q );
+    vfloat rho00 = vec_mul( vec_mul( S0y, S0x ), q );
+    vfloat rho01 = vec_mul( vec_mul( S0y, S1x ), q );
+    vfloat rho10 = vec_mul( vec_mul( S1y, S0x ), q );
+    vfloat rho11 = vec_mul( vec_mul( S1y, S1x ), q );
 
-    VecInt_s idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
+    vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
 
     for ( int i = 0; i < vecwidth; i++ ) {
-        float * __restrict__ rhos = & rho[ idx.extract(i) ];
+        float * __restrict__ rhos = & rho[ vec_extract( idx, i ) ];
 
-        rhos[           0 ] += rho00.extract(i);
-        rhos[           1 ] += rho01.extract(i);
-        rhos[ ystride + 0 ] += rho10.extract(i);
-        rhos[ ystride + 1 ] += rho11.extract(i);
+        rhos[           0 ] += vec_extract( rho00, i );
+        rhos[           1 ] += vec_extract( rho01, i );
+        rhos[ ystride + 0 ] += vec_extract( rho10, i );
+        rhos[ ystride + 1 ] += vec_extract( rho11, i );
     }
 }
 
@@ -574,17 +578,18 @@ void move_deposit_kernel(
 {
     const uint2 ntiles  = part.local_ntiles;
 
-    const int tile_vol = roundup4( current_ext_nx.x * current_ext_nx.y );
+    const int j_tile_vol = roundup4( current_ext_nx.x * current_ext_nx.y );
+    const int rho_tile_vol = roundup4( charge_ext_nx.x * charge_ext_nx.y );
 
     // The alignment also avoids some optimization related segfaults
-    alignas(local_align) float3 _current_buffer[ tile_vol ];
-    alignas(local_align) float  _charge_buffer[ tile_vol ];
+    alignas(local_align) float3 _current_buffer[ j_tile_vol ];
+    alignas(local_align) float  _charge_buffer[ rho_tile_vol ];
 
     // Zero local buffers
-    for( auto i = 0; i < tile_vol; i++ ) {
+    for( int i = 0; i < j_tile_vol; i++ ) 
         _current_buffer[i] = make_float3(0,0,0);
+    for( int i = 0; i < rho_tile_vol; i++)
         _charge_buffer[i] = 0;
-    }
 
     // sync
 
@@ -701,13 +706,14 @@ void move_deposit_kernel(
         ix[i] = ix1;
     }
 
-    // Add current to global buffer
-    const int tile_off = tid * tile_vol;
+    // Add current and charge to global buffers
+    const int j_tile_off = tid * j_tile_vol;
+    const int rho_tile_off = tid * rho_tile_vol;
+    for( int i = 0; i < j_tile_vol; i++ )
+        d_current[j_tile_off + i] += _current_buffer[i];
 
-    for( int i = 0; i < tile_vol; i++ ) {
-        d_current[tile_off + i] += _current_buffer[i];
-        d_charge[tile_off + i] += _charge_buffer[i];
-    }
+    for( int i = 0; i < rho_tile_vol; i++ )
+        d_charge[rho_tile_off + i] += _charge_buffer[i];
 }
 
 
@@ -904,17 +910,19 @@ void move_deposit_kernel(
     float2 const dt_dx, float const q, float2 const qnx ) 
 {
     const uint2 ntiles  = part.local_ntiles;
-    const int tile_size = roundup4( current_ext_nx.x * current_ext_nx.y );
+
+    const int j_tile_vol = roundup4( current_ext_nx.x * current_ext_nx.y );
+    const int rho_tile_vol = roundup4( charge_ext_nx.x * charge_ext_nx.y );
 
     // This is usually in block shared memeory
-    alignas(local_align) float3 _current_buffer[ tile_size ];
-    alignas(local_align) float  _charge_buffer[ tile_size ];
+    alignas(local_align) float3 _current_buffer[ j_tile_vol ];
+    alignas(local_align) float  _charge_buffer[ rho_tile_vol ];
 
     // Zero local buffers
-    for( auto i = 0; i < tile_size; i++ ) {
+    for( int i = 0; i < j_tile_vol; i++ ) 
         _current_buffer[i] = make_float3(0,0,0);
+    for( int i = 0; i < rho_tile_vol; i++)
         _charge_buffer[i] = 0;
-    }
 
     // sync
 
@@ -978,12 +986,13 @@ void move_deposit_kernel(
     }
 
     // Add current to global buffer
-    const int tile_off = tid * tile_size;
+    const int j_tile_off = tid * j_tile_vol;
+    const int rho_tile_off = tid * rho_tile_vol;
+    for( int i = 0; i < j_tile_vol; i++ )
+        d_current[j_tile_off + i] += _current_buffer[i];
 
-    for( unsigned i = 0; i < current_ext_nx.x * current_ext_nx.y; i++ ) {
-        d_current[tile_off + i] += _current_buffer[i];
-        d_charge[tile_off + i] += _charge_buffer[i];
-    }
+    for( int i = 0; i < rho_tile_vol; i++ )
+        d_charge[rho_tile_off + i] += _charge_buffer[i];
 }
 
 /**
@@ -1489,20 +1498,17 @@ void Species::move( grid::vec3_tiled<float> * J, grid::tiled<float> * rho )
         q * dx.y / dt
     );
 
-    #pragma omp parallel for schedule(dynamic)
+    #pragma omp parallel for schedule(dynamic) reduction(+:d_nmove)
     for( unsigned tid = 0; tid < particles -> local_ntiles.y * particles -> local_ntiles.x; tid ++ ) {
         
         const auto tile_idx = make_uint2( tid % particles -> local_ntiles.x, tid / particles -> local_ntiles.x );
         move_deposit_kernel(
             tile_idx, *particles,
-            J -> data(), J -> offset, J -> tile_ext_dims, 
-            rho -> data(), rho -> offset, rho -> tile_ext_dims,
+            J -> buffer(), J -> interior_offset, J -> tile_ext_dims, 
+            rho -> buffer(), rho -> interior_offset, rho -> tile_ext_dims,
             dt_dx, q, qnx
         );
-    }
 
-    // This avoids the reduction overhead
-    for( unsigned tid = 0; tid < particles -> local_ntiles.y * particles -> local_ntiles.x; tid ++ ) {
         d_nmove += particles -> np[tid];
     }
 }
@@ -1623,7 +1629,7 @@ void Species::push( grid::vec3_tiled<float> * const E, grid::vec3_tiled<float> *
             const uint2 tile_idx = make_uint2( tid % particles -> local_ntiles.x, tid / particles -> local_ntiles.x );
             push_kernel <species::euler> (
                 tile_idx, *particles,
-                E -> data(), B -> data(), E -> offset, tile_ext_dims, alpha,
+                E -> buffer(), B -> buffer(), E -> interior_offset, tile_ext_dims, alpha,
                 &d_energy
             );
         }
@@ -1636,7 +1642,7 @@ void Species::push( grid::vec3_tiled<float> * const E, grid::vec3_tiled<float> *
             const uint2 tile_idx = make_uint2( tid % particles -> local_ntiles.x, tid / particles -> local_ntiles.x );
             push_kernel <species::boris> (
                 tile_idx, *particles,
-                E -> data(), B -> data(), E -> offset, tile_ext_dims, alpha,
+                E -> buffer(), B -> buffer(), E -> interior_offset, tile_ext_dims, alpha,
                 &d_energy
             );
         }
@@ -1711,11 +1717,12 @@ void dep_charge_kernel(
  */
 void Species::deposit_charge( grid::tiled<float> &charge ) const {
 
+    #pragma omp parallel for collapse(2)
     for( unsigned ty = 0; ty < particles -> local_ntiles.y; ++ty ) {
         for( unsigned tx = 0; tx < particles -> local_ntiles.x; ++tx ) {
             const auto tile_idx = make_uint2( tx, ty );
             dep_charge_kernel ( 
-                tile_idx, *particles, q, charge.data(), charge.offset, charge.tile_ext_dims );
+                tile_idx, *particles, q, charge.buffer(), charge.interior_offset, charge.tile_ext_dims );
         }
     }
 }

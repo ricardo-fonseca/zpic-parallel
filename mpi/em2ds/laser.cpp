@@ -184,7 +184,6 @@ int laser::plane_wave::launch( grid::vec3_tiled<float>& E, grid::vec3_tiled<floa
 
     // Grid tile parameters
     auto local_ntiles = E.get_local_ntiles();
-    auto offset = E.offset;
     auto tile_dims = E.tile_dims;
     auto tile_start = E.get_local_tile_start();
     int ystride = E.tile_ext_dims.x;
@@ -194,8 +193,8 @@ int laser::plane_wave::launch( grid::vec3_tiled<float>& E, grid::vec3_tiled<floa
     for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
         for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
             // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.tile_data( tx, ty )[ offset ];
-            float3 * const __restrict__ tile_B = & B.tile_data( tx, ty )[ offset ];
+            float3 * const __restrict__ tile_E = E.tile_data( tx, ty );
+            float3 * const __restrict__ tile_B = B.tile_data( tx, ty );
 
             const int ix0 = (tile_start.x + tx) * tile_dims.x;
 
@@ -297,7 +296,6 @@ int laser::gaussian::launch(grid::vec3_tiled<float>& E, grid::vec3_tiled<float>&
 
     // Grid tile parameters
     auto local_ntiles = E.get_local_ntiles();
-    auto offset = E.offset;
     auto tile_dims = E.tile_dims;
     auto tile_start = E.get_local_tile_start();
     auto ystride = E.tile_ext_dims.x;
@@ -306,8 +304,8 @@ int laser::gaussian::launch(grid::vec3_tiled<float>& E, grid::vec3_tiled<float>&
     #pragma omp parallel for collapse(2)
     for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
         for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-            float3 * const __restrict__ tile_E = & E.tile_data( tx, ty )[ offset ];
-            float3 * const __restrict__ tile_B = & B.tile_data( tx, ty )[ offset ];
+            float3 * const __restrict__ tile_E = E.tile_data( tx, ty );
+            float3 * const __restrict__ tile_B = B.tile_data( tx, ty );
 
             const int ix0 = (tile_start.x + tx) * tile_dims.x;
             const int iy0 = (tile_start.y + ty) * tile_dims.y;

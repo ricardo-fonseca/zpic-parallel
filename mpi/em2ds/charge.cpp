@@ -122,7 +122,7 @@ void charge::process_bc() {
                 // Start at x cell 0
                 const auto x_offset = rho -> gc.x.lower;
 
-                float * const __restrict__ tile_rho = & rho->tile_data(tx,ty)[ x_offset ];
+                float * const __restrict__ tile_rho = & rho->tile_buffer(tx,ty)[ x_offset ];
 
                 charge_bcx( tile_idx, tile_rho, tile_dims, tile_ext_dims, bc );
             }
@@ -144,9 +144,9 @@ void charge::process_bc() {
                 // Start at y cell 0
                 const auto y_offset = rho -> gc.y.lower * tile_ext_dims.x;
 
-                float * const __restrict__ tile_rho = & rho->tile_data(tx,ty)[ y_offset ];
+                float * const __restrict__ tile_rho = & rho->tile_buffer(tx,ty)[ y_offset ];
 
-                charge_bcx( tile_idx, tile_rho, tile_dims, tile_ext_dims, bc );
+                charge_bcy( tile_idx, tile_rho, tile_dims, tile_ext_dims, bc );
             }
         }
     }
@@ -163,9 +163,9 @@ void charge::advance() {
 
     // Add up current deposited on guard cells
     rho ->  add_from_gc( );
-    // rho ->  copy_to_gc( );
 
     // Do additional bc calculations if needed
+    // Currently disabled
     // process_bc();
 
     // Add neutralizing background
@@ -206,8 +206,6 @@ void charge::save( const quantity quant ) {
             name = "frho";
             label = "\\mathcal{F}\\,\\rho";
             break;
-        default:
-            mpi::fatal( "Invalid quantity selected");
     }
 
     zdf::grid_info info = {

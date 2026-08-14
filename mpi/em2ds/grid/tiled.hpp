@@ -136,8 +136,8 @@ class tiled {
     /// @brief Tile grid dimensions including guard cells
     const uint2 tile_ext_dims;
 
-    /// @brief Local offset in cells between lower tile corner and position (0,0)
-    const unsigned int offset;
+    /// @brief Offset, in cells, from the start of a tile's data buffer to its local (0,0) point
+    const unsigned int interior_offset;
 
     /// @brief Tile volume (may be larger than tile_ext_dim.x * tile_ext_dim.y for alignment)
     const std::size_t tile_vol;
@@ -161,7 +161,7 @@ class tiled {
         gc(gc),
         tile_ext_dims( make_uint2( gc.x.lower + tile_dims.x + gc.x.upper,
                             gc.y.lower + tile_dims.y + gc.y.upper )),
-        offset( gc.y.lower * tile_ext_dims.x + gc.x.lower ),
+        interior_offset( gc.y.lower * tile_ext_dims.x + gc.x.lower ),
         tile_vol( roundup4( tile_ext_dims.x * tile_ext_dims.y ) ),
         name( "tiled grid" )
     {
@@ -188,7 +188,7 @@ class tiled {
         tile_dims( tile_dims ),
         gc( 0 ),
         tile_ext_dims( make_uint2( tile_dims.x, tile_dims.y )),
-        offset( 0 ),
+        interior_offset( 0 ),
         tile_vol( roundup4( tile_dims.x * tile_dims.y )),
         name( "tiled grid" )
     {
@@ -220,7 +220,7 @@ class tiled {
         tile_dims( other.tile_dims ),
         gc( other.gc ),
         tile_ext_dims( other.tile_ext_dims ),
-        offset( other.offset ),
+        interior_offset( other.interior_offset ),
         tile_vol( other.tile_vol ),
         name( std::move( other.name ) )
     {
@@ -263,37 +263,92 @@ class tiled {
      * 
      * @return T* 
      */
-    T * data() const noexcept { return d_buffer; }
+    T * buffer() const noexcept { return d_buffer; }
 
     /**
-     * @brief Get a pointer to a specific tile
+     * @brief Get a pointer to the start of a specific tile's data buffer
+     * 
+     * @note This points at the first guard cell of the tile (if any), not at
+     *       the tile's local (0,0) point. Use tile_data() for a pointer to
+     *       the local (0,0) point instead.
+     * 
+     * @param tid   Tile index (flat)
+     * @return T* 
+     */
+    T * tile_buffer( const unsigned int tid ) const noexcept {
+        return & d_buffer[ tid * tile_vol ];
+    }
+
+    /**
+     * @brief Get a pointer to the start of a specific tile's data buffer
+     * 
+     * @note This points at the first guard cell of the tile (if any), not at
+     *       the tile's local (0,0) point. Use tile_data() for a pointer to
+     *       the local (0,0) point instead.
+     * 
+     * @param tx    x tile index
+     * @param ty    y tile index
+     * @return T* 
+     */
+    T * tile_buffer( const unsigned int tx, const unsigned int ty ) const noexcept {
+        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol ];
+    }
+
+    /**
+     * @brief Get a pointer to the start of a specific tile's data buffer
+     * 
+     * @note This points at the first guard cell of the tile (if any), not at
+     *       the tile's local (0,0) point. Use tile_data() for a pointer to
+     *       the local (0,0) point instead.
+     * 
+     * @param tid   Tile index (x,y)
+     * @return T* 
+     */
+    T * tile_buffer( const uint2 tid ) const noexcept {
+        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol ];
+    }
+
+    /**
+     * @brief Get a pointer to a specific tile's local (0,0) point
+     * 
+     * @note This skips past the tile's guard cells (if any). Use
+     *       tile_buffer() for a pointer to the start of the tile's data
+     *       buffer instead.
      * 
      * @param tid   Tile index (flat)
      * @return T* 
      */
     T * tile_data( const unsigned int tid ) const noexcept {
-        return & d_buffer[ tid * tile_vol ];
+        return & d_buffer[ tid * tile_vol + interior_offset ];
     }
 
     /**
-     * @brief Get a pointer to a specific tile
+     * @brief Get a pointer to a specific tile's local (0,0) point
+     * 
+     * @note This skips past the tile's guard cells (if any). Use
+     *       tile_buffer() for a pointer to the start of the tile's data
+     *       buffer instead.
      * 
      * @param tx    x tile index
      * @param ty    y tile index
      * @return T* 
      */
     T * tile_data( const unsigned int tx, const unsigned int ty ) const noexcept {
-        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol ];
+        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol + interior_offset ];
     }
 
     /**
-     * @brief Get a pointer to a specific tile
+     * @brief Get a pointer to a specific tile's local (0,0) point
+     * 
+     * @note This skips past the tile's guard cells (if any). Use
+     *       tile_buffer() for a pointer to the start of the tile's data
+     *       buffer instead.
      * 
      * @param tid   Tile index (x,y)
      * @return T* 
      */
     T * tile_data( const uint2 tid ) const noexcept {
-        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol ];
+        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol + interior_offset ];
     }
 
     /**
@@ -427,9 +482,7 @@ class tiled {
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    // const auto tid = ty * local_ntiles.x + tx;
-                    // const auto start = tid * tile_vol + offset;
-                    T * const __restrict__ tdata = tile_data( tx, ty ) + offset;
+                    T * const __restrict__ tdata = tile_data( tx, ty );
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -448,9 +501,7 @@ class tiled {
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    const auto tid = ty * local_ntiles.x + tx;
-                    const auto start = tid * tile_vol + offset;
-                    T * const __restrict__ tile_data = & d_buffer[ start ];
+                    T * const __restrict__ tdata = tile_data( tx, ty );
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -459,7 +510,7 @@ class tiled {
                     for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
                         for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
                             out[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] =
-                                tile_data[ iy * tile_ext_dims.x + ix ];
+                                tdata[ iy * tile_ext_dims.x + ix ];
                         }
                     }
                 }
@@ -496,9 +547,7 @@ class tiled {
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    const auto tid = ty * local_ntiles.x + tx;
-                    const auto start = tid * tile_vol + offset;
-                    T * const __restrict__ tile_data = & d_buffer[ start ];
+                    T * const __restrict__ tdata = tile_data( tx, ty );
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -506,7 +555,7 @@ class tiled {
                     // Loop inside tile
                     for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
                         for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
-                            tile_data[ iy * tile_ext_dims.x + ix ] = 
+                            tdata[ iy * tile_ext_dims.x + ix ] = 
                                 d_in[ (giy0 + iy) * stride.y + (gix0 + ix) ];
                         }
                     }
@@ -518,9 +567,7 @@ class tiled {
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    const auto tid = ty * local_ntiles.x + tx;
-                    const auto start = tid * tile_vol + offset;
-                    T * const __restrict__ tile_data = & d_buffer[ start ];
+                    T * const __restrict__ tdata = tile_data( tx, ty );
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -528,7 +575,7 @@ class tiled {
                     // Loop inside tile
                     for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
                         for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
-                            tile_data[ iy * tile_ext_dims.x + ix ] = 
+                            tdata[ iy * tile_ext_dims.x + ix ] = 
                                 d_in[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ];
                         }
                     }
@@ -574,9 +621,7 @@ class tiled {
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    const auto tid = ty * local_ntiles.x + tx;
-                    const auto start = tid * tile_vol + offset;
-                    T * const __restrict__ tile_data = & d_buffer[ start ];
+                    T * const __restrict__ tdata = tile_data( tx, ty );
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -584,7 +629,7 @@ class tiled {
                     // Loop inside tile
                     for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
                         for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
-                            tile_data[ iy * tile_ext_dims.x + ix ] = 
+                            tdata[ iy * tile_ext_dims.x + ix ] = 
                                 d_in[ (giy0 + iy) * stride.y + (gix0 + ix) ] * scale;
                         }
                     }
@@ -596,9 +641,7 @@ class tiled {
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    const auto tid = ty * local_ntiles.x + tx;
-                    const auto start = tid * tile_vol + offset;
-                    T * const __restrict__ tile_data = & d_buffer[ start ];
+                    T * const __restrict__ tdata = tile_data( tx, ty );
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -606,7 +649,7 @@ class tiled {
                     // Loop inside tile
                     for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
                         for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
-                            tile_data[ iy * tile_ext_dims.x + ix ] = 
+                            tdata[ iy * tile_ext_dims.x + ix ] = 
                                 d_in[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] *
                                 scale;
                         }
@@ -627,23 +670,22 @@ class tiled {
      */
     void local_copy_to_gc_x() {
 
+        const auto ystride  = tile_ext_dims.x;
+
         // Loop over tiles
         #pragma omp parallel for
         for( unsigned tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
 
             const auto tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
-            const auto tile_off = tid * tile_vol;
-            const auto ystride  = tile_ext_dims.x;
-
-            auto * __restrict__ local = & d_buffer[ tile_off ];
+            
+            auto * __restrict__ local = tile_buffer( tid );
 
             {   // Copy from lower neighbour
                 int neighbor_tx = tile_idx.x - 1;
                 if ( local_periodic.x && neighbor_tx < 0 ) neighbor_tx += local_ntiles.x;
 
                 if ( neighbor_tx >= 0 ) {
-                    const auto neighbor_off = (tile_idx.y * local_ntiles.x + neighbor_tx) * tile_vol;
-                    auto * __restrict__ x_lower = & d_buffer[ neighbor_off ] ;
+                    auto * __restrict__ x_lower = tile_buffer( neighbor_tx, tile_idx.y );
                     for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
                         for( unsigned i = 0; i < gc.x.lower; i++ ) {
                             local[ i + j * ystride ] = x_lower[ tile_dims.x + i + j * ystride ];
@@ -657,8 +699,7 @@ class tiled {
                 if ( local_periodic.x && neighbor_tx >= static_cast<int>(local_ntiles.x) ) neighbor_tx -= local_ntiles.x;
 
                 if ( neighbor_tx < static_cast<int>(local_ntiles.x) ) {
-                    const auto neighbor_off = (tile_idx.y * local_ntiles.x + neighbor_tx) * tile_vol;
-                    auto * __restrict__ x_upper =  & d_buffer[ neighbor_off ] ;
+                    auto * __restrict__ x_upper = tile_buffer( neighbor_tx, tile_idx.y );
                     for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
                         for( unsigned i = 0; i < gc.x.upper; i++ ) {
                             local[ gc.x.lower + tile_dims.x + i + j * ystride ] = x_upper[ gc.x.lower + i + j * ystride ];
@@ -675,22 +716,20 @@ class tiled {
      */
     void local_copy_to_gc_y() {
 
+        const auto ystride  = tile_ext_dims.x;
+
         #pragma omp parallel for
         for( unsigned tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
 
-            const auto tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
-            const auto tile_off = tid * tile_vol;
-            const auto ystride  = tile_ext_dims.x;
-
-            auto * __restrict__ local = & d_buffer[ tile_off ];
+            const int2 tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
+            T * __restrict__ local = tile_buffer( tid );
             
             {   // Copy from lower neighbour
                 int neighbor_ty = tile_idx.y - 1;
                 if ( local_periodic.y && neighbor_ty < 0 ) neighbor_ty += local_ntiles.y;
 
                 if ( neighbor_ty >= 0 ) {
-                    const auto neighbor_off = (neighbor_ty * local_ntiles.x + tile_idx.x) * tile_vol;
-                    auto * __restrict__ y_lower = & d_buffer [ neighbor_off ] ;
+                    auto * __restrict__ y_lower = tile_buffer( tile_idx.x, neighbor_ty );
                     for( int j = 0; j < gc.y.lower; j++ ) {
                         for( int i = 0; i < tile_ext_dims.x; i++ ) {
                             local[ i + j * ystride ] = y_lower[ i + ( tile_dims.y + j ) * ystride ];
@@ -704,8 +743,7 @@ class tiled {
                 if ( local_periodic.y && neighbor_ty >= static_cast<int>(local_ntiles.y) ) neighbor_ty -= local_ntiles.y;
 
                 if ( neighbor_ty < static_cast<int>(local_ntiles.y) ) {
-                    const auto neighbor_off = (neighbor_ty * local_ntiles.x + tile_idx.x) * tile_vol;
-                    auto * __restrict__ y_upper = & d_buffer [ neighbor_off ];
+                    auto * __restrict__ y_upper = tile_data( tile_idx.x, neighbor_ty );
                     for( int j = 0; j < gc.y.upper; j++ ) {
                         for( int i = 0; i < tile_ext_dims.x; i++ ) {
                             local[ i + ( gc.y.lower + tile_dims.y + j ) * ystride ] = y_upper[ i + ( gc.y.lower + j ) * ystride ];
@@ -738,14 +776,8 @@ class tiled {
         if ( lnode >= 0 ) {
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.lower-> buffer [ ty * tile_ext_dims.y * gc.x.upper ];
-
 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
                     for( unsigned i = 0; i < gc.x.upper; i++ ) {
@@ -762,11 +794,7 @@ class tiled {
         if ( unode >= 0 ) {
             unsigned int tx = local_ntiles.x - 1;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.upper-> buffer[ ty * tile_ext_dims.y * gc.x.lower ];
 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
@@ -789,11 +817,7 @@ class tiled {
 
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * tile_ext_dims.y * gc.x.lower ];
 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
@@ -810,11 +834,7 @@ class tiled {
 
             unsigned int tx = local_ntiles.x-1;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.upper -> buffer[ ty * tile_ext_dims.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
@@ -852,11 +872,7 @@ class tiled {
         if ( lnode >= 0 ) {
             unsigned int ty = 0;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.lower-> buffer[ tx * tile_ext_dims.x * gc.y.upper ];
                 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
@@ -873,11 +889,7 @@ class tiled {
         if ( unode >= 0 ) {
             unsigned int ty = local_ntiles.y-1;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.upper -> buffer[ tx * tile_ext_dims.x * gc.y.lower ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
@@ -900,11 +912,7 @@ class tiled {
 
             unsigned int ty = 0;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * tile_ext_dims.x * gc.y.lower ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
@@ -920,12 +928,7 @@ class tiled {
 
             unsigned int ty = local_ntiles.y - 1;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.upper-> buffer[ tx * tile_ext_dims.x * gc.y.upper ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
@@ -963,23 +966,22 @@ class tiled {
     void local_add_from_gc_x() {
         // Add along x direction
 
+        const auto ystride  = tile_ext_dims.x;
+
         // Loop over tiles
         #pragma omp parallel for
         for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
 
             const auto tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
-            const auto tile_off = tid * tile_vol;
-            const auto ystride  = tile_ext_dims.x;
 
-            auto * __restrict__ local = & d_buffer[ tile_off ];
+            auto * __restrict__ local = tile_buffer( tid );
             
             {   // Add from lower neighbour
                 int neighbor_tx = tile_idx.x - 1;
                 if ( local_periodic.x && neighbor_tx < 0 ) neighbor_tx += local_ntiles.x;
 
                 if ( neighbor_tx >= 0 ) {
-                    const auto neighbor_off = (tile_idx.y * local_ntiles.x + neighbor_tx) * tile_vol;
-                    T * __restrict__ x_lower = & d_buffer[neighbor_off]; 
+                    T * __restrict__ x_lower = tile_buffer( neighbor_tx, tile_idx.y );
                     for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
                         for( unsigned i = 0; i < gc.x.upper; i++ ) {
                             local[ gc.x.lower + i + j * ystride ] += x_lower[ gc.x.lower + tile_dims.x + i + j * ystride ];
@@ -993,8 +995,7 @@ class tiled {
                 if ( local_periodic.x && neighbor_tx >= static_cast<int>(local_ntiles.x) ) neighbor_tx -= local_ntiles.x;
 
                 if ( neighbor_tx < static_cast<int>(local_ntiles.x) ) {
-                    const auto neighbor_off = (tile_idx.y * local_ntiles.x + neighbor_tx) * tile_vol;
-                    auto * __restrict__ x_upper = & d_buffer[neighbor_off]; 
+                    T * __restrict__ x_upper = tile_buffer( neighbor_tx, tile_idx.y );
                     for( int j = 0; j < tile_ext_dims.y; j++ ) {
                         for( int i = 0; i < gc.x.lower; i++ ) {
                             local[ tile_dims.x + i + j * ystride ] += x_upper[ i + j * ystride ];
@@ -1011,28 +1012,28 @@ class tiled {
      */
     void local_add_from_gc_y(){
 
+        const auto ystride  = tile_ext_dims.x;
+
         // Add along y direction
 
         // Loop over tiles
         #pragma omp parallel for
         for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
 
-            const auto tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
-            const auto tile_off = tid * tile_vol;
-            const auto ystride  = tile_ext_dims.x;
-
-            auto * __restrict__ local = & d_buffer[ tile_off ];
+            const int2 tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
+            T * __restrict__ local = tile_buffer( tid );
             
             {   // Add from lower neighbour
                 int neighbor_ty = tile_idx.y - 1;
-                if ( local_periodic.y && neighbor_ty < 0 ) neighbor_ty += local_ntiles.y;
+                if ( local_periodic.y && neighbor_ty < 0 ) 
+                    neighbor_ty += local_ntiles.y;
 
                 if ( neighbor_ty >= 0 ) {
-                    const auto neighbor_off = (neighbor_ty * local_ntiles.x + tile_idx.x) * tile_vol;
-                    auto * __restrict__ y_lower = & d_buffer [ neighbor_off ]; 
+                    T * __restrict__ y_lower = tile_buffer( tile_idx.x, neighbor_ty );
                     for( int j = 0; j < gc.y.upper; j++ ) {
                         for( int i = 0; i < tile_ext_dims.x; i++ ) {
-                            local[ i + ( gc.y.lower + j ) * ystride ] += y_lower[ i + ( gc.y.lower + tile_dims.y + j ) * ystride ];
+                            local[ i + ( gc.y.lower + j ) * ystride ] += 
+                                y_lower[ i + ( gc.y.lower + tile_dims.y + j ) * ystride ];
                         }
                     }
                 }
@@ -1040,11 +1041,11 @@ class tiled {
 
             {   // Add from upper neighbour
                 int neighbor_ty = tile_idx.y + 1;
-                if ( local_periodic.y && neighbor_ty >= static_cast<int>(local_ntiles.y) ) neighbor_ty -= local_ntiles.y;
+                if ( local_periodic.y && neighbor_ty >= static_cast<int>(local_ntiles.y) ) 
+                    neighbor_ty -= local_ntiles.y;
 
                 if ( neighbor_ty < static_cast<int>(local_ntiles.y) ) {
-                    const auto neighbor_off = (neighbor_ty * local_ntiles.x + tile_idx.x) * tile_vol;
-                    auto * __restrict__ y_upper = & d_buffer [ neighbor_off ]; 
+                    T * __restrict__ y_upper = tile_buffer( tile_idx.x, neighbor_ty );
                     for( unsigned j = 0; j < gc.y.lower; j++ ) {
                         for( unsigned i = 0; i < tile_ext_dims.x; i++ ) {
                             local[ i + ( tile_dims.y + j ) * ystride ] += y_upper[ i + j * ystride ];
@@ -1077,12 +1078,8 @@ class tiled {
 
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
 
-                auto * __restrict__ local = & d_buffer[ tile_off ];
-                
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.lower-> buffer [ ty * tile_ext_dims.y * gc.x.lower ];
 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
@@ -1101,11 +1098,7 @@ class tiled {
 
             unsigned int tx = local_ntiles.x - 1;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.upper-> buffer[ ty * tile_ext_dims.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
@@ -1128,11 +1121,7 @@ class tiled {
 
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.lower-> buffer[ ty * tile_ext_dims.y * gc.x.upper ];
 
                 for( unsigned j = 0; j < tile_ext_dims.y ; j++ ) {
@@ -1149,11 +1138,7 @@ class tiled {
 
             unsigned int tx = local_ntiles.x - 1;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.upper-> buffer[ ty * tile_ext_dims.y * gc.x.lower ];
                 
                 for( unsigned j = 0; j < tile_ext_dims.y; j++ ) {
@@ -1189,11 +1174,7 @@ class tiled {
         if ( lnode >= 0 ) {
             unsigned int ty = 0;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.lower-> buffer[ tx * ( tile_ext_dims.x * gc.y.lower ) ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
@@ -1212,11 +1193,7 @@ class tiled {
 
             unsigned int ty = local_ntiles.y-1;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_send.upper-> buffer[ tx * gc.y.upper * tile_ext_dims.x ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
@@ -1239,11 +1216,7 @@ class tiled {
 
             unsigned int ty = 0;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.lower-> buffer[ tx * gc.y.upper * tile_ext_dims.x ];
 
                 for( unsigned j = 0; j < gc.y.upper; j++ ) {
@@ -1260,11 +1233,7 @@ class tiled {
 
             unsigned int ty = local_ntiles.y - 1;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * local_ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                auto * __restrict__ local = & d_buffer[ tile_off ];
+                T * __restrict__ local = tile_buffer( tx, ty );
                 T * __restrict__ msg = & msg_recv.upper -> buffer[ tx * (gc.y.lower * tile_ext_dims.x) ];
 
                 for( unsigned j = 0; j < gc.y.lower; j++ ) {
@@ -1310,9 +1279,7 @@ class tiled {
             // Loop over tiles
             #pragma omp parallel for
             for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
-                const auto tile_off = tid * tile_vol ;
-                
-                auto * __restrict__ buffer = & d_buffer[ tile_off ];
+                T * __restrict__ buffer = tile_buffer( tid );
                 
                 for( int iy = 0; iy < tile_ext_dims.y; iy++ ) {
                     for( int ix = 0; ix < tile_ext_dims.x - shift; ix++ ) {
@@ -1354,9 +1321,7 @@ class tiled {
                 T A[ tile_vol ];
                 T B[ tile_vol ];
 
-                const auto tile_off = tid * tile_vol ;
-
-                auto * __restrict__ buffer = & d_buffer[ tile_off ];
+                T * __restrict__ buffer = tile_buffer( tid );
 
                 // Copy data from tile buffer
                 for( int i = 0; i < tile_vol; i++ ) {
@@ -1407,9 +1372,7 @@ class tiled {
                 T A[ tile_vol ];
                 T B[ tile_vol ];
 
-                const auto tile_off = tid * tile_vol ;
-
-                auto * __restrict__ buffer = & d_buffer[ tile_off ];
+                auto * __restrict__ buffer = tile_buffer( tid );
 
                 // Copy data from tile buffer
                 for( int i = 0; i < tile_vol; i++ ) {

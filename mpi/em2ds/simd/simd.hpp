@@ -73,13 +73,10 @@ inline int simd_init() {return 0;}
 
 constexpr char vecname[] = "ARM NEON";
 constexpr int vecwidth = 4;
-typedef vec_f32 vfloat;
-typedef vec_i32 vint;
-typedef vec_mask32 vmask;
 
-typedef Vec4Float  VecFloat_s;
-typedef Vec4Int    VecInt_s;
-typedef Vec4Mask   VecMask_s;
+using vfloat = vec_f32;
+using vint   = vec_i32;
+using vmask  = vec_mask32;
 
 // No initialization requrired
 inline int simd_init() {return 0;}

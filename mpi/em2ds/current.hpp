@@ -145,7 +145,7 @@ class current {
         }
 
         if ( J -> part.periodic.y && new_bc.y.lower != current::bc::periodic ) {
-            mpi::fatal( "Only periodic y boundaries are supported with periodic x parallel partitions.");
+            mpi::fatal( "Only periodic y boundaries are supported with periodic y parallel partitions.");
         }
 
         // Store new values

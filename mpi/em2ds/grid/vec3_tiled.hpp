@@ -38,7 +38,6 @@ class vec3_tiled : public grid::tiled< vec3<S> >
 
     using grid::tiled< V > :: gc;
     using grid::tiled< V > :: local_dims;
-    using grid::tiled< V > :: offset;
 
     using grid::tiled< V > :: tile_vol;
 
@@ -53,8 +52,9 @@ class vec3_tiled : public grid::tiled< vec3<S> >
     using grid::tiled< V > :: copy_to_gc_y;
     using grid::tiled< V > :: copy_to_gc;
 
-    using grid::tiled< V > :: data;
+    using grid::tiled< V > :: buffer;
     using grid::tiled< V > :: tile_data;
+    using grid::tiled< V > :: tile_buffer;
     
     /**
      * @brief Gather specific field component values from all tiles
@@ -84,7 +84,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
                 #pragma omp parallel for collapse(2)
                 for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                     for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                        V * const __restrict__ data = tile_data(tx,ty) + offset;
+                        V * const __restrict__ data = tile_data(tx,ty);
 
                         const auto gix0 = tx * tile_dims.x;
                         const auto giy0 = ty * tile_dims.y;
@@ -103,7 +103,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
                 #pragma omp parallel for collapse(2)
                 for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                     for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                        V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                        V * const __restrict__ data = tile_data(tx,ty);
 
                         const auto gix0 = tx * tile_dims.x;
                         const auto giy0 = ty * tile_dims.y;
@@ -122,7 +122,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
                 #pragma omp parallel for collapse(2)
                 for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                     for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                        V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                        V * const __restrict__ data = tile_data(tx,ty);
 
                         const auto gix0 = tx * tile_dims.x;
                         const auto giy0 = ty * tile_dims.y;
@@ -145,7 +145,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
                 #pragma omp parallel for collapse(2)
                 for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                     for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                        V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                        V * const __restrict__ data = tile_data(tx,ty);
 
                         const auto gix0 = tx * tile_dims.x;
                         const auto giy0 = ty * tile_dims.y;
@@ -164,7 +164,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
                 #pragma omp parallel for collapse(2)
                 for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                     for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                        V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                        V * const __restrict__ data = tile_data(tx,ty);
 
                         const auto gix0 = tx * tile_dims.x;
                         const auto giy0 = ty * tile_dims.y;
@@ -183,7 +183,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
                 #pragma omp parallel for collapse(2)
                 for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                     for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                        V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                        V * const __restrict__ data = tile_data(tx,ty);
 
                         const auto gix0 = tx * tile_dims.x;
                         const auto giy0 = ty * tile_dims.y;
@@ -235,7 +235,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                    V * const __restrict__ data = tile_data(tx,ty);
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -256,7 +256,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                    V * const __restrict__ data = tile_data(tx,ty);
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -308,7 +308,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                    V * const __restrict__ data = tile_data(tx,ty);
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;
@@ -330,7 +330,7 @@ class vec3_tiled : public grid::tiled< vec3<S> >
             #pragma omp parallel for collapse(2)
             for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
                 for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
-                    V * const __restrict__ data = & tile_data(tx,ty)[ offset ];
+                    V * const __restrict__ data = tile_data(tx,ty);
 
                     const auto gix0 = tx * tile_dims.x;
                     const auto giy0 = ty * tile_dims.y;

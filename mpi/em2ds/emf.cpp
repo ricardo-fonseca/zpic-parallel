@@ -462,38 +462,35 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
     ex = ey = ez = 0;
     bx = by = bz = 0;
 
-    // Loop over tiles
-    #pragma omp parallel for collapse(2) \
+    // Loop over all local tiles
+    #pragma omp parallel for \
         reduction(+:ex,ey,ez) \
         reduction(+:bx,by,bz)
-    for( unsigned ty = 0; ty < ntiles.y; ++ty ) {
-        for( unsigned tx = 0; tx < ntiles.x; ++tx ) {
+    for( unsigned tid = 0; tid < ntiles.y * ntiles.x; ++tid ) {
+        float3 * const __restrict__ d_E = E -> tile_data(tid);
+        float3 * const __restrict__ d_B = B -> tile_data(tid);
 
-            float3 * const __restrict__ d_E = & E -> tile_data(tx, ty) [ E -> offset ];
-            float3 * const __restrict__ d_B = & B -> tile_data(tx, ty) [ B -> offset ];
+        double3 tile_ene_E = make_double3(0,0,0);
+        double3 tile_ene_B = make_double3(0,0,0);
 
-            double3 tile_ene_E = make_double3(0,0,0);
-            double3 tile_ene_B = make_double3(0,0,0);
+        // Loop over inner tile cells 
+        for( unsigned iy = 0; iy < tile_dims.y; ++iy ) {
+            for( unsigned ix = 0; ix < tile_dims.y; ++ix ) {
+                float3 const efld = d_E[ iy * ystride + ix ];
+                float3 const bfld = d_B[ iy * ystride + ix ];
 
-            // Loop over inner tile cells 
-            for( unsigned iy = 0; iy < tile_dims.y; ++iy ) {
-                for( unsigned ix = 0; ix < tile_dims.y; ++ix ) {
-                    float3 const efld = d_E[ iy * ystride + ix ];
-                    float3 const bfld = d_B[ iy * ystride + ix ];
+                tile_ene_E.x += efld.x * efld.x;
+                tile_ene_E.y += efld.y * efld.y;
+                tile_ene_E.z += efld.z * efld.z;
 
-                    tile_ene_E.x += efld.x * efld.x;
-                    tile_ene_E.y += efld.y * efld.y;
-                    tile_ene_E.z += efld.z * efld.z;
-
-                    tile_ene_B.x += bfld.x * bfld.x;
-                    tile_ene_B.y += bfld.y * bfld.y;
-                    tile_ene_B.z += bfld.z * bfld.z;
-                }
+                tile_ene_B.x += bfld.x * bfld.x;
+                tile_ene_B.y += bfld.y * bfld.y;
+                tile_ene_B.z += bfld.z * bfld.z;
             }
-            
-            ex += tile_ene_E.x; ey += tile_ene_E.y; ez += tile_ene_E.z;
-            bx += tile_ene_B.x; by += tile_ene_B.y; bz += tile_ene_B.z;
         }
+        
+        ex += tile_ene_E.x; ey += tile_ene_E.y; ez += tile_ene_E.z;
+        bx += tile_ene_B.x; by += tile_ene_B.y; bz += tile_ene_B.z;
     }
 
     ene_E = make_double3(ex, ey, ez);

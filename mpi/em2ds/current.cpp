@@ -86,9 +86,9 @@ void current_bcy(
             for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
                 const int ix = idx;
 
-                auto jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
-                auto jy0 = -J[ ix - ystride ].y + J[ ix +       0 ].y;
-                auto jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
+                float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
+                float jy0 = -J[ ix - ystride ].y + J[ ix +       0 ].y;
+                float jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
 
                 J[ ix - ystride ].x = J[ ix + ystride ].x = jx1;
                 J[ ix - ystride ].y = J[ ix +       0 ].y = jy0;
@@ -105,9 +105,9 @@ void current_bcy(
             for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
                 const int ix = idx;
 
-                auto jx1 =  J[ ix + (nx.y-1)*ystride ].x + J[ ix + (nx.y + 1)*ystride ].x; 
-                auto jy0 =  J[ ix + (nx.y-1)*ystride ].y - J[ ix + (nx.y + 0)*ystride ].y;
-                auto jz1 =  J[ ix + (nx.y-1)*ystride ].z + J[ ix + (nx.y + 1)*ystride ].z;
+                float jx1 =  J[ ix + (nx.y-1)*ystride ].x + J[ ix + (nx.y + 1)*ystride ].x; 
+                float jy0 =  J[ ix + (nx.y-1)*ystride ].y - J[ ix + (nx.y + 0)*ystride ].y;
+                float jz1 =  J[ ix + (nx.y-1)*ystride ].z + J[ ix + (nx.y + 1)*ystride ].z;
 
                 J[ ix + (nx.y-1)*ystride ].x = J[ ix + (nx.y + 1)*ystride ].x = jx1;
                 J[ ix + (nx.y-1)*ystride ].y = J[ ix + (nx.y + 0)*ystride ].y = jy0;
@@ -144,7 +144,7 @@ void current::process_bc() {
                 // Start at x cell 0
                 const auto x_offset = J -> gc.x.lower;
 
-                float3 * const __restrict__ tile_J = & J->tile_data(tx,ty)[ x_offset ];
+                float3 * const __restrict__ tile_J = & J->tile_buffer(tx,ty)[ x_offset ];
 
                 current_bcx( tile_idx, tile_J, tile_dims, tile_ext_dims, bc );
             }
@@ -166,7 +166,7 @@ void current::process_bc() {
                 // Start at y cell 0
                 const auto y_offset = J -> gc.y.lower * tile_ext_dims.x;
 
-                float3 * const __restrict__ tile_J = & J->tile_data(tx,ty)[ y_offset ];
+                float3 * const __restrict__ tile_J = & J->tile_buffer(tx,ty)[ y_offset ];
 
                 current_bcy( tile_idx, tile_J, tile_dims, tile_ext_dims, bc );
             }
@@ -185,9 +185,9 @@ void current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc( );
-    // J -> copy_to_gc( );
 
     // Do additional bc calculations if needed
+    // This is currently disabled
     // Process_bc();
 
     // Calculate fJ
