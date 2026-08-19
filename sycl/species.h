@@ -50,7 +50,7 @@ namespace phasespace {
 }
 
 namespace species {
-    enum pusher { boris, euler };
+    enum pusher:int { boris, euler };
     namespace bc {
         enum type { open = 0, periodic, reflecting };
     }

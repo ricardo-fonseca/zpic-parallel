@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- <!DOCTYPE IntelParallelAdvisorSummaryCollection SYSTEM  "IntelParallelAdvisorSummaryCollection.dtd"> -->
+
+<IntelParallelAdvisorSummary version="" 
+                             kind="DATAKIND_SURVEY_EX" >
+  <hotspot filename=""
+           line_no="4294967295"
+           routine="ur_queue_handle_legacy_t_::synchronize"
+           is_vectorized="0"
+           self_time="0.000000E+00"
+           total_time="4.811589E+01"
+           trip_counts=""
+           func_instance="147"
+           priority="0"/>
+  <hotspot filename=""
+           line_no="4294967295"
+           routine="ur_queue_handle_legacy_t_::synchronize"
+           is_vectorized="0"
+           self_time="0.000000E+00"
+           total_time="4.811589E+01"
+           trip_counts=""
+           func_instance="146"
+           priority="0"/>
+  <hotspot filename=""
+           line_no="4294967295"
+           routine="ur_queue_handle_legacy_t_::synchronize"
+           is_vectorized="0"
+           self_time="0.000000E+00"
+           total_time="4.811589E+01"
+           trip_counts=""
+           func_instance="144"
+           priority="0"/>
+  <hotspot filename=""
+           line_no="4294967295"
+           routine="test_weibel_large"
+           is_vectorized="0"
+           self_time="0.000000E+00"
+           total_time="4.795800E+01"
+           trip_counts=""
+           func_instance="115"
+           priority="0"/>
+  <hotspot filename=""
+           line_no="4294967295"
+           routine="test_weibel_large"
+           is_vectorized="0"
+           self_time="0.000000E+00"
+           total_time="4.741400E+01"
+           trip_counts=""
+           func_instance="116"
+           priority="0"/>
+</IntelParallelAdvisorSummary >
