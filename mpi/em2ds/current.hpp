@@ -1,6 +1,6 @@
 #pragma once
 
-#include "grid/vec3_tiled.hpp"
+#include "grid/tiled_vec3.hpp"
 #include "grid/fft.hpp"
 
 #include "filter.hpp"
@@ -45,7 +45,7 @@ class current {
     public:
 
     /// @brief Current density
-    grid::vec3_tiled<float> * J = nullptr;
+    grid::tiled_vec3<float> * J = nullptr;
 
     /// @brief Charge density k-space
     grid::flat3<std::complex<float>> * fJ = nullptr;
@@ -72,7 +72,7 @@ class current {
         gc.x = {1,2};
         gc.y = {1,2};
 
-        J = new grid::vec3_tiled<float> ( global_ntiles, tile_dims, gc, parallel );
+        J = new grid::tiled_vec3<float> ( global_ntiles, tile_dims, gc, parallel );
         J -> name = "Current density";
 
         fft_forward = new grid::fft::r2c_plan( *J );

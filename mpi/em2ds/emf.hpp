@@ -3,7 +3,7 @@
 #include "vec_types.hpp"
 
 #include "bounds.hpp"
-#include "grid/vec3_tiled.hpp"
+#include "grid/tiled_vec3.hpp"
 #include "grid/flat3.hpp"
 #include "grid/fft.hpp"
 
@@ -52,9 +52,9 @@ class emf {
     public:
 
     /// @brief Electric field
-    grid::vec3_tiled<float> * E;
+    grid::tiled_vec3<float> * E;
     /// @brief Magnetic field
-    grid::vec3_tiled<float> * B;
+    grid::tiled_vec3<float> * B;
     /// @brief Simulation box size
     const float2 box;
 

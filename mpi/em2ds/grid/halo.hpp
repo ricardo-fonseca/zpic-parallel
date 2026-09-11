@@ -6,6 +6,7 @@
 #include "../bounds.hpp"
 #include "../zdf/zdf.hpp"
 
+#include <vector>
 
 namespace grid {
 
@@ -17,7 +18,7 @@ namespace grid {
  * @tparam T    grid datatype
  */
 template <class T>
-class ghosted{
+class halo{
 
     protected:
 
@@ -69,7 +70,7 @@ class ghosted{
     std::string name ="unnamed_grid";
         
     /**
-     * @brief Construct a new basic grid object
+     * @brief Construct a new halo grid object
      * 
      * @note The granularity parameter controls how the the is split over multiple parallel domains.
      *       The local grid size will always be a multiple of this parameter.
@@ -79,7 +80,7 @@ class ghosted{
      * @param part          Parallel partition
      * @param granularity   Granularity for splitting grid across parallel nodes
      */
-    ghosted( uint2 const global_dims, bounds_2d<unsigned int> const gc, const mpi::cart2d & part, 
+    halo( uint2 const global_dims, bounds_2d<unsigned int> const gc, const mpi::cart2d & part, 
         uint2 const granularity = {1,1} ):
         part( part ),
         d_buffer( nullptr ), 
@@ -144,7 +145,7 @@ class ghosted{
      *
      * @param other     Source grid (will be left empty)
      */
-    ghosted( ghosted && other ) noexcept :
+    halo( halo && other ) noexcept :
         part( other.part ),
         local_dims( other.local_dims ),
         local_ext_dims( other.local_ext_dims ),
@@ -166,7 +167,7 @@ class ghosted{
         other.msg_recv.upper = nullptr;
     }
 
-    ghosted( uint2 const global_dims, uint2 const local_dims_, uint2 const local_start_, const mpi::cart2d & part ) :
+    halo( uint2 const global_dims, uint2 const local_dims_, uint2 const local_start_, const mpi::cart2d & part ) :
         part( part ),
         d_buffer( nullptr ), 
         global_dims( global_dims ),
@@ -195,7 +196,7 @@ class ghosted{
      * @brief Destroy the basic grid object
      * 
      */
-    ~ghosted() {
+    ~halo() {
 
         delete msg_recv.lower;
         delete msg_recv.upper;
@@ -209,13 +210,13 @@ class ghosted{
      * @brief Delete default copy constructor
      * 
      */
-    ghosted(const ghosted&) = delete;
+    halo(const halo&) = delete;
 
     /**
      * @brief Delete default copy constructor
      * 
      */
-    ghosted& operator=(const ghosted&) = delete;
+    halo& operator=(const halo&) = delete;
 
     /**
      * @brief Get a pointer to the data buffer
@@ -289,7 +290,7 @@ class ghosted{
      * @param obj 
      * @return std::ostream& 
      */
-    friend std::ostream& operator<<(std::ostream& os, const ghosted<T>& obj) {
+    friend std::ostream& operator<<(std::ostream& os, const halo<T>& obj) {
         return os << obj.name << '{'
            << "local: " << obj.local_dims
            << ", start: " << obj.local_start
@@ -322,7 +323,7 @@ class ghosted{
      * 
      * @param rhs         Other object to add
      */
-    void add( const ghosted<T> &rhs ) {
+    void add( const halo<T> &rhs ) {
         if ( rhs.local_ext_dims != local_ext_dims ) {
             mpi::fatal( 
                 "add(): incompatible grid sizes (" + name + ": " + to_string(local_ext_dims) +
@@ -339,9 +340,9 @@ class ghosted{
      * @brief Operator +=
      * 
      * @param rhs           Other grid to add
-     * @return ghosted<T>& 
+     * @return halo<T>& 
      */
-    ghosted<T>& operator+=(const ghosted<T>& rhs) {
+    halo<T>& operator+=(const halo<T>& rhs) {
         add( rhs );
         return *this;
     }

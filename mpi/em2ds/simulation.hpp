@@ -34,7 +34,7 @@ class Simulation {
     charge charge;
 
     /// @brief Vector of particle species
-    std::vector <Species*> species;
+    std::vector <species*> species;
 
     /**
      * @brief Construct a new Simulation object
@@ -89,7 +89,7 @@ class Simulation {
      *
      * @param s     Particle species 
      */
-    void add_species( Species & s ) {
+    void add_species( class species & s ) {
         species.push_back( &s );
         s.initialize( box, global_ntiles, tile_dims, dt, species.size(), parallel );
     }
@@ -97,10 +97,10 @@ class Simulation {
     /**
      * @brief Gets a pointer to a specific species object
      * 
-     * @param name                Species name
-     * @return Species const* 
+     * @param name                species name
+     * @return species const* 
      */
-    Species * get_species( const std::string & name ) {
+    class species * get_species( const std::string & name ) {
         unsigned id = 0;
         for( id = 0; id < species.size(); id++ )
             if ( (species[id])->name == name ) break;

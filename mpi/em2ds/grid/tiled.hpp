@@ -137,7 +137,7 @@ class tiled {
     const uint2 tile_ext_dims;
 
     /// @brief Offset, in cells, from the start of a tile's data buffer to its local (0,0) point
-    const unsigned int interior_offset;
+    const unsigned int inner_offset;
 
     /// @brief Tile volume (may be larger than tile_ext_dim.x * tile_ext_dim.y for alignment)
     const std::size_t tile_vol;
@@ -161,7 +161,7 @@ class tiled {
         gc(gc),
         tile_ext_dims( make_uint2( gc.x.lower + tile_dims.x + gc.x.upper,
                             gc.y.lower + tile_dims.y + gc.y.upper )),
-        interior_offset( gc.y.lower * tile_ext_dims.x + gc.x.lower ),
+        inner_offset( gc.y.lower * tile_ext_dims.x + gc.x.lower ),
         tile_vol( roundup4( tile_ext_dims.x * tile_ext_dims.y ) ),
         name( "tiled grid" )
     {
@@ -188,7 +188,7 @@ class tiled {
         tile_dims( tile_dims ),
         gc( 0 ),
         tile_ext_dims( make_uint2( tile_dims.x, tile_dims.y )),
-        interior_offset( 0 ),
+        inner_offset( 0 ),
         tile_vol( roundup4( tile_dims.x * tile_dims.y )),
         name( "tiled grid" )
     {
@@ -220,7 +220,7 @@ class tiled {
         tile_dims( other.tile_dims ),
         gc( other.gc ),
         tile_ext_dims( other.tile_ext_dims ),
-        interior_offset( other.interior_offset ),
+        inner_offset( other.inner_offset ),
         tile_vol( other.tile_vol ),
         name( std::move( other.name ) )
     {
@@ -319,7 +319,7 @@ class tiled {
      * @return T* 
      */
     T * tile_data( const unsigned int tid ) const noexcept {
-        return & d_buffer[ tid * tile_vol + interior_offset ];
+        return & d_buffer[ tid * tile_vol + inner_offset ];
     }
 
     /**
@@ -334,7 +334,7 @@ class tiled {
      * @return T* 
      */
     T * tile_data( const unsigned int tx, const unsigned int ty ) const noexcept {
-        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol + interior_offset ];
+        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol + inner_offset ];
     }
 
     /**
@@ -348,7 +348,7 @@ class tiled {
      * @return T* 
      */
     T * tile_data( const uint2 tid ) const noexcept {
-        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol + interior_offset ];
+        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol + inner_offset ];
     }
 
     /**

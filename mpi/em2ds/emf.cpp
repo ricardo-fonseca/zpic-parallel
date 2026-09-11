@@ -35,10 +35,10 @@ emf::emf( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, do
     gc.x = {1,2};
     gc.y = {1,2};
 
-    E = new grid::vec3_tiled<float> ( global_ntiles, tile_dims, gc, parallel );
+    E = new grid::tiled_vec3<float> ( global_ntiles, tile_dims, gc, parallel );
     E -> name = "Electric field";
 
-    B = new grid::vec3_tiled<float> ( global_ntiles, tile_dims, gc, parallel );
+    B = new grid::tiled_vec3<float> ( global_ntiles, tile_dims, gc, parallel );
     B -> name = "Magnetic field";
 
     // Create complex grids for the Fourier transforms
@@ -331,7 +331,7 @@ void emf::save( const quantity quant, fcomp::cart const fc ) const {
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
 
-    grid::vec3_tiled<float> * f = nullptr;
+    grid::tiled_vec3<float> * f = nullptr;
     grid::flat3<std::complex<float>> * cf = nullptr;
 
     switch ( quant ) {

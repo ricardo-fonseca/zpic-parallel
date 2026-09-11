@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "particles.hpp"
+#include "part/particles.hpp"
 
 #include "emf.hpp"
 #include "current.hpp"
@@ -12,43 +12,40 @@
 #include "udist.hpp"
 
 namespace phasespace {
-    enum quant { x, y, ux, uy, uz };
+    enum class quantity { x, y, ux, uy, uz };
 
-    static inline void qinfo( quant q, std::string & name, std::string & label, std::string & units ) {
+    static inline void qinfo( quantity q, std::string & name, std::string & label, std::string & units ) {
         switch(q) {
-        case x :
+        case quantity::x :
             name = "x"; label = "x"; units = "c/\\omega_n";
             break;
-        case y :
+        case quantity::y :
             name = "y"; label = "y"; units = "c/\\omega_n";
             break;
-        case ux :
+        case quantity::ux :
             name = "ux"; label = "u_x"; units = "c";
             break;
-        case uy :
+        case quantity::uy :
             name = "uy"; label = "u_y"; units = "c";
             break;
-        case uz :
+        case quantity::uz :
             name = "uz"; label = "u_z"; units = "c";
             break;
         }
     }
 }
 
-namespace species {
-    enum pusher { boris, euler };
-    namespace bc {
-        enum type { open = 0, periodic, reflecting };
-    }
-    typedef bounds_2d<bc::type> bc_type;
-
-}
-
 /**
  * @brief Charged particles class
  * 
  */
-class Species {
+class species {
+
+public:
+
+    enum class pusher{ boris = 0, euler };
+    struct bc { enum type { open = 0, periodic, reflecting }; };
+    using bc_type = bounds_2d<bc::type>;
 
 protected:
 
@@ -74,16 +71,16 @@ protected:
     int iter;
 
      /// @brief Particle data buffer
-    Particles *particles;
+    part::particles *particles;
 
     /// @brief Secondary data buffer to speed up some calculations
-    Particles *tmp;
+    part::particles *tmp;
 
     /// @brief Particle tile sort aux. data
-    ParticleSort *sort;
+    part::particle_sort *sort;
 
     /// @brief Initial density profile
-    Density::Profile * density;
+    density::profile * density;
 
     /// @brief Number of particles being injected
     int * np_inj;
@@ -100,7 +97,7 @@ private:
     species::bc_type bc;
 
     /// @brief Initial velocity distribution
-    UDistribution::Type * udist;
+    udist::type * udist;
 
     /// @brief Total species energy on device
     double d_energy;
@@ -117,7 +114,7 @@ private:
      * @param size      Number of grid points
      */
     void dep_phasespace( float * const d_data, 
-        phasespace::quant q, float2 const range, unsigned const size ) const;
+        phasespace::quantity q, float2 const range, unsigned const size ) const;
 
     /**
      * @brief Deposit 2D phasespace density
@@ -131,8 +128,8 @@ private:
      * @param size1     axis 1 number of points
      */
     void dep_phasespace( float * const d_data,
-        phasespace::quant quant0, float2 range0, unsigned const size0,
-        phasespace::quant quant1, float2 range1, unsigned const size1 ) const;
+        phasespace::quantity quant0, float2 range0, unsigned const size0,
+        phasespace::quantity quant1, float2 range1, unsigned const size1 ) const;
 
 public:
 
@@ -152,7 +149,7 @@ public:
      * @param m_q   Mass over charge ratio
      * @param ppc   Number of particles per cell
      */
-    Species( std::string const name, float const m_q, uint2 const ppc );
+    species( std::string const name, float const m_q, uint2 const ppc );
 
     /**
      * @brief Initialize data structures and inject initial particle distribution
@@ -171,14 +168,14 @@ public:
      * @brief Destroy the Species object
      * 
      */
-    ~Species();
+    ~species();
 
     /**
      * @brief Set the density profile object
      * 
      * @param new_density   New density object to be cloned
      */
-    virtual void set_density( Density::Profile const & new_density ) {
+    virtual void set_density( density::profile const & new_density ) {
         delete density;
         density = new_density.clone();
     }
@@ -186,9 +183,9 @@ public:
     /**
      * @brief Get the density object
      * 
-     * @return Density::Profile& 
+     * @return density::profile& 
      */
-    Density::Profile & get_density() {
+    density::profile & get_density() {
         return * density;
     }
 
@@ -197,7 +194,7 @@ public:
      * 
      * @param new_udist     New udist object to be cloned
      */
-    virtual void set_udist( UDistribution::Type const & new_udist ) {
+    virtual void set_udist( udist::type const & new_udist ) {
         delete udist;
         udist = new_udist.clone();
     }
@@ -207,7 +204,7 @@ public:
      * 
      * @return UDistribution::Type& 
      */
-    UDistribution::Type & get_udist() {
+    udist::type & get_udist() {
         return *udist;
     } 
 
@@ -283,14 +280,14 @@ public:
      * @param E     Electric field
      * @param B     Magnetic field
      */
-    void push( grid::vec3_tiled<float> * const E, grid::vec3_tiled<float> * const B );
+    void push( grid::tiled_vec3<float> * const E, grid::tiled_vec3<float> * const B );
 
     /**
      * @brief Move particles (advance positions) and deposit current/charge
      * 
      * @param current   Electric current density
      */
-    void move( grid::vec3_tiled<float> * const current, grid::tiled<float> * charge );
+    void move( grid::tiled_vec3<float> * const current, grid::tiled<float> * charge );
 
     /**
      * @brief Move particles (advance positions) without depositing current
@@ -367,8 +364,8 @@ public:
      * 
      * @return auto 
      */
-    uint32_t np_max_tile() const {
-        return particles -> np_max_tile();
+    uint32_t tile_np_max() const {
+        return particles -> tile_np_max();
     }
 
     /**
@@ -376,8 +373,8 @@ public:
      * 
      * @return uint64_t     Local number of particles
      */
-    uint64_t np_local() const {
-        return particles -> np_local();
+    uint64_t local_np() const {
+        return particles -> local_np();
     }
 
     /**
@@ -387,8 +384,8 @@ public:
      * @param all           Return result on all parallel nodes (defaults to false)
      * @return uint64_t     Global number of particles
      */
-    uint64_t np_global( bool all = false ) {
-        return particles -> np_global( all );
+    uint64_t global_np( bool all = false ) {
+        return particles -> global_np( all );
     }
 
     /**
@@ -412,7 +409,7 @@ public:
      * @param size      Number of grid points
      */
     void save_phasespace ( 
-        phasespace::quant quant, float2 const range, int const size ) const;
+        phasespace::quantity quant, float2 const range, int const size ) const;
 
     /**
      * @brief Save 2D phasespace density to file
@@ -425,8 +422,8 @@ public:
      * @param size1     axis 1 number of points
      */
     void save_phasespace ( 
-        phasespace::quant quant0, float2 const range0, int const size0,
-        phasespace::quant quant1, float2 const range1, int const size1 ) const;
+        phasespace::quantity quant0, float2 const range0, int const size0,
+        phasespace::quantity quant1, float2 const range1, int const size1 ) const;
 
     /**
      * @brief Print information on the number of particles per tile

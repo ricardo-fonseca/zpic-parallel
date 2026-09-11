@@ -6,13 +6,13 @@
  * 
  * @param part  Particle data
  */
-void UDistribution::None::set( Particles & part, unsigned int seed ) const {
+void udist::none::set( part::particles & part, unsigned int seed ) const {
 
     #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < part.local_ntiles.x * part.local_ntiles.y; tid ++ ) {
 
-        const int offset = part.offset[tid];
-        const int np     = part.np[tid];
+        const int offset = part.tile_offset[tid];
+        const int np     = part.tile_np[tid];
         float3 * __restrict__ const u  = &part.u[ offset ];
 
         for( auto i = 0; i < np; i++ ) u[i] = make_float3(0,0,0);
@@ -24,13 +24,13 @@ void UDistribution::None::set( Particles & part, unsigned int seed ) const {
  * 
  * @param part  Particle data
  */
-void UDistribution::Cold::set( Particles & part, unsigned int seed ) const {
+void udist::cold::set( part::particles & part, unsigned int seed ) const {
 
     #pragma omp parallel for schedule(dynamic)
     for( unsigned tid = 0; tid < part.local_ntiles.x * part.local_ntiles.y; tid ++ ) {
 
-        const int offset = part.offset[tid];
-        const int np     = part.np[tid];
+        const int offset = part.tile_offset[tid];
+        const int np     = part.tile_np[tid];
         float3 * __restrict__ const u  = &part.u[ offset ];
 
         for( auto i = 0; i < np; i++ ) u[i] = ufl;
@@ -41,7 +41,7 @@ void UDistribution::Cold::set( Particles & part, unsigned int seed ) const {
  * @brief Sets momentum of all particles in object using uth / ufl
  * 
  */
-void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
+void udist::thermal::set( part::particles & part, unsigned int seed ) const {
 
     uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
 
@@ -60,8 +60,8 @@ void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
         double norm;
         zrandom::rand_init( global_tid, rnd_seed, state, norm );
 
-        const int offset = part.offset[tid];
-        const int np     = part.np[tid];
+        const int offset = part.tile_offset[tid];
+        const int np     = part.tile_np[tid];
         float3 * __restrict__ const u  = &part.u[ offset ];
 
         for( int i = 0; i < np; i++ ) {
@@ -78,7 +78,7 @@ void UDistribution::Thermal::set( Particles & part, unsigned int seed ) const {
  * @brief Sets particle momentum correcting local ufl fluctuations
  * 
  */
-void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) const {
+void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const {
 
     uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
 
@@ -111,8 +111,8 @@ void UDistribution::ThermalCorr::set( Particles & part, unsigned int seed ) cons
         double norm;
         zrandom::rand_init( global_tid, rnd_seed, state, norm );
 
-        const int offset = part.offset[tid];
-        const int np     = part.np[tid];
+        const int offset = part.tile_offset[tid];
+        const int np     = part.tile_np[tid];
         float3 * __restrict__ const u  = &part.u[ offset ];
         int2 const * const __restrict__ ix = &part.ix[offset];
 

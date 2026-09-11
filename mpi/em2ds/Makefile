@@ -79,9 +79,12 @@ CXXFLAGS += -Wno-vla-extension
 
 # --------------------------------------------------------------------------- #
 SOURCE = emf.cpp laser.cpp current.cpp charge.cpp \
-         udist.cpp density.cpp particles.cpp species.cpp
+         udist.cpp density.cpp species.cpp
 
 SOURCE += main.cpp
+
+# Support classes
+SOURCE += part/particles.cpp
 
 # Add ZDF library
 SOURCE += zdf/zdf.c zdf/zdf-parallel.c

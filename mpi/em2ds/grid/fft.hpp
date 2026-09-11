@@ -9,7 +9,7 @@
 #include "tiled.hpp"
 #include "flat.hpp"
 
-#include "vec3_tiled.hpp"
+#include "tiled_vec3.hpp"
 #include "flat3.hpp"
 
 #ifdef _OPENMP
@@ -153,7 +153,7 @@ class r2c_plan {
      * @param dims      Global dimensions of real space data
      * @param comm      MPI Communicator
      */
-    r2c_plan( const grid::vec3_tiled<float> & source, plan::rigor flag = plan::estimate ):
+    r2c_plan( const grid::tiled_vec3<float> & source, plan::rigor flag = plan::estimate ):
         r2c_plan( source.get_global_dims(), source.get_part().get_comm(), flag ) {
         if ( source.get_part().dims.x != 1 ) {
             mpi::fatal( "FFT operations require that the domain is only partitioned along the y direction" );
@@ -206,7 +206,7 @@ class r2c_plan {
      * @param input         Input grid (real)
      * @param in_ystride    Input ystride
      */
-    void transform( grid::flat3<std::complex<float>> & output, const grid::vec3_tiled<float> & input ) {
+    void transform( grid::flat3<std::complex<float>> & output, const grid::tiled_vec3<float> & input ) {
 
         auto dims = input.get_global_dims();
         float * x_data = reinterpret_cast<float*>(output.x());
@@ -340,7 +340,7 @@ class c2r_plan {
      * @param dest 
      * @param flag 
      */
-    c2r_plan( const grid::vec3_tiled<float> & dest, plan::rigor flag = plan::estimate ):
+    c2r_plan( const grid::tiled_vec3<float> & dest, plan::rigor flag = plan::estimate ):
         c2r_plan( dest.get_global_dims(), dest.get_part().get_comm(), flag ) {
         if ( dest.get_part().dims.x != 1 ) {
             mpi::fatal( "FFT operations require that the domain is only partitioned along the y direction" );
@@ -405,7 +405,7 @@ class c2r_plan {
      * @param out_ystride   Output ystride
      * @param input         Input grid (complex)
      */
-    void transform( grid::vec3_tiled<float> & output, const grid::flat3<std::complex<float>> & input ) {
+    void transform( grid::tiled_vec3<float> & output, const grid::flat3<std::complex<float>> & input ) {
 
         fftwf_complex * data_x_c = reinterpret_cast<fftwf_complex *>( input.x() );
         fftwf_complex * data_y_c = reinterpret_cast<fftwf_complex *>( input.y() );
@@ -524,7 +524,7 @@ inline grid::flat<std::complex<float>>* new_complex_grid( const grid::tiled<floa
  * @param in    Grid object describing the real data
  * @return grid::flat<std::complex<float>>
  */
-inline grid::flat3<std::complex<float>> complex_grid( const grid::vec3_tiled<float>& in ) {
+inline grid::flat3<std::complex<float>> complex_grid( const grid::tiled_vec3<float>& in ) {
 
     auto global_dims = in.get_global_dims();
 
@@ -545,7 +545,7 @@ inline grid::flat3<std::complex<float>> complex_grid( const grid::vec3_tiled<flo
     );
 }
 
-inline grid::flat3<std::complex<float>>* new_complex_grid( const grid::vec3_tiled<float>& in ) {
+inline grid::flat3<std::complex<float>>* new_complex_grid( const grid::tiled_vec3<float>& in ) {
     return new grid::flat3<std::complex<float>>( complex_grid( in ) );
 }
 

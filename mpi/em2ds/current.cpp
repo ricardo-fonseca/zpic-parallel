@@ -210,7 +210,7 @@ void current::save( const quantity quant, const fcomp::cart jc ) {
     std::string vfname;      // Dataset name
     std::string vflabel;    // Dataset label (for plots)
 
-    grid::vec3_tiled<float> * f = nullptr;
+    grid::tiled_vec3<float> * f = nullptr;
     grid::flat3<std::complex<float>> * cf = nullptr;
 
     switch (quant) {

@@ -116,8 +116,8 @@ int laser::pulse::validate() {
  */
 int laser::pulse::add( emf & emf ) {
 
-    grid::vec3_tiled<float> tmp_E( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
-    grid::vec3_tiled<float> tmp_B( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
+    grid::tiled_vec3<float> tmp_E( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
+    grid::tiled_vec3<float> tmp_B( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
 
     // Get laser fields
     int ierr = launch( tmp_E, tmp_B, emf.box );
@@ -163,7 +163,7 @@ int laser::pulse::add( emf & emf ) {
  * @param box   Box size
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
-int laser::plane_wave::launch( grid::vec3_tiled<float>& E, grid::vec3_tiled<float>& B, float2 box ) {
+int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, float2 box ) {
 
     if ( validate() < 0 ) return -1;
 
@@ -277,7 +277,7 @@ inline float gauss_phase( const float omega0, const float W0, const float z, con
  * @param dx    Cell size
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
-int laser::gaussian::launch(grid::vec3_tiled<float>& E, grid::vec3_tiled<float>& B, const float2 box ) {
+int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 box ) {
 
     if ( validate() < 0 ) return -1;
 

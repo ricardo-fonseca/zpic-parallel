@@ -1,12 +1,18 @@
 #pragma once
 
-#include "parallel.hpp"
+#include "mpi.h"
+#include "../parallel.hpp"
 
-#include "vec_types.hpp"
-#include "bounds.hpp"
+#include "../vec_types.hpp"
+#include "../bounds.hpp"
 
-#include "zdf/zdf.hpp"
+#include "../zdf/zdf.hpp"
+
 #include <cstdlib>
+#include <cstdint>
+#include <iostream>
+#include <string>
+#include <utility>
 
 namespace part {
 
@@ -14,7 +20,7 @@ namespace part {
  * @brief Particle quantity identifiers
  * 
  */
-enum quant { x, y, ux, uy, uz };
+enum class quantity { x, y, ux, uy, uz };
 
 namespace bnd_t {
     enum type { none = 0, periodic, comm };
@@ -45,15 +51,16 @@ typedef bounds_2d<bnd_t::type> bnd_type;
  * 
  * @param dx    x edge tile shift (-1, 0 or 1)
  * @param dy    y edge tile shift (-1, 0 or 1)
- * @return int  Direction (0-9)
+ * @return int  Direction (0-8)
  */
-inline int edge_dir_shift( const int dx, const int dy ) {
+inline constexpr int edge_dir_shift( const int dx, const int dy ) {
     return (dy + 1)*3 + (dx + 1);
 }
 
 /**
  * @brief edge tile shift (dx, dy) from direction
  * 
+ * @details
  * Returns:
  * 
  * | dir | Δy | Δx |
@@ -68,11 +75,11 @@ inline int edge_dir_shift( const int dx, const int dy ) {
  * |  7  | +1 |  0 |
  * |  8  | +1 | +1 |
  * 
- * @param dir       Direction index (0-9)
+ * @param dir       Direction index (0-8)
  * @param dx        x edge tile direction (-1, 0 or 1)
  * @param dy        y edge tile direction (-1, 0 or 1)
  */
-inline void edge_shift_dir( const int dir, int & dx, int & dy ) {
+inline constexpr void edge_shift_dir( const int dir, int & dx, int & dy ) {
     dx = dir % 3 - 1;
     dy = dir / 3 - 1;
 }
@@ -96,12 +103,12 @@ inline void edge_shift_dir( const int dir, int & dx, int & dy ) {
  * 
  * @note Direction complies to `edge_shift_dir()`
  * 
- * @param dir       Direction (0-9)
- * @param ntiles    Number of local tiles (x,y)
- * @return int      Number of edge tiles in the specified direction
+ * @param dir               Direction (0-8)
+ * @param ntiles            Number of local tiles (x,y)
+ * @return unsigned int     Number of edge tiles in the specified direction
  */
-inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
-    unsigned int size = 1;                        // corners
+inline constexpr int edge_ntiles( const int dir, const int2 ntiles ) {
+    int size = 1;                                 // corners
     if ( dir == 1 || dir == 7 ) size = ntiles.x;  // y boundary
     if ( dir == 3 || dir == 5 ) size = ntiles.y;  // x boundary
     if ( dir == 4 ) size = 0;                     // local
@@ -134,7 +141,7 @@ inline unsigned int edge_ntiles( const int dir, const uint2 ntiles ) {
  * @param ntiles    Number of local tiles (x,y)
  * @return int      Start of edge tiles in the specified direction
  */
-inline constexpr int edge_tile_start( const int dir, const uint2 ntiles ) {
+inline constexpr int edge_tile_start( const int dir, const int2 ntiles ) {
     int a, b, c;
     a = b = c = 0;
 
@@ -152,6 +159,29 @@ inline constexpr int edge_tile_start( const int dir, const uint2 ntiles ) {
 }
 
 /**
+ * @brief Checks whether selected edge is connectec to another node
+ *
+ * @details Returns true if communication along the selected edge will be
+ *          required. Direction 4 (local) always returns true; callers are
+ *          expected to handle it separately.
+ *
+ * @param dir           Direction (0-8)
+ * @param local_bnd     Local boundary type (none, local periodic, comm)
+ * @return bool         True if the direction corresponds to a comm boundary
+ */
+inline bool edge_dir_comm( const int dir, part::bnd_type const local_bnd ) {
+    int dx, dy;
+    part::edge_shift_dir( dir, dx, dy );
+
+    if ( dx < 0 && local_bnd.x.lower != part::bnd_t::comm ) return false;
+    if ( dx > 0 && local_bnd.x.upper != part::bnd_t::comm ) return false;
+    if ( dy < 0 && local_bnd.y.lower != part::bnd_t::comm ) return false;
+    if ( dy > 0 && local_bnd.y.upper != part::bnd_t::comm ) return false;
+
+    return true;
+}
+
+/**
  * @brief Gets tile id from coordinates, including edge tiles
  * 
  * @note Assumes edge tile information is in the same tile buffer 
@@ -166,7 +196,10 @@ inline constexpr int edge_tile_start( const int dir, const uint2 ntiles ) {
  */
 inline int tid_coords( int2 coords, int2 const ntiles, part::bnd_type const local_bnd ) {
 
-    // Local (non-parallel) x periodic
+    // assert( coords.x >= -1 && coords.x <= ntiles.x );
+    // assert( coords.y >= -1 && coords.y <= ntiles.y );
+
+    // Local (non-parallel) periodic wrap
     if ( local_bnd.x.lower == part::bnd_t::periodic ) {
         if      ( coords.x < 0 )         coords.x += ntiles.x; 
         else if ( coords.x >= ntiles.x ) coords.x -= ntiles.x;
@@ -179,89 +212,49 @@ inline int tid_coords( int2 coords, int2 const ntiles, part::bnd_type const loca
     }
 
     // Edge (communication with other nodes) shift
-    int xshift = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
-    int yshift = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
-    int dir    = part::edge_dir_shift( xshift, yshift );
+    const int dx  = ( coords.x >= ntiles.x ) - ( coords.x < 0 );
+    const int dy  = ( coords.y >= ntiles.y ) - ( coords.y < 0 );
+    const int dir = part::edge_dir_shift( dx, dy );
 
-    int tid = -1;
-    switch (dir)
-    {
-    case 0: // lower y, lower x
-        if (( local_bnd.y.lower == part::bnd_t::comm ) &&
-            ( local_bnd.x.lower == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x; // base
-        break;
-    case 1: // lower y
-        if ( local_bnd.y.lower == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + // base
-                  1 +                   // 0
-                  coords.x;
-        break;
-    case 2: // lower y, upper x
-        if (( local_bnd.y.lower == part::bnd_t::comm ) &&
-            ( local_bnd.x.upper == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x + // base
-                  1 +                   // 0
-                  ntiles.x;             // 1
-        break;
-    case 3: // lower x
-        if ( local_bnd.x.lower == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + // base
-                  1 +                   // 0
-                  ntiles.x +            // 1
-                  1 +                   // 2
-                  coords.y;
-        break;
-    case 4: // local tiles
-        tid = coords.y * ntiles.x + coords.x;
-        break;
-    case 5: // upper x
-        if ( local_bnd.x.upper == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + // base
-                1 +                     // 0
-                ntiles.x +              // 1
-                1 +                     // 2
-                ntiles.y +              // 3
-                coords.y;
-        break;
-    case 6: // upper y, lower x
-        if (( local_bnd.y.upper == part::bnd_t::comm ) &&
-            ( local_bnd.x.lower == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x + // base
-                1 +                     // 0
-                ntiles.x +              // 1
-                1 +                     // 2
-                ntiles.y +              // 3
-                ntiles.y;               // 5
-        break;
-    case 7: // upper y
-        if ( local_bnd.y.upper == part::bnd_t::comm )
-            tid = ntiles.y * ntiles.x + // base
-                1 +                     // 0
-                ntiles.x +              // 1
-                1 +                     // 2
-                ntiles.y +              // 3
-                ntiles.y +              // 5
-                1 +                     // 6
-                coords.x;
-        break;
-    case 8: // upper y, upper x
-        if (( local_bnd.y.upper == part::bnd_t::comm ) &&
-            ( local_bnd.x.upper == part::bnd_t::comm ))
-            tid = ntiles.y * ntiles.x + // base
-                1 +                     // 0
-                ntiles.x +              // 1
-                1 +                     // 2
-                ntiles.y +              // 3
-                ntiles.y +              // 5
-                1 +                     // 6
-                ntiles.x;               // 7
-        break;
-    default:
-        tid = -1;
-        break;
-    }
+    // Local tile
+    if ( dir == 4 ) return coords.y * ntiles.x + coords.x;
+
+    // No neighbor in this direction
+    if ( ! part::edge_dir_comm( dir, local_bnd ) ) return -1;
+
+    int tid = ntiles.y * ntiles.x +                 // base
+              part::edge_tile_start( dir, ntiles );
+
+    if      ( dy == 0 ) tid += coords.y;    // x boundary (dir 3, 5)
+    else if ( dx == 0 ) tid += coords.x;    // y boundary (dir 1, 7)
+                                            // corners take no offset
+
     return tid;
+}
+
+/**
+ * @brief Local tile id receiving the k-th edge tile of a given direction
+ *
+ * @details Edge tile data arrives ordered along the shared boundary. This maps
+ *          position `k` within direction `dir` onto the local tile grid: the
+ *          bottom row for dir 1, the left column for dir 3, the single corner
+ *          tile for dir 0, and so on.
+ *
+ * @note Direction complies to `edge_shift_dir()`. Valid for
+ *       `0 <= k < edge_ntiles( dir, ntiles )`.
+ *
+ * @param dir       Direction (0-8)
+ * @param k         Position within the direction's edge tiles
+ * @param ntiles    Number of local tiles (x,y)
+ * @return int      Local tile id
+ */
+inline constexpr int local_edge_tid( const int dir, const int k, const int2 ntiles ) {
+    const int stride = ( dir == 3 || dir == 5 ) ? ntiles.x : 1;
+
+    const int xoff = ( dir % 3 == 2 ) ? ntiles.x - 1 : 0;
+    const int yoff = ( dir / 3 == 2 ) ? ( ntiles.y - 1 ) * ntiles.x : 0;
+
+    return k * stride + yoff + xoff;
 }
 
 /**
@@ -296,18 +289,18 @@ inline constexpr int all_tiles( const uint2 ntiles ) {
     return local_tiles( ntiles ) + msg_tiles( ntiles );
 }
 
-}
-
 /**
  * @brief   Data structure to hold particle sort data
  * 
- * @warning This is meant to be used only as a superclass for ParticleSort. The
+ * @warning This is meant to be used only as a superclass for particle_sort. The
  *          struct does not include methods for allocating / deallocating
  *          memory
  *
  * 
  */
-struct ParticleSortData {
+struct particle_sort_view {
+    /// @brief Maximum number of particles to be sorted
+    uint32_t max_part;
     /// @brief Particle index list [max_part]
     int *idx;
     /// @brief Number of particles in index list [local_ntiles]
@@ -322,8 +315,8 @@ struct ParticleSortData {
     /// @brief Local number of tiles
     const uint2 ntiles;
 
-    ParticleSortData( const uint2 ntiles ) : 
-        ntiles(ntiles) {};
+    particle_sort_view( const uint32_t max_part, const uint2 ntiles ) : 
+        max_part(max_part), ntiles(ntiles) {};
 };
 
 /**
@@ -333,15 +326,13 @@ struct ParticleSortData {
  *       inidices and counts. It should work for any type of particle data.
  * 
  */
-class ParticleSort : public ParticleSortData {
+class particle_sort : public particle_sort_view {
 
     struct Message {
         /// @brief Buffer for all 8 messages
         int * buffer;
         /// @brief Number of incoming particles per message
         int msg_np[9];
-        /// @brief Total number of particles to be exchanged
-        int total_np;
         /// @brief Message requests
         MPI_Request requests[9];
     };
@@ -376,9 +367,9 @@ class ParticleSort : public ParticleSortData {
     public:
 
     /// @brief Incoming messages
-    ParticleSort::Message recv;
+    particle_sort::Message recv;
     /// @brief Outgoing messages
-    ParticleSort::Message send;
+    particle_sort::Message send;
 
     /**
      * @brief Construct a new Particle Sort object
@@ -387,19 +378,19 @@ class ParticleSort : public ParticleSortData {
      * @param max_part      Maximum number of particles in buffer
      * @param par           Parallel partition
      */
-    ParticleSort( uint2 const ntiles, uint32_t const max_part, mpi::cart2d & par ) :
-        ParticleSortData( ntiles )
+    particle_sort( uint2 const ntiles, uint32_t const max_part, mpi::cart2d & par ) :
+        particle_sort_view( max_part, ntiles )
     {
         idx = memory::malloc<int>( max_part );
 
-        auto local_tiles = ntiles.x * ntiles.y;
+        // Number of local ltiles
+        int local_tiles = part::local_tiles(ntiles);
 
-        auto edge_tiles = 2 * ntiles.y + // x boundary
-                          2 * ntiles.x + // y boundary
-                          4;             // corners
+        // Number of edge tiles for messaging
+        int msg_tiles = part::msg_tiles(ntiles);
 
          // Include send buffer for number of particles leaving node
-        new_np = memory::malloc<int>( local_tiles + edge_tiles );
+        new_np = memory::malloc<int>( local_tiles + msg_tiles );
         
         // Number of particles leaving each local tile
         nidx   = memory::malloc<int>( local_tiles );
@@ -411,8 +402,8 @@ class ParticleSort : public ParticleSortData {
         send.buffer = &new_np[ local_tiles ];
 
         // Receive buffer
-        recv.buffer = memory::malloc<int>( edge_tiles );
-        memory::zero( recv.buffer, edge_tiles );
+        recv.buffer = memory::malloc<int>( msg_tiles );
+        memory::zero( recv.buffer, msg_tiles );
 
         // MPI Communicator
         comm = par.get_comm();
@@ -420,7 +411,7 @@ class ParticleSort : public ParticleSortData {
         // Local MPI rank
         auto local = par.get_rank(); 
 
-        // Neighbor MPI ranks
+        // Neighbor MPI ranks and messages
         for( int dir = 0; dir < 9; dir++ ) {
             int shiftx, shifty;
             part::edge_shift_dir( dir, shiftx, shifty );
@@ -429,6 +420,10 @@ class ParticleSort : public ParticleSortData {
             // Disable all messages to self
             // Single node periodic boundaries are handled without messages
             if ( neighbor[dir] == local ) neighbor[dir] = -1;
+
+            // Initialize messages
+            recv.requests[dir] = send.requests[dir] = MPI_REQUEST_NULL;
+            recv.msg_np[dir]   = send.msg_np[dir]   = 0;
         }
     }
 
@@ -436,13 +431,31 @@ class ParticleSort : public ParticleSortData {
      * @brief Destroy the Particle Sort object
      * 
      */
-    ~ParticleSort() {
+    ~particle_sort() {
         memory::free( recv.buffer );
         
         memory::free( npt );
         memory::free( nidx );
         memory::free( new_np );
         memory::free( idx );
+    }
+
+    particle_sort( const particle_sort & ) = delete;
+    particle_sort( particle_sort && ) = delete;
+
+    /**
+     * @brief Checks if idx buffer is large enough, grows if needed
+     *
+     * @note idx buffer is grown in multiples of 1 kB
+     * 
+     * @param new_max   New maximum number of particles required
+     */
+    void check_buffer( uint32_t new_max ) {
+        if ( new_max > max_part ) {
+            memory::free( idx );
+            max_part = roundup<65536>(new_max);
+            idx = memory::malloc<int>( max_part );
+        }
     }
 
     /**
@@ -467,7 +480,7 @@ class ParticleSort : public ParticleSortData {
  * @brief Class for handling particle data messages
  * 
  */
-class ParticleMessage {
+class particle_message {
 
     private:
 
@@ -517,7 +530,7 @@ class ParticleMessage {
      * 
      * @param ntiles 
      */
-    ParticleMessage( mpi::cart2d & par ) {
+    particle_message( mpi::cart2d & par ) {
 
         // Buffers for particle data messages (initially empty)
         buffer = nullptr;
@@ -530,8 +543,9 @@ class ParticleMessage {
         for( int dir = 0; dir < 9; dir++ ) {
             int shiftx, shifty;
             part::edge_shift_dir( dir, shiftx, shifty );
-            neighbor[ dir ] = par.get_neighbor( shiftx, shifty );            
+            neighbor[ dir ] = par.get_neighbor( shiftx, shifty );
             requests[ dir ] = MPI_REQUEST_NULL;
+            size[ dir ] = 0;
         }
 
         active = MessageType::none;
@@ -541,15 +555,19 @@ class ParticleMessage {
      * @brief Destroy the Particle Msg Buffer object
      * 
      */
-    ~ParticleMessage() {
+    ~particle_message() {
         if ( active != MessageType::none ) {
             for( int i = 0; i < 9; i++ ) {
-                MPI_Request tmp = requests[i];
-                MPI_Cancel( &tmp );
+                if ( requests[i] != MPI_REQUEST_NULL )
+                    MPI_Cancel( &requests[i] );
             }
+            MPI_Waitall( 9, requests, MPI_STATUSES_IGNORE );
         }
         memory::free( buffer );
     }
+
+    particle_message( const particle_message & ) = delete;
+    particle_message( particle_message && ) = delete;
 
     /**
      * @brief Checks if data buffer is large enough to hold all messages and grows
@@ -559,10 +577,14 @@ class ParticleMessage {
      * @param total_size    Total required size in bytes
      */
     void check_buffer( uint32_t total_size ) {
-        if ( total_size > max_size ) {
-            memory::free( buffer );
-            max_size = roundup<1048576>(total_size);
-            buffer = memory::malloc<uint8_t>( max_size );
+        if ( active ==  MessageType::none ) {
+            if ( total_size > max_size ) {
+                memory::free( buffer );
+                max_size = roundup<1048576>(total_size);
+                buffer = memory::malloc<uint8_t>( max_size );
+            }
+        } else {
+            mpi::fatal("check_buffer() called on an active message");
         }
     }
 
@@ -619,6 +641,7 @@ class ParticleMessage {
     int wait() {
         int ierr = MPI_Waitall( 9, requests, MPI_STATUSES_IGNORE );
         active = MessageType::none;
+        for( int i = 0; i < 9; i++ ) size[i] = 0;
         return ierr;
     }
 };
@@ -626,17 +649,17 @@ class ParticleMessage {
 /**
  * @brief   Data structure to hold particle data
  * 
- * @warning This is meant to be used only as a superclass for Particles. The
+ * @warning This is meant to be used only as a superclass for particles. The
  *          struct does not include methods for allocating / deallocating
  *          memory
  * 
- * @note    Declaring a function parameter as `func(ParticleData p)` and calling
- *          the function with a `Particles` object parameter will automatically
- *          cast the value to `ParticleData`. This means that we will not be
- *          creating a full copy of the `Particles` object and therefore data
+ * @note    Declaring a function parameter as `func(particles_view p)` and calling
+ *          the function with a `particles` object parameter will automatically
+ *          cast the value to `particles_view`. This means that we will not be
+ *          creating a full copy of the `particles` object and therefore data
  *          will not be destroyed when the function reaches the end.
  */
-struct ParticleData {
+struct particles_view {
 
     /// @brief Global number of tiles (x,y)
     uint2 global_ntiles;
@@ -648,9 +671,9 @@ struct ParticleData {
     uint2 local_tile_start;
 
     /// @brief Number of particles in tile
-    int * np;
+    int * tile_np;
     /// @brief Tile particle position on global array
-    int * offset;
+    int * tile_offset;
 
     /// @brief Particle position (cell index)
     int2 *ix;
@@ -662,7 +685,7 @@ struct ParticleData {
     /// @brief Maximum number of particles in the buffer
     uint32_t max_part;
 
-    ParticleData( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part ) :
+    particles_view( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part ) :
         global_ntiles( global_ntiles ),
         tile_dims( tile_dims ),
         max_part( max_part ) {};
@@ -672,15 +695,9 @@ struct ParticleData {
  * @brief Class for particle data
  * 
  */
-class Particles : public ParticleData {
+class particles : public particles_view {
 
     protected:
-
-    /// @brief Local grid size
-    uint2 local_dims;
-
-    /// @brief Global grid size
-    uint2 global_dims;
 
     /// @brief Global periodic boundaries (x,y)
     int2 periodic;
@@ -689,10 +706,10 @@ class Particles : public ParticleData {
     part::bnd_type local_bnd;
 
     /// @brief Outgoing particle data messages
-    ParticleMessage send;
+    particle_message send;
 
     /// @brief Incoming particle data messages
-    ParticleMessage recv;
+    particle_message recv;
 
     public:
 
@@ -700,37 +717,31 @@ class Particles : public ParticleData {
     mpi::cart2d & parallel;
 
     /**
-     * @brief Construct a new Particles object
+     * @brief Construct a new particles object
      * 
      * @param global_ntiles     Global number of tiles
      * @param tile_dims         Individual tile grid size
      * @param max_part          Maximum number of particles
      */
-    Particles( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part, mpi::cart2d & parallel ) :
-        ParticleData( global_ntiles, tile_dims, max_part ),
+    particles( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part, mpi::cart2d & parallel ) :
+        particles_view( global_ntiles, tile_dims, max_part ),
         send( parallel ), recv( parallel ),
         parallel( parallel )
     {
 
         // Get local number of tiles and position on tile grid
         parallel.grid_local( global_ntiles, local_ntiles, local_tile_start );
-
-        // Global grid size
-        global_dims = global_ntiles * tile_dims;
-
-        // Local grid size
-        local_dims = local_ntiles * tile_dims;
         
         ///@brief Total number of local tiles including edge tiles
         const size_t bsize = part::all_tiles( local_ntiles );
 
         // Tile information
-        np = memory::malloc<int>( bsize );
-        offset = memory::malloc<int>( bsize );
+        tile_np = memory::malloc<int>( bsize );
+        tile_offset = memory::malloc<int>( bsize );
 
         // Initially empty
-        memory::zero( np, bsize );
-        memory::zero( offset, bsize );
+        memory::zero( tile_np, bsize );
+        memory::zero( tile_offset, bsize );
 
         // Particle data
         ix = memory::malloc<int2>( max_part );
@@ -745,16 +756,37 @@ class Particles : public ParticleData {
     }
 
     /**
-     * @brief Destroy the Particles object
+     * @brief Destroy the particles object
      * 
      */
-    ~Particles() {
+    ~particles() {
         memory::free( u );
         memory::free( x );
         memory::free( ix );
 
-        memory::free( offset );
-        memory::free( np );
+        memory::free( tile_offset );
+        memory::free( tile_np );
+    }
+
+    particles( const particles & ) = delete;
+    particles( particles && ) = delete;
+
+    /**
+     * @brief Local grid size
+     * 
+     * @return uint2 
+     */
+    uint2 local_dims() const {
+        return local_ntiles * tile_dims;
+    };
+
+    /**
+     * @brief Global grid size
+     * 
+     * @return uint2 
+     */
+    uint2 global_dims() const {
+        return global_ntiles * tile_dims;
     }
 
     /**
@@ -799,14 +831,14 @@ class Particles : public ParticleData {
         // Check x direction
         if ( ( new_periodic.x ) && 
              ( (! parallel.periodic.x ) && ( parallel.dims.x > 1 )) ) {
-            mpi::fatal( "Particles::set_periodic() - Attempting to set "
+            mpi::fatal( "particles::set_periodic() - Attempting to set "
                         "parallel x boundaries on non-parallel comm direction." );
         }
 
         // Check y direction
         if ( ( new_periodic.y ) && 
              ( (! parallel.periodic.y ) && ( parallel.dims.y > 1 )) ) {
-            mpi::fatal( "Particles::set_periodic() - Attempting to set "
+            mpi::fatal( "particles::set_periodic() - Attempting to set "
                         "parallel y boundaries on non-parallel comm direction" );
         }
 
@@ -825,18 +857,11 @@ class Particles : public ParticleData {
     int2 get_periodic( ) const { return periodic; }
 
     /**
-     * @brief Get the local grid size
-     * 
-     * @return uint2
-     */
-    uint2 get_local_dims() const { return local_dims; }
-
-    /**
      * @brief Sets the number of particles per tile to 0
      * 
      */
     void zero_np() {
-        memory::zero( np, part::all_tiles( local_ntiles ) );
+        memory::zero( tile_np, part::all_tiles( local_ntiles ) );
     }
 
     /**
@@ -869,15 +894,19 @@ class Particles : public ParticleData {
      * @param a     Object a
      * @param b     Object b
      */
-    friend void swap_buffers( Particles & a, Particles & b ) {
+    friend void swap_buffers( particles & a, particles & b ) {
+        
+        // assert( a.local_ntiles == b.local_ntiles );
+        // assert( a.global_ntiles == b.global_ntiles );
+
         std::swap( a.ix, b.ix );
         std::swap( a.x,  b.x );
         std::swap( a.u,  b.u );
 
         std::swap( a.max_part, b.max_part );
 
-        std::swap( a.np,     b.np );
-        std::swap( a.offset, b.offset );
+        std::swap( a.tile_np,     b.tile_np );
+        std::swap( a.tile_offset, b.tile_offset );
     }
 
     /**
@@ -885,31 +914,33 @@ class Particles : public ParticleData {
      * 
      * @return uint32_t 
      */
-    uint32_t np_local() {
+    uint32_t local_np() const {
 
         // sum up number of particles in each tile
         // This works even if the buffer is not compact
-        uint32_t np_local = 0;
+        uint32_t local_np = 0;
         for( unsigned i = 0; i < local_ntiles.x*local_ntiles.y; i++ )
-            np_local += np[i];
+            local_np += tile_np[i];
 
 /*
         // Since the buffer is kept compact we could just look at the last tile
         auto idx = ntiles.x*ntiles.y - 1;
         uint32_t np_total = offset[idx] + np[idx];
 */
-        return np_local;
+        return local_np;
     }
 
     /**
      * @brief Gets global number of particles
+     *
+     * @note When all = 0 (default) returns 0 on non-root ranks
      * 
      * @param all           Return result on all parallel nodes (defaults to false)
      * @return uint64_t     Global number of particles
      */
-    uint64_t np_global( bool all = false ) {
+    uint64_t global_np( bool all = false ) const {
 
-        uint64_t local = np_local();
+        uint64_t local = local_np();
 
         if ( parallel.get_size() > 1 ) {
             if ( all ) {
@@ -918,6 +949,7 @@ class Particles : public ParticleData {
                 return global;
             } else {
                 parallel.reduce( &local, 1, mpi::sum );
+                if ( ! parallel.root() ) local = 0;
                 return local;
             }
         }
@@ -928,12 +960,12 @@ class Particles : public ParticleData {
     /**
      * @brief Gets maximum number of particles in a single tile
      * 
-     * @return uint32_t 
+     * @return int 
      */
-    uint32_t np_max_tile() const {
-        int max_np = np[0];
+    int tile_np_max() const {
+        int max_np = tile_np[0];
         for( unsigned i = 1; i < local_ntiles.x*local_ntiles.y; i++ ) {
-            if ( np[i] > max_np ) max_np = np[i];
+            if ( tile_np[i] > max_np ) max_np = tile_np[i];
         }
         return max_np;
     }
@@ -941,12 +973,12 @@ class Particles : public ParticleData {
     /**
      * @brief Gets minimum number of particles in a single tile
      * 
-     * @return uint32_t 
+     * @return int 
      */
-    uint32_t np_min_tile() const {
-        int min_np = np[0];
+    int tile_np_min() const {
+        int min_np = tile_np[0];
         for( unsigned i = 1; i < local_ntiles.x*local_ntiles.y; i++ ) {
-            if ( np[i] < min_np ) min_np = np[i];
+            if ( tile_np[i] < min_np ) min_np = tile_np[i];
         }
         return min_np;
     }
@@ -956,9 +988,11 @@ class Particles : public ParticleData {
      * @return bounds_2d<uint32_t> 
      */
     bounds_2d<uint32_t> local_range() const { 
+        uint2 dims = local_dims();
+        
         bounds_2d<uint32_t> range;
-        range.x = bounds<uint32_t>( 0, local_dims.x - 1 );
-        range.y = bounds<uint32_t>( 0, local_dims.y - 1 );
+        range.x = bounds<uint32_t>( 0, dims.x - 1 );
+        range.y = bounds<uint32_t>( 0, dims.y - 1 );
 
         return range;
     };
@@ -969,7 +1003,7 @@ class Particles : public ParticleData {
      * @param quant     Quantity to gather
      * @param d_data    Output data buffer, assumed to have size >= np
      */
-    void gather( part::quant quant, float * const __restrict__ d_data  );
+    void gather( part::quantity quant, float * const __restrict__ d_data  );
 
     /**
      * @brief Gather data from a specific particle quantity, scaling values
@@ -980,7 +1014,7 @@ class Particles : public ParticleData {
      * @param scale     Scale factor for data
      * @param d_data    Output data buffer, assumed to have size >= np
      */
-    void gather( part::quant quant, const float2 scale, float * const __restrict__ d_data );
+    void gather( part::quantity quant, const float2 scale, float * const __restrict__ d_data );
 
     /**
      * @brief Validates particle data
@@ -1011,16 +1045,15 @@ class Particles : public ParticleData {
      * @brief Moves particles to the correct tiles
      * 
      * @warning This version of `tile_sort()` is provided for debug only;
-     *          temporary buffers are created and removed each time the
-     *          function is called.
+     *          temporary buffers are created and destroyed on every call.
      * 
      * @param extra     (optional) Additional space to add to each tile. Leaves
      *                  room for particles to be injected later.
      */
-    void tile_sort( mpi::cart2d & parallel, const int * __restrict__ extra = nullptr ){
+    void tile_sort( const int * __restrict__ extra = nullptr ){
         // Create temporary buffers
-        Particles    tmp( global_ntiles, tile_dims, max_part, parallel );
-        ParticleSort sort( local_ntiles, max_part, parallel );
+        particles    tmp( global_ntiles, tile_dims, max_part, parallel );
+        particle_sort sort( local_ntiles, max_part, parallel );
         
         // Call sort routine
         tile_sort( tmp, sort, extra );
@@ -1029,7 +1062,7 @@ class Particles : public ParticleData {
     /**
      * @brief Moves particles to the correct tiles
      * 
-     * @note Particles are only expected to have moved no more than 1 tile
+     * @note particles are only expected to have moved no more than 1 tile
      *       in each direction
      * 
      * @param tmp       Temporary particle buffer
@@ -1037,7 +1070,7 @@ class Particles : public ParticleData {
      * @param extra     (optional) Additional space to add to each tile. Leaves
      *                  room for particles to be injected later.
      */
-    void tile_sort( Particles &tmp, ParticleSort &sort, 
+    void tile_sort( particles &tmp, particle_sort &sort, 
                     const int * __restrict__ extra = nullptr ); 
 
     /**
@@ -1048,7 +1081,7 @@ class Particles : public ParticleData {
      * @param iter      Iteration metadata
      * @param path      Path where to save the file
      */
-    void save( const part::quant quants[], zdf::part_info &metadata, zdf::iteration &iter, std::string path );
+    void save( const part::quantity quants[], zdf::part_info &metadata, zdf::iteration &iter, std::string path );
 
 
     /**
@@ -1056,10 +1089,25 @@ class Particles : public ParticleData {
      * 
      * @return size_t 
      */
-    size_t constexpr particle_size() {
-        return sizeof(int2) + sizeof(float2) + sizeof(float3);
+    static constexpr size_t particle_size() {
+        return sizeof(*ix) + sizeof(*x) + sizeof(*u);
     };
 
+    /**
+     * @brief Byte offsets of each quantity block inside a packed message
+     *
+     * @details Messages are packed as `np` cell indices, followed by `np`
+     *          cell positions, followed by `np` generalized velocities.
+     *          Offsets are relative to the start of the message.
+     */
+    struct packed_offsets {
+        size_t ix, x, u;
+
+        explicit constexpr packed_offsets( uint32_t const np ) :
+            ix( 0 ),
+            x ( ix + np * sizeof( * particles_view::ix ) ),
+            u ( x  + np * sizeof( * particles_view::x ) ) {}
+    };
 
     /**
      * @brief Prepare particle receive buffers and start receive
@@ -1067,7 +1115,7 @@ class Particles : public ParticleData {
      * @param sort      Temporary sort index
      * @param recv      Receive message object
      */
-    void irecv_msg( ParticleSort &sort, ParticleMessage &recv );
+    void irecv_msg( particle_sort &sort, particle_message &recv );
 
     /**
      * @brief Pack particles moving out of the node into a message buffer and start send
@@ -1076,7 +1124,7 @@ class Particles : public ParticleData {
      * @param sort      Temporary sort index
      * @param send      Send message object
      */
-    void isend_msg( Particles &tmp, ParticleSort &sort, ParticleMessage &send );
+    void isend_msg( particles &tmp, particle_sort &sort, particle_message &send );
 
     /**
      * @brief Unpack received particle data into main particle data buffer
@@ -1084,7 +1132,7 @@ class Particles : public ParticleData {
      * @param sort      Temporary sort index
      * @param recv      Receive message object
      */
-    void unpack_msg( ParticleSort &sort, ParticleMessage &recv );
+    void unpack_msg( particle_sort &sort, particle_message &recv );
 
     /**
      * @brief Print information on the number of particles per tile
@@ -1093,7 +1141,7 @@ class Particles : public ParticleData {
      * 
      * @param msg   (optional) Message to print before printing particle information
      */
-    void info_np( std::string msg = "" ) {
+    void info_np( std::string msg = "" ) const {
         
         parallel.barrier();
 
@@ -1110,15 +1158,17 @@ class Particles : public ParticleData {
                     mpi::cout << j << ':';
                     for( unsigned i = 0; i < local_ntiles.x; i++ ) {
                         int tid = j * local_ntiles.x + i;
-                        mpi::cout << " " << np[tid];
+                        mpi::cout << " " << tile_np[tid];
                     }
                     mpi::cout << '\n';
                 }
 
-                mpi::cout << "#particles total: " << np_local() << '\n';
+                mpi::cout << "#particles total: " << local_np() << '\n';
             }
             parallel.barrier();
         }
     }
 };
+
+} // end of part namespace
 

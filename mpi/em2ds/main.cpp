@@ -93,7 +93,7 @@ void test_tiled_grid( ) {
     }      
 }
 
-void test_vec3_tiled_grid( ) {
+void test_tiled_vec3_grid( ) {
 
     if ( mpi::root() ) {
         std::cout << ansi::bold;
@@ -114,7 +114,7 @@ void test_vec3_tiled_grid( ) {
 
     mpi::cart2d parallel( partition );
 
-    grid::vec3_tiled< float > data( global_ntiles, tile_dims, gc, parallel );
+    grid::tiled_vec3< float > data( global_ntiles, tile_dims, gc, parallel );
 
     // Get local number of tiles
     const auto local_ntiles = data.get_local_ntiles();
@@ -166,7 +166,7 @@ void test_vec3_tiled_grid( ) {
     }
 }
 
-void test_ghosted( ) {
+void test_halo( ) {
     
     if ( mpi::root() ) {
         std::cout << ansi::bold;
@@ -187,7 +187,7 @@ void test_ghosted( ) {
 
     mpi::cart2d parallel( partition );
 
-    grid::ghosted<float> data( global_dims, gc, parallel );
+    grid::halo<float> data( global_dims, gc, parallel );
 
     const auto local_dims = data.get_local_dims();
     mpi::cout << "local dims: " << local_dims << '\n';
@@ -618,27 +618,27 @@ void test_inj( ) {
     auto dt = 0.99 * zpic::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
+    species electrons( "electrons", -1.0f, ppc );
 
     parallel.barrier();
     if ( mpi::root() ) std::cout << "Created species\n";
 
-    //electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
-    // electrons.set_density(Density::Slab(coord::y, 1.0, 5.0, 8.0));
-    electrons.set_density( Density::Sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
+    //electrons.set_density(density::step(coord::x, 1.0, 5.0));
+    // electrons.set_density(density::slab(coord::y, 1.0, 5.0, 8.0));
+    electrons.set_density( density::sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
 
     parallel.barrier();
     if ( mpi::root() ) std::cout << "Density set\n";
 
-    electrons.set_udist( UDistribution::Thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+    electrons.set_udist( udist::thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
 
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
     electrons.save_charge();
     electrons.save();
     electrons.save_phasespace(
-        phasespace::ux, float2{-1, 3}, 256,
-        phasespace::uz, float2{-1, 1}, 128
+        phasespace::quantity::ux, float2{-1, 3}, 256,
+        phasespace::quantity::uz, float2{-1, 1}, 128
     );
 
     parallel.barrier();
@@ -670,10 +670,10 @@ void test_mov( ) {
     auto dt = 0.99 * zpic::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
+    species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( Density::Sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
-    electrons.set_udist( UDistribution::Cold( float3{ -1, -2, -3 } ) );
+    electrons.set_density( density::sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
+    electrons.set_udist( udist::cold( float3{ -1, -2, -3 } ) );
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
     electrons.save_charge();
@@ -681,8 +681,8 @@ void test_mov( ) {
 
     int niter = 200; //200
     for( auto i = 0; i < niter; i ++ ) {
-        auto np_global = electrons.np_global();
-        if ( parallel.root() ) std::cout << "i = " << i << ", total particles: " << np_global << '\n';
+        auto global_np = electrons.global_np();
+        if ( parallel.root() ) std::cout << "i = " << i << ", total particles: " << global_np << '\n';
         electrons.advance();
     }
 
@@ -718,10 +718,10 @@ void test_current_charge( ) {
     auto dt = 0.99 * zpic::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
+    species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( Density::Sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
-    electrons.set_udist( UDistribution::Cold( float3{ 1, 2, 3 } ) );
+    electrons.set_density( density::sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
+    electrons.set_udist( udist::cold( float3{ 1, 2, 3 } ) );
 
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
@@ -772,9 +772,9 @@ void test_weibel( )
                             
     uint2 ppc{4, 4};
 
-    Species electrons("electrons", -1.0f, ppc);
+    species electrons("electrons", -1.0f, ppc);
     electrons.set_udist(
-        UDistribution::ThermalCorr( 
+        udist::thermal_corr( 
             float3{ 0.1, 0.1, 0.1 },
             float3{ 0, 0, 0.6 }
         )
@@ -782,9 +782,9 @@ void test_weibel( )
 
     sim.add_species( electrons );
 
-    Species positrons("positrons", +1.0f, ppc);
+    species positrons("positrons", +1.0f, ppc);
     positrons.set_udist(
-        UDistribution::ThermalCorr( 
+        udist::thermal_corr( 
             float3{ 0.1, 0.1, 0.1 },
             float3{ 0, 0, -0.6 }
         )
@@ -882,8 +882,8 @@ int main( int argc, char *argv[] ) {
     info();
 
     // test_tiled_grid();
-    // test_vec3_tiled_grid();
-    // test_ghosted();
+    // test_tiled_vec3_grid();
+    // test_halo();
     // test_flat();
 
     //test_fft_tile();

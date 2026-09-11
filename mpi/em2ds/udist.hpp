@@ -1,63 +1,62 @@
 #pragma once
 
-#include <iostream>
-#include "particles.hpp"
+#include "part/particles.hpp"
 
-namespace UDistribution {
+namespace udist {
 
-    class Type {
+    class type {
         public:
-        virtual Type * clone() const = 0;
-        virtual void set( Particles & part, unsigned int seed ) const = 0;
-        virtual ~Type() = default;
+        virtual type * clone() const = 0;
+        virtual void set( part::particles & part, unsigned int seed ) const = 0;
+        virtual ~type() = default;
     };
     
     /**
      * @brief No momentum distribution, all particles are set to u = 0
      * 
      */
-    class None : public Type {
+    class none : public type {
         public:
-        None * clone() const override { return new None(); };
-        void set( Particles & part, unsigned int seed ) const override ;
+        none * clone() const override { return new none(); };
+        void set( part::particles & part, unsigned int seed ) const override ;
     };
 
     /**
      * @brief Cold momentum distribution, all particles are set to u = ufl
      * 
      */
-    class Cold : public Type {
+    class cold : public type {
         public:
         const float3 ufl;
-        Cold( float3 const ufl ) : ufl(ufl) {};
-        Cold * clone() const override { return new Cold(ufl); };
-        void set( Particles & part, unsigned int seed ) const override ;
+        cold( float3 const ufl ) : ufl(ufl) {};
+        cold * clone() const override { return new cold(ufl); };
+        void set( part::particles & part, unsigned int seed ) const override ;
     };
 
-    class Thermal : public Type {
+    class thermal : public type {
         public:
         const float3 uth;
         const float3 ufl;
-        Thermal( float3 const uth, float3 const ufl ) : uth(uth), ufl(ufl) {};
-        Thermal( float3 const uth ) : uth(uth), ufl( make_float3(0,0,0) ) {};
+        thermal( float3 const uth, float3 const ufl ) : uth(uth), ufl(ufl) {};
+        thermal( float3 const uth ) : uth(uth), ufl( make_float3(0,0,0) ) {};
 
-        Thermal * clone() const override { return new Thermal(uth, ufl); };
-        void set( Particles & part, unsigned int seed ) const override ;
+        thermal * clone() const override { return new thermal(uth, ufl); };
+        void set( part::particles & part, unsigned int seed ) const override ;
     };
 
-    class ThermalCorr : public Type {
+    class thermal_corr : public type {
         
         public:
         const float3 uth;
         const float3 ufl;
         const int npmin;
-        ThermalCorr( float3 const uth, float3 const ufl, int const npmin = 2 ) : uth(uth), ufl(ufl), npmin(npmin) {
+        thermal_corr( float3 const uth, float3 const ufl, int const npmin = 2 ) : uth(uth), ufl(ufl), npmin(npmin) {
             if ( npmin <= 1 ) {
                 mpi::fatal( "Invalid npmin (" + std::to_string(npmin) + " parameter, must be > 1" );
             }
         };
 
-        ThermalCorr * clone() const override { return new ThermalCorr(uth, ufl,npmin); };
-        void set( Particles & part, unsigned int seed ) const override ;
+        thermal_corr * clone() const override { return new thermal_corr(uth, ufl,npmin); };
+        void set( part::particles & part, unsigned int seed ) const override ;
     };
 }

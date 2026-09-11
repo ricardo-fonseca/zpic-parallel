@@ -14,7 +14,7 @@ namespace fcomp {
 namespace grid {
 
 template < typename S > 
-class vec3_tiled : public grid::tiled< vec3<S> >
+class tiled_vec3 : public grid::tiled< vec3<S> >
 {
     protected:
 

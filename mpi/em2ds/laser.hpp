@@ -72,7 +72,7 @@ class pulse {
      * @param box   Box size (simulation units)
      * @return      Returns 0 on success, -1 on error (invalid laser parameters)
      */
-    virtual int launch( grid::vec3_tiled<float>& E, grid::vec3_tiled<float>& B, const float2 box ) = 0;
+    virtual int launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 box ) = 0;
 
     /**
      * @brief Sets longitudinal component
@@ -103,7 +103,7 @@ class plane_wave : public pulse {
     plane_wave() : pulse() {};
 
     int validate() { return pulse::validate(); };
-    int launch( grid::vec3_tiled<float> & E, grid::vec3_tiled<float>& B, const float2 box );
+    int launch( grid::tiled_vec3<float> & E, grid::tiled_vec3<float>& B, const float2 box );
 
     // No need to set longitudinal field on plane wave
     int lon_x( grid::flat3<std::complex<float>> & fld, const float2 dk ) { return 0; }; 
@@ -125,7 +125,7 @@ class gaussian : public pulse {
     gaussian() : pulse(), W0(0), focus(0), axis(0) {};
 
     int validate();
-    int launch( grid::vec3_tiled<float> & E, grid::vec3_tiled<float> & B, float2 box );
+    int launch( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B, float2 box );
     int lon_x( grid::flat3<std::complex<float>> & fld, float2 dk );
 };
 
