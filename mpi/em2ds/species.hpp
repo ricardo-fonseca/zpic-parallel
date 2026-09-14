@@ -12,7 +12,7 @@
 #include "udist.hpp"
 
 namespace phasespace {
-    enum class quantity { x, y, ux, uy, uz };
+    enum class quantity { x = 0, y, ux, uy, uz };
 
     static inline void qinfo( quantity q, std::string & name, std::string & label, std::string & units ) {
         switch(q) {

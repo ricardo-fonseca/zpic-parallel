@@ -804,6 +804,11 @@ void test_weibel( )
         electrons.save_charge();
         positrons.save_charge();
 
+        electrons.save_phasespace(
+            phasespace::quantity::ux, float2{-2, 2}, 256,
+            phasespace::quantity::uy, float2{-2, 2}, 256
+        );
+
         sim.energy_info();
     };
 
