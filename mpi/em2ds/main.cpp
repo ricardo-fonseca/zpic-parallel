@@ -18,6 +18,7 @@
 #include "simd/simd.hpp"
 
 #include "grid/fft.hpp"
+#include "species.hpp"
 
 void test_tiled_grid( ) {
     
@@ -779,6 +780,7 @@ void test_weibel( )
             float3{ 0, 0, 0.6 }
         )
     );
+    electrons.push_type = species::pusher::euler;
 
     sim.add_species( electrons );
 
@@ -789,6 +791,7 @@ void test_weibel( )
             float3{ 0, 0, -0.6 }
         )
     );
+    positrons.push_type = species::pusher::euler;
 
     sim.add_species( positrons );
 

@@ -35,6 +35,34 @@ namespace edge {
 namespace zpic {
 
 /**
+ * @brief Print information about SIMD and OpenMP support
+ * 
+ */
+static inline void sys_info() {
+#ifdef SIMD
+    std::cout << "SIMD support enabled\n";
+    std::cout << "  vector unit : " << vecname << '\n';
+    std::cout << "  vector width: " << vecwidth <<'\n';
+#else
+    std::cout << "SIMD support not enabled\n";
+#endif
+
+#ifdef _OPENMP
+
+    std::cout << "OpenMP enabled\n";
+    std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
+    std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
+    #pragma omp parallel
+    {
+        if ( omp_get_thread_num() == 0 )
+            std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
+    }
+#else
+    std::cout << "OpenMP support not enabled\n";
+#endif
+}
+
+/**
  * @brief CFL time limit from cell size
  * 
  * @param dx        Cell size

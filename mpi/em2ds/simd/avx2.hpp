@@ -1,5 +1,4 @@
-#ifndef AVX2_H_
-#define AVX2_H_
+#pragma once
 
 #include <immintrin.h>
 
@@ -7,9 +6,8 @@
 #include <iomanip>
 
 /**
- * @brief Floating point (32 bit) SIMD types
+ * @brief x86 AVX2 SIMD vectors (256 bit)
  * 
- * @note For AVX this corresponds to the __m256 vector
  */
 
 /**
@@ -17,10 +15,10 @@
  * 
  * @tparam imm      Which value to extract
  * @param v         Input vector
- * @return float    Selected value
+ * @return float
  */
 template< int imm > 
-static inline float vec_extract( const __m256 v ) {
+inline float vec_extract( const __m256 v ) {
     static_assert( imm >= 0 && imm < 8, "imm must be in the range [0..7]" );
     
     // The compiler will (usually) optimize this and avoid the memory copy
@@ -29,7 +27,14 @@ static inline float vec_extract( const __m256 v ) {
     return buf[imm];
 }
 
-static inline float vec_extract( const __m256 v, int i ) {
+/**
+ * @brief Extract a single float from a _mm256 vector
+ * 
+ * @param v         Input vector
+ * @param i         Which value to extract
+ * @return float 
+ */
+inline float vec_extract( const __m256 v, int i ) {
     union {
         __m256 v;
         float s[8];
@@ -45,17 +50,17 @@ static inline float vec_extract( const __m256 v, int i ) {
  * @param v     Float vector value
  * @return std::ostream& 
  */
-static inline std::ostream& operator<<(std::ostream& os, const __m256 v) {
-    os << "[";
-    os <<         vec_extract<0>( v );
-    os << ", " << vec_extract<1>( v );
-    os << ", " << vec_extract<2>( v );
-    os << ", " << vec_extract<3>( v );
-    os << ", " << vec_extract<4>( v );
-    os << ", " << vec_extract<5>( v );
-    os << ", " << vec_extract<6>( v );
-    os << ", " << vec_extract<7>( v );
-    os << "]";
+inline std::ostream& operator<<(std::ostream& os, const __m256 v) {
+    os << "["
+       <<         vec_extract<0>( v )
+       << ", " << vec_extract<1>( v )
+       << ", " << vec_extract<2>( v )
+       << ", " << vec_extract<3>( v )
+       << ", " << vec_extract<4>( v )
+       << ", " << vec_extract<5>( v )
+       << ", " << vec_extract<6>( v )
+       << ", " << vec_extract<7>( v )
+       << "]";
 
     return os;
 }
@@ -65,7 +70,7 @@ static inline std::ostream& operator<<(std::ostream& os, const __m256 v) {
  * 
  * @return __m256 
  */
-static inline __m256 vec_zero_float() {
+inline __m256 vec_zero_float() {
     return _mm256_setzero_ps();
 }
 
@@ -75,7 +80,7 @@ static inline __m256 vec_zero_float() {
  * @param s 
  * @return __m256 
  */
-static inline __m256 vec_float( float s ) {
+inline __m256 vec_float( float s ) {
     return _mm256_set1_ps(s);
 }
 
@@ -85,7 +90,7 @@ static inline __m256 vec_float( float s ) {
  * @param vi 
  * @return __m256 
  */
-static inline __m256 vec_float( __m256i vi ) {
+inline __m256 vec_float( __m256i vi ) {
     return _mm256_cvtepi32_ps( vi );
 }
 
@@ -102,7 +107,7 @@ static inline __m256 vec_float( __m256i vi ) {
  * @param h 
  * @return __m256 
  */
-static inline __m256 vec_float( float a, float b, float c, float d, float e, float f, float g, float h ) {
+inline __m256 vec_float( float a, float b, float c, float d, float e, float f, float g, float h ) {
     return _mm256_setr_ps(a, b, c, d, e, f, g, h);
 }
 
@@ -114,7 +119,7 @@ static inline __m256 vec_float( float a, float b, float c, float d, float e, flo
  * @param mem_addr 
  * @return __m256 
  */
-static inline __m256 vec_load( const float * mem_addr) { 
+inline __m256 vec_load( const float * mem_addr) { 
     return _mm256_load_ps( mem_addr );
 }
 
@@ -126,11 +131,11 @@ static inline __m256 vec_load( const float * mem_addr) {
  * @param mem_addr 
  * @param a 
  */
-static inline __m256 vec_store( float * mem_addr, __m256 a ) {
+inline __m256 vec_store( float * mem_addr, __m256 a ) {
     _mm256_store_ps( mem_addr, a ); return a;
 }
 
-static inline __m256 vec_neg( __m256 a ) {
+inline __m256 vec_neg( __m256 a ) {
     return _mm256_sub_ps( _mm256_setzero_ps(), a );
 }
 
@@ -141,7 +146,7 @@ static inline __m256 vec_neg( __m256 a ) {
  * @param b 
  * @return __m256 
  */
-static inline __m256 vec_add( __m256 a, __m256 b ) {
+inline __m256 vec_add( __m256 a, __m256 b ) {
     return _mm256_add_ps(a,b);
 }
 
@@ -152,7 +157,7 @@ static inline __m256 vec_add( __m256 a, __m256 b ) {
  * @param b 
  * @return __m256 
  */
-static inline __m256 vec_add( __m256 a, float s ) { 
+inline __m256 vec_add( __m256 a, float s ) { 
     return _mm256_add_ps(a,_mm256_set1_ps(s));
 }
 
@@ -163,7 +168,7 @@ static inline __m256 vec_add( __m256 a, float s ) {
  * @param b 
  * @return __m256 
  */
-static inline __m256 vec_sub( __m256 a, __m256 b ) {
+inline __m256 vec_sub( __m256 a, __m256 b ) {
     return _mm256_sub_ps(a,b);
 }
 
@@ -174,7 +179,7 @@ static inline __m256 vec_sub( __m256 a, __m256 b ) {
  * @param b 
  * @return __m256 
  */
-static inline __m256 vec_mul( __m256 a, __m256 b ) { 
+inline __m256 vec_mul( __m256 a, __m256 b ) { 
     return _mm256_mul_ps(a,b);
 }
 
@@ -185,7 +190,7 @@ static inline __m256 vec_mul( __m256 a, __m256 b ) {
  * @param s 
  * @return __m256 
  */
-static inline __m256 vec_mul( __m256 a, float s ) {
+inline __m256 vec_mul( __m256 a, float s ) {
     return _mm256_mul_ps(a,_mm256_set1_ps(s));
 }
 
@@ -196,7 +201,7 @@ static inline __m256 vec_mul( __m256 a, float s ) {
  * @param b 
  * @return __m256 
  */
-static inline __m256 vec_div( __m256 a, __m256 b ) {
+inline __m256 vec_div( __m256 a, __m256 b ) {
     return _mm256_div_ps(a,b);
 }
 
@@ -205,9 +210,9 @@ static inline __m256 vec_div( __m256 a, __m256 b ) {
  * 
  * @param a 
  * @param b 
- * @return __m256i
+ * @return vec_mask32
  */
-static inline __m256i vec_eq( __m256 a, __m256 b ) { 
+inline vec_mask32 vec_eq( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_EQ_OQ) );
 }
 
@@ -218,7 +223,7 @@ static inline __m256i vec_eq( __m256 a, __m256 b ) {
  * @param b 
  * @return __m256i
  */
-static inline __m256i vec_ne( __m256 a, __m256 b ) { 
+inline vec_mask32 vec_ne( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_NEQ_OQ) );
 }
 
@@ -229,7 +234,7 @@ static inline __m256i vec_ne( __m256 a, __m256 b ) {
  * @param b 
  * @return __m256i
  */
-static inline __m256i vec_gt( __m256 a, __m256 b ) { 
+inline vec_mask32 vec_gt( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_GT_OQ) );
 }
 
@@ -240,7 +245,7 @@ static inline __m256i vec_gt( __m256 a, __m256 b ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-static inline __m256i vec_ge( __m256 a, __m256 b ) { 
+inline vec_mask32 vec_ge( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_GE_OQ) );
 }
 
@@ -252,7 +257,7 @@ static inline __m256i vec_ge( __m256 a, __m256 b ) {
  * @param v
  * @return      Result, for each element i, 0 if false and v[i] if true
  */
-static inline __m256 vec_ge( __m256 a, __m256 b, __m256 v ) { 
+inline __m256 vec_ge( __m256 a, __m256 b, __m256 v ) { 
     return _mm256_and_ps( _mm256_cmp_ps(a,b,_CMP_GE_OQ), v );
 }
 
@@ -264,7 +269,7 @@ static inline __m256 vec_ge( __m256 a, __m256 b, __m256 v ) {
  * @param vi 
  * @return      Result, for each element i, 0 if false and v[i] if true
  */
-static inline __m256i vec_ge( __m256 a, __m256 b, __m256i vi ) { 
+inline __m256i vec_ge( __m256 a, __m256 b, __m256i vi ) { 
     return _mm256_and_si256( _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_GE_OQ) ), vi );
 }
 
@@ -276,7 +281,7 @@ static inline __m256i vec_ge( __m256 a, __m256 b, __m256i vi ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-static inline __m256i vec_lt( __m256 a, __m256 b ) { 
+inline __m256i vec_lt( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_LT_OQ) );
 }
 
@@ -288,7 +293,7 @@ static inline __m256i vec_lt( __m256 a, __m256 b ) {
  * @param v     Result, for each element i, 0 if false and v[i] if true
  * @return __m256 
  */
-static inline __m256 vec_lt( __m256 a, __m256 b, __m256 v ) { 
+inline __m256 vec_lt( __m256 a, __m256 b, __m256 v ) { 
     return _mm256_and_ps( _mm256_cmp_ps(a,b,_CMP_LT_OQ), v );
 }
 
@@ -301,7 +306,7 @@ static inline __m256 vec_lt( __m256 a, __m256 b, __m256 v ) {
  * @return __m256 
  */
 
-static inline __m256i vec_lt( __m256 a, __m256 b, __m256i vi ) { 
+inline __m256i vec_lt( __m256 a, __m256 b, __m256i vi ) { 
     return _mm256_and_si256( _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_LT_OQ) ), vi );
 }
 
@@ -312,7 +317,7 @@ static inline __m256i vec_lt( __m256 a, __m256 b, __m256i vi ) {
  * @param b 
  * @return __m256 
  */
-static inline __m256i vec_le( __m256 a, __m256 b ) { 
+inline __m256i vec_le( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_LE_OQ) );
 }
 
@@ -324,7 +329,7 @@ static inline __m256i vec_le( __m256 a, __m256 b ) {
  * @param c 
  * @return __m256 
  */
-static inline __m256 vec_fmadd( __m256 a, __m256 b, __m256 c ) { 
+inline __m256 vec_fmadd( __m256 a, __m256 b, __m256 c ) { 
     return _mm256_fmadd_ps( a, b, c );
 }
 
@@ -336,7 +341,7 @@ static inline __m256 vec_fmadd( __m256 a, __m256 b, __m256 c ) {
  * @param c 
  * @return __m256 
  */
-static inline __m256 vec_fmsub( __m256 a, __m256 b, __m256 c ) { 
+inline __m256 vec_fmsub( __m256 a, __m256 b, __m256 c ) { 
     return _mm256_fmsub_ps( a, b, c );
 }
 
@@ -348,7 +353,7 @@ static inline __m256 vec_fmsub( __m256 a, __m256 b, __m256 c ) {
  * @param c 
  * @return __m256 
  */
-static inline __m256 vec_fnmadd( __m256 a, __m256 b, __m256 c ) {
+inline __m256 vec_fnmadd( __m256 a, __m256 b, __m256 c ) {
     return _mm256_fnmadd_ps( a, b, c );
 }
 
@@ -358,7 +363,7 @@ static inline __m256 vec_fnmadd( __m256 a, __m256 b, __m256 c ) {
  * @param a
  * @return __m256 
  */
-static inline __m256 vec_recp( const __m256 a )
+inline __m256 vec_recp( const __m256 a )
 {
     // Full calculation
     auto recp = _mm256_div_ps( _mm256_set1_ps( 1 ), a );
@@ -378,7 +383,7 @@ static inline __m256 vec_recp( const __m256 a )
  * @param a 
  * @return __m256 
  */
-static inline __m256 vec_rsqrt( const __m256 a ) {
+inline __m256 vec_rsqrt( const __m256 a ) {
 
     auto rsqrt = _mm256_div_ps( _mm256_set1_ps(1), _mm256_sqrt_ps(a) );
 
@@ -403,7 +408,7 @@ static inline __m256 vec_rsqrt( const __m256 a ) {
  * @param a 
  * @return __m256 
  */
-static inline __m256 vec_sqrt( const __m256 a ) {
+inline __m256 vec_sqrt( const __m256 a ) {
     return _mm256_sqrt_ps(a);
 }
 
@@ -413,7 +418,7 @@ static inline __m256 vec_sqrt( const __m256 a ) {
  * @param a 
  * @return __m256 
  */
-static inline __m256 vec_fabs( const __m256 a ) { 
+inline __m256 vec_fabs( const __m256 a ) { 
     const __m256i mask = _mm256_set1_epi32 (~(1<<31) );
     return _mm256_and_ps(a, _mm256_castsi256_ps(mask));
 }
@@ -426,7 +431,7 @@ static inline __m256 vec_fabs( const __m256 a ) {
  * @param mask  selection mask, 0 selects a vector element, -1 selects b vector element
  * @return __m256i 
  */
-static inline __m256 vec_select( const __m256 a, const __m256 b, const __m256i mask ) {
+inline __m256 vec_select( const __m256 a, const __m256 b, const __m256i mask ) {
     return _mm256_blendv_ps( a, b, _mm256_castsi256_ps(mask) );
 }
 
@@ -437,7 +442,7 @@ static inline __m256 vec_select( const __m256 a, const __m256 b, const __m256i m
  * @param a 
  * @return float 
  */
-static inline float vec_reduce_add( const __m256 a ) {
+inline float vec_reduce_add( const __m256 a ) {
    __m128 r = _mm_add_ps( _mm256_extractf128_ps(a, 1), _mm256_castps256_ps128(a));
    r = _mm_hadd_ps( r, r );
    r = _mm_hadd_ps( r, r );
@@ -451,7 +456,7 @@ static inline float vec_reduce_add( const __m256 a ) {
  * @param vindex 
  * @return __m256 
  */
-static inline __m256 vec_gather( float const * base_addr, __m256i vindex ) {
+inline __m256 vec_gather( float const * base_addr, __m256i vindex ) {
 
     // This has terrible performance
     //__m256 v = _mm256_i32gather_ps( base_addr, vindex, 4 );
@@ -479,6 +484,123 @@ static inline __m256 vec_gather( float const * base_addr, __m256i vindex ) {
 }
 
 /**
+ * @brief Cody-Waite reduction and core polynomial evaluation (internal)
+ *
+ * The argument is written as $ x = r + q \pi/2 $, with $ |r| \le \pi/4 $
+ * and q integer, using a 4 term split of $ \pi/2 $. $ \sin r $ and
+ * $ \cos r $ are then evaluated with Taylor series, both accurate to ~1 ulp
+ * on this interval, and the results swapped / sign flipped according to the
+ * quadrant.
+ *
+ * Note that for $ q = 0 $ the reduction is exact (r == x bitwise), so in
+ * that case `sinc_r` is $ \sin x / x $ and no division is required.
+ *
+ * @warning Valid for $ |x| < 2^{24} \pi / 2 \approx 2.6 \times 10^7 $, which
+ *          is the point where q can no longer be held exactly in a float. Above
+ *          this the reduction fails and the result is meaningless (not NaN, just
+ *          wrong); handling it would require a Payne-Hanek reduction
+ *
+ * @param x         (simd vector) Argument
+ * @param s         (simd vector, out) $ \sin x $
+ * @param c         (simd vector, out) $ \cos x $
+ * @param sinc_r    (simd vector, out) $ \sin r / r $, r being the reduced argument
+ * @param q         (simd vector, out) Quadrant index
+ */
+inline void __sin_cos_kernel( const __m256 x, __m256 & s, __m256 & c,
+                            __m256 & sinc_r, __m256i & q )
+{
+    const __m256 PIO2_A = _mm256_set1_ps( 1.5703125f                 );
+    const __m256 PIO2_B = _mm256_set1_ps( 4.8351287841796875e-04f    );
+    const __m256 PIO2_C = _mm256_set1_ps( 3.1385570764541626e-07f    );
+    const __m256 PIO2_D = _mm256_set1_ps( 6.0771006282767103811e-11f );
+ 
+    const __m256 qf = _mm256_round_ps(
+        _mm256_mul_ps( x, _mm256_set1_ps( 0.636619772367581343f ) ),
+        _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
+    q = _mm256_cvtps_epi32( qf );
+ 
+    __m256 r;
+    r = _mm256_fnmadd_ps( qf, PIO2_A, x );
+    r = _mm256_fnmadd_ps( qf, PIO2_B, r );
+    r = _mm256_fnmadd_ps( qf, PIO2_C, r );
+    r = _mm256_fnmadd_ps( qf, PIO2_D, r );
+ 
+    const __m256 r2 = _mm256_mul_ps( r, r );
+ 
+    __m256 sp = _mm256_set1_ps( 1.0f/362880 );
+    sp = _mm256_fmadd_ps( sp, r2, _mm256_set1_ps( -1.0f/5040 ) );
+    sp = _mm256_fmadd_ps( sp, r2, _mm256_set1_ps(  1.0f/120  ) );
+    sp = _mm256_fmadd_ps( sp, r2, _mm256_set1_ps( -1.0f/6    ) );
+    sp = _mm256_fmadd_ps( sp, r2, _mm256_set1_ps(  1.0f      ) );
+ 
+    __m256 cp = _mm256_set1_ps( -1.0f/3628800 );
+    cp = _mm256_fmadd_ps( cp, r2, _mm256_set1_ps(  1.0f/40320 ) );
+    cp = _mm256_fmadd_ps( cp, r2, _mm256_set1_ps( -1.0f/720   ) );
+    cp = _mm256_fmadd_ps( cp, r2, _mm256_set1_ps(  1.0f/24    ) );
+    cp = _mm256_fmadd_ps( cp, r2, _mm256_set1_ps( -1.0f/2     ) );
+    cp = _mm256_fmadd_ps( cp, r2, _mm256_set1_ps(  1.0f       ) );
+ 
+    const __m256 sin_r = _mm256_mul_ps( r, sp );
+    const __m256 cos_r = cp;
+ 
+    const __m256 swap = _mm256_castsi256_ps( _mm256_slli_epi32( q, 31 ) );
+    const __m256 sin_x = _mm256_blendv_ps( sin_r, cos_r, swap );
+    const __m256 cos_x = _mm256_blendv_ps( cos_r, sin_r, swap );
+ 
+    const __m256i sgn_s = _mm256_slli_epi32(
+        _mm256_and_si256( q, _mm256_set1_epi32(2) ), 30 );
+    const __m256i sgn_c = _mm256_slli_epi32(
+        _mm256_and_si256( _mm256_add_epi32( q, _mm256_set1_epi32(1) ),
+                          _mm256_set1_epi32(2) ), 30 );
+ 
+    s = _mm256_xor_ps( sin_x, _mm256_castsi256_ps( sgn_s ) );
+    c = _mm256_xor_ps( cos_x, _mm256_castsi256_ps( sgn_c ) );
+ 
+    sinc_r = sp;
+}
+
+/**
+ * @brief Simultaneous evaluation of $ \sin x $ and $ \cos x $
+ *
+ * Absolute error below $ 10^{-7} $ for both outputs, x of either sign. See
+ * `__sin_cos_kernel()` for the algorithm and the range limit.
+ *
+ * @param x     (simd vector) Argument
+ * @param s     (simd vector, out) $ \sin x $
+ * @param c     (simd vector, out) $ \cos x $
+ */
+inline void vec_sin_cos( const __m256 x, __m256 & s, __m256 & c )
+{
+    __m256  sinc_r;
+    __m256i q;
+    __sin_cos_kernel( x, s, c, sinc_r, q );
+}
+
+/**
+ * @brief Simultaneous evaluation of sinc(x) = sin(x)/x and cos(x)
+ *
+ * For $ |x| \le \pi/4 $ the argument needs no reduction (q == 0) and the
+ * core polynomial already is $ \sin x / x $, so it is used directly. This
+ * avoids two roundings (the multiply by r and the division), and since x == 0
+ * implies q == 0 it also removes the need to special case the origin, where the
+ * polynomial evaluates to exactly 1.
+ *
+ * @param x     (simd vector) Argument
+ * @param s     (simd vector, out) sin(x) / x
+ * @param c     (simd vector, out) cos(x)
+ */
+inline void vec_sinc_cos( const __m256 x, __m256 & s, __m256 & c )
+{
+    __m256  sin_x, sinc_r;
+    __m256i q;
+    __sin_cos_kernel( x, sin_x, c, sinc_r, q );
+ 
+    const __m256 unreduced = _mm256_castsi256_ps(
+        _mm256_cmpeq_epi32( q, _mm256_setzero_si256() ) );
+    s = _mm256_blendv_ps( _mm256_div_ps( sin_x, x ), sinc_r, unreduced );
+}
+
+/**
  * @brief Integer (32 bit) SIMD types
  * 
  * @note For AVX this corresponds to the __m256i vector
@@ -493,7 +615,7 @@ static inline __m256 vec_gather( float const * base_addr, __m256i vindex ) {
  */
 
 template< int imm > 
-static inline int vec_extract( const __m256i v ) {
+inline int vec_extract( const __m256i v ) {
     static_assert( imm >= 0 && imm < 8, "imm must be in the range [0..7]" );
     
     // The compiler will (usually) optimize this and avoid the memory copy
@@ -502,7 +624,7 @@ static inline int vec_extract( const __m256i v ) {
     return buf[imm];
 }
 
-static inline int vec_extract( const __m256i v, int i ) {
+inline int vec_extract( const __m256i v, int i ) {
     union {
         __m256i v;
         int32_t s[8];
@@ -518,7 +640,7 @@ static inline int vec_extract( const __m256i v, int i ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-static inline
+inline
 std::ostream& operator<<(std::ostream& os, const __m256i v) {
     os << "[";
     os <<         vec_extract<0>( v );
@@ -539,7 +661,7 @@ std::ostream& operator<<(std::ostream& os, const __m256i v) {
  * 
  * @return __m256i 
  */
-static inline __m256i vec_zero_int() {
+inline __m256i vec_zero_int() {
     return _mm256_setzero_si256();
 }
 
@@ -549,7 +671,7 @@ static inline __m256i vec_zero_int() {
  * @param a 
  * @return __m256i 
  */
-static inline __m256i vec_int( int s ) {
+inline __m256i vec_int( int s ) {
     return _mm256_set1_epi32(s);
 }
 
@@ -566,7 +688,7 @@ static inline __m256i vec_int( int s ) {
  * @param h 
  * @return __m256i 
  */
-static inline __m256i vec_int( int a, int b, int c, int d, int e, int f, int g, int h ){ 
+inline __m256i vec_int( int a, int b, int c, int d, int e, int f, int g, int h ){ 
     return _mm256_setr_epi32( a, b, c, d, e, f, g, h );
 }
 
@@ -578,7 +700,7 @@ static inline __m256i vec_int( int a, int b, int c, int d, int e, int f, int g, 
  * @param mem_addr 
  * @return __m256i 
  */
-static inline __m256i vec_load( const int * mem_addr) { 
+inline __m256i vec_load( const int * mem_addr) { 
     return _mm256_load_epi32( mem_addr );
 }
 
@@ -590,7 +712,7 @@ static inline __m256i vec_load( const int * mem_addr) {
  * @param mem_addr 
  * @param a 
  */
-static inline __m256i vec_store( int * mem_addr, __m256i a ) { 
+inline __m256i vec_store( int * mem_addr, __m256i a ) { 
     _mm256_store_epi32( mem_addr, a ); return a;
 }
 
@@ -601,7 +723,7 @@ static inline __m256i vec_store( int * mem_addr, __m256i a ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_add( __m256i a, __m256i b ) { 
+inline __m256i vec_add( __m256i a, __m256i b ) { 
     return _mm256_add_epi32(a,b);
 }
 
@@ -612,7 +734,7 @@ static inline __m256i vec_add( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_sub( __m256i a, __m256i b ) {
+inline __m256i vec_sub( __m256i a, __m256i b ) {
     return _mm256_sub_epi32(a,b);
 }
 
@@ -623,7 +745,7 @@ static inline __m256i vec_sub( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_add( __m256i a, int s ) { 
+inline __m256i vec_add( __m256i a, int s ) { 
     return _mm256_add_epi32(a, _mm256_set1_epi32(s) );
 }
 
@@ -634,7 +756,7 @@ static inline __m256i vec_add( __m256i a, int s ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_mul( __m256i a, __m256i b ) {
+inline __m256i vec_mul( __m256i a, __m256i b ) {
     return _mm256_mullo_epi32(a,b);
 }
 
@@ -645,7 +767,7 @@ static inline __m256i vec_mul( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_mul( __m256i a, int s ) { 
+inline __m256i vec_mul( __m256i a, int s ) { 
     return _mm256_mullo_epi32(a, _mm256_set1_epi32(s) );
 }
 
@@ -655,7 +777,7 @@ static inline __m256i vec_mul( __m256i a, int s ) {
  * @param a 
  * @return __m256i 
  */
-static inline __m256i vec_mul3( __m256i a ) {
+inline __m256i vec_mul3( __m256i a ) {
     return _mm256_add_epi32( _mm256_add_epi32( a, a ), a );
 }
 
@@ -666,7 +788,7 @@ static inline __m256i vec_mul3( __m256i a ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_eq( __m256i a, __m256i b ) { 
+inline __m256i vec_eq( __m256i a, __m256i b ) { 
     return _mm256_cmpeq_epi32( a, b );
 }
 
@@ -677,7 +799,7 @@ static inline __m256i vec_eq( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_ne( __m256i a, __m256i b ) { 
+inline __m256i vec_ne( __m256i a, __m256i b ) { 
     return ~ _mm256_cmpeq_epi32( a, b );
 }
 
@@ -688,7 +810,7 @@ static inline __m256i vec_ne( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_gt( __m256i a, __m256i b ) { 
+inline __m256i vec_gt( __m256i a, __m256i b ) { 
     return _mm256_cmpgt_epi32( a, b );
 }
 
@@ -699,7 +821,7 @@ static inline __m256i vec_gt( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_lt( __m256i a, __m256i b ) { 
+inline __m256i vec_lt( __m256i a, __m256i b ) { 
     return _mm256_cmpgt_epi32( b, a );
 }
 
@@ -709,7 +831,7 @@ static inline __m256i vec_lt( __m256i a, __m256i b ) {
  * @param a 
  * @return __m256i 
  */
-static inline __m256i vec_not( __m256i a ) {
+inline __m256i vec_not( __m256i a ) {
     return ~ a;
 }
 
@@ -720,7 +842,7 @@ static inline __m256i vec_not( __m256i a ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_or( __m256i a, __m256i b ) {
+inline __m256i vec_or( __m256i a, __m256i b ) {
     return _mm256_or_si256( a, b );
 }
 
@@ -731,7 +853,7 @@ static inline __m256i vec_or( __m256i a, __m256i b ) {
  * @param b 
  * @return __m256i 
  */
-static inline __m256i vec_and( __m256i a, __m256i b ) {
+inline __m256i vec_and( __m256i a, __m256i b ) {
     return _mm256_and_si256( a, b );
 }
 
@@ -741,7 +863,7 @@ static inline __m256i vec_and( __m256i a, __m256i b ) {
  * @param a 
  * @return __m256i 
  */
-static inline __m256i vec_abs( __m256i a ) {
+inline __m256i vec_abs( __m256i a ) {
     return _mm256_abs_epi32( a );
 }
 
@@ -753,7 +875,7 @@ static inline __m256i vec_abs( __m256i a ) {
  * @param mask  selection mask, 0 selects a vector element, -1 selects b vector element
  * @return __m256i 
  */
-static inline __m256i vec_select( const __m256i a, const __m256i b, const __m256i mask ) {
+inline __m256i vec_select( const __m256i a, const __m256i b, const __m256i mask ) {
     return _mm256_blendv_epi8( a, b, mask );
 }
 
@@ -763,7 +885,7 @@ static inline __m256i vec_select( const __m256i a, const __m256i b, const __m256
  * @param mask 
  * @return int 
  */
-static inline int vec_all( const __m256i mask ) {
+inline int vec_all( const __m256i mask ) {
     return _mm256_testc_si256( mask, _mm256_cmpeq_epi32( mask, mask ) );
 }
 
@@ -773,18 +895,18 @@ static inline int vec_all( const __m256i mask ) {
  * @param mask 
  * @return int 
  */
-static inline int vec_any( const __m256i mask ) {
+inline int vec_any( const __m256i mask ) {
     return ! _mm256_testz_si256( mask, mask );
 }
 
 
-static inline __m256i vec_true() { 
+inline __m256i vec_true() { 
     
     // __m256i a; return _mm256_cmpeq_epi32( a, a );
     return _mm256_set1_epi32(-1);
 }
 
-static inline __m256i vec_false() { 
+inline __m256i vec_false() { 
     return _mm256_setzero_si256();
 }
 
@@ -802,7 +924,7 @@ struct alignas(__m256) vfloat2 {
  * 
  * @return vfloat2 
  */
-static inline vfloat2 vfloat2_zero(  ) {
+inline vfloat2 vfloat2_zero(  ) {
     vfloat2 v{ _mm256_setzero_ps(), _mm256_setzero_ps() };
     return v;
 }
@@ -815,7 +937,7 @@ static inline vfloat2 vfloat2_zero(  ) {
  * @param addr 
  * @return vfloat2 
  */
-static inline vfloat2 vec_load_s2( const float * addr ) {
+inline vfloat2 vec_load_s2( const float * addr ) {
 
     __m256 m02, m13;
     m02 = _mm256_castps128_ps256(_mm_loadu_ps( & addr[0] ) );
@@ -839,7 +961,7 @@ static inline vfloat2 vec_load_s2( const float * addr ) {
  * @param addr 
  * @param v 
  */
-static inline void vec_store_s2( float * addr, const vfloat2 v ) {
+inline void vec_store_s2( float * addr, const vfloat2 v ) {
     __m256 r02, r13;
     r02 = _mm256_unpacklo_ps( v.x, v.y );
     r13 = _mm256_unpackhi_ps( v.x, v.y );
@@ -862,7 +984,7 @@ struct alignas(__m256) vfloat3 {
  * 
  * @return vfloat3 
  */
-static inline vfloat3 vfloat3_zero( ) {
+inline vfloat3 vfloat3_zero( ) {
     vfloat3 v{ _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps() };
     return v;
 }
@@ -875,7 +997,7 @@ static inline vfloat3 vfloat3_zero( ) {
  * @param addr 
  * @return vfloat3 
  */
-static inline vfloat3 vec_load_s3( const float * addr ) {
+inline vfloat3 vec_load_s3( const float * addr ) {
     __m256 m03, m14, m25;
     m03 = _mm256_castps128_ps256(   _mm_loadu_ps( & addr[ 0] ) );
     m14 = _mm256_castps128_ps256(   _mm_loadu_ps( & addr[ 4] ) );
@@ -903,7 +1025,7 @@ static inline vfloat3 vec_load_s3( const float * addr ) {
  * @param addr 
  * @param v 
  */
-static inline void vec_store_s3( float * addr, const vfloat3 v ) {
+inline void vec_store_s3( float * addr, const vfloat3 v ) {
     __m256 rxy = _mm256_shuffle_ps(v.x,v.y, _MM_SHUFFLE(2,0,2,0));
     __m256 ryz = _mm256_shuffle_ps(v.y,v.z, _MM_SHUFFLE(3,1,3,1));
     __m256 rzx = _mm256_shuffle_ps(v.z,v.x, _MM_SHUFFLE(3,1,2,0));
@@ -936,7 +1058,7 @@ struct alignas(__m256i) vint2 {
  * @param addr 
  * @return vint2 
  */
-static inline vint2 vec_load_s2( int * addr ) {
+inline vint2 vec_load_s2( int * addr ) {
 
     // AVX has no shuffle operation with 2 integer vectors so we treat data as floats
     // 
@@ -962,7 +1084,7 @@ static inline vint2 vec_load_s2( int * addr ) {
  * @param addr 
  * @param v 
  */
-static inline void vec_store_s2( int * addr, const vint2 v ) {
+inline void vec_store_s2( int * addr, const vint2 v ) {
     __m256i r02, r13;
     r02 = _mm256_unpacklo_epi32( v.x, v.y );
     r13 = _mm256_unpackhi_epi32( v.x, v.y );
@@ -972,7 +1094,12 @@ static inline void vec_store_s2( int * addr, const vint2 v ) {
     _mm_storeu_si128((__m128i *) & addr[12], _mm256_extracti128_si256( r13 ,1 ) ); 
 }
 
-static inline vint2 vint2_zero( ) {
+/**
+ * @brief Returns a vint2 with 0 components
+ * 
+ * @return vint2 
+ */
+inline vint2 vint2_zero( ) {
     vint2 v{ _mm256_setzero_si256(), _mm256_setzero_si256() };
     return v;
 }
@@ -985,51 +1112,3 @@ struct alignas(__m256i) vmask2 {
     __m256i x, y;
 };
 
-class Vec8Float {
-    union {
-        __m256 v;
-        float s[8];
-    } data;
-    public:
-    Vec8Float( const __m256 v ) { data.v = v; }
-    Vec8Float( const float s ) { data.v = _mm256_set1_ps(s); }
-    float extract( const int i ) { return data.s[ i ]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec8Float& obj) { 
-        os << obj.data.v;
-        return os;
-    }
-};
-
-class Vec8Int {
-    union {
-        __m256i v;
-        int s[8];
-    } data;
-    public:
-    Vec8Int( const __m256i v ) { data.v = v; }
-    Vec8Int( const int s ) { data.v = _mm256_set1_epi32(s); }
-    int extract( const int i ) const { return data.s[ i ]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec8Int& obj) { 
-        os << obj.data.v;
-        return os;
-    }
-};
-
-class Vec8Mask {
-    union {
-        __m256i v;
-        int s[8];
-    } data;
-    public:
-    Vec8Mask( const __m256i v ) { data.v = v; }
-    int extract( const unsigned i ) const { 
-        return data.s[ i ] ;
-    }
-    friend std::ostream& operator<<(std::ostream& os, const Vec8Mask& obj) { 
-        for( unsigned i = 0; i < 8; i ++) 
-            os << (( obj.extract(i) == 0 ) ? 0 : 1 );
-        return os;
-    }
-};
-
-#endif

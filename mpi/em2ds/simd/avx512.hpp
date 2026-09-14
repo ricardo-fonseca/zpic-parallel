@@ -1,12 +1,23 @@
-#ifndef AVX512_H_
-#define AVX512_H_
+#pragma once
 
 #include <immintrin.h>
 
 #include <iostream>
 #include <iomanip>
 
-static inline __m512 _mm512_set_m256( __m256 hi, __m256 lo ) {
+/**
+ * @brief 256 bit vector utilities
+ * 
+ */
+
+/**
+ * @brief Creates a __m512 vector from 2 __m256 vectors
+ * 
+ * @param hi        Hi part
+ * @param lo        Lo part
+ * @return __m512 
+ */
+inline __m512 _mm512_set_m256( __m256 hi, __m256 lo ) {
     // Using AVX512F _mm512_insertf64x4
     return _mm512_castpd_ps(_mm512_insertf64x4(_mm512_castps_pd(_mm512_castps256_ps512(lo)), _mm256_castps_pd(hi), 1));
 
@@ -14,14 +25,16 @@ static inline __m512 _mm512_set_m256( __m256 hi, __m256 lo ) {
     // return _mm512_insertf32x8( _mm512_castps256_ps512(lo), hi, 1 );
 }
 
-/**
- * @brief Floating point (32 bit) SIMD types
- * 
- * @note For AVX this corresponds to the __m512 vector
- */
 
+/**
+ * @brief Extract a single float from a _mm256 vector
+ * 
+ * @tparam imm      Which value to extract
+ * @param v         Input vector
+ * @return float    Selected value
+ */
 template< int imm > 
-static inline float vec_extract( const __m256 v ) {
+inline float vec_extract( const __m256 v ) {
     static_assert( imm >= 0 && imm < 8, "imm must be in the range [0..7]" );
     
     // The compiler will (usually) optimize this and avoid the memory copy
@@ -30,21 +43,32 @@ static inline float vec_extract( const __m256 v ) {
     return buf[imm];
 }
 
-static inline
-std::ostream& operator<<(std::ostream& os, const __m256 v) {
-    os << "[";
-    os <<         vec_extract< 0>( v );
-    os << ", " << vec_extract< 1>( v );
-    os << ", " << vec_extract< 2>( v );
-    os << ", " << vec_extract< 3>( v );
-    os << ", " << vec_extract< 4>( v );
-    os << ", " << vec_extract< 5>( v );
-    os << ", " << vec_extract< 6>( v );
-    os << ", " << vec_extract< 7>( v );
-    os << "]";
+/**
+ * @brief Writes the textual representation of __m256 vector to os
+ * 
+ * @param os    Output stream
+ * @param v     Float vector value
+ * @return std::ostream& 
+ */
+inline std::ostream& operator<<(std::ostream& os, const __m256 v) {
+    os << "["
+       <<         vec_extract<0>( v )
+       << ", " << vec_extract<1>( v )
+       << ", " << vec_extract<2>( v )
+       << ", " << vec_extract<3>( v )
+       << ", " << vec_extract<4>( v )
+       << ", " << vec_extract<5>( v )
+       << ", " << vec_extract<6>( v )
+       << ", " << vec_extract<7>( v )
+       << "]";
 
     return os;
 }
+
+/**
+ * @brief 512 bit floating-point vectors
+ * 
+ */
 
 /**
  * @brief Extract a single float from a _mm512 vector
@@ -54,7 +78,7 @@ std::ostream& operator<<(std::ostream& os, const __m256 v) {
  * @return float    Selected value
  */
 template< int imm > 
-static inline float vec_extract( const __m512 v ) {
+inline float vec_extract( const __m512 v ) {
     static_assert( imm >= 0 && imm < 16, "imm must be in the range [0..15]" );
     
     // The compiler will (usually) optimize this and avoid the memory copy
@@ -63,7 +87,14 @@ static inline float vec_extract( const __m512 v ) {
     return buf[imm];
 }
 
-static inline float vec_extract( const __m512 v, int i ) {
+/**
+ * @brief Extract a single float from a _mm512 vector
+ * 
+ * @param v         Input vector
+ * @param i         Which value to extract
+ * @return float 
+ */
+inline float vec_extract( const __m512 v, int i ) {
     union {
         __m512 v;
         float s[16];
@@ -77,32 +108,32 @@ static inline float vec_extract( const __m512 v, int i ) {
 }
 
 /**
- * @brief Writes the textual representation of vector v to os
+ * @brief Writes the textual representation of __m512 vector to os
  * 
  * @param os    Output stream
  * @param v     Float vector value
  * @return std::ostream& 
  */
-static inline
+inline
 std::ostream& operator<<(std::ostream& os, const __m512 v) {
-    os << "[";
-    os <<         vec_extract< 0>( v );
-    os << ", " << vec_extract< 1>( v );
-    os << ", " << vec_extract< 2>( v );
-    os << ", " << vec_extract< 3>( v );
-    os << ", " << vec_extract< 4>( v );
-    os << ", " << vec_extract< 5>( v );
-    os << ", " << vec_extract< 6>( v );
-    os << ", " << vec_extract< 7>( v );
-    os << ", " << vec_extract< 8>( v );
-    os << ", " << vec_extract< 9>( v );
-    os << ", " << vec_extract<10>( v );
-    os << ", " << vec_extract<11>( v );
-    os << ", " << vec_extract<12>( v );
-    os << ", " << vec_extract<13>( v );
-    os << ", " << vec_extract<14>( v );
-    os << ", " << vec_extract<15>( v );
-    os << "]";
+    os << "["
+       <<         vec_extract< 0>( v )
+       << ", " << vec_extract< 1>( v )
+       << ", " << vec_extract< 2>( v )
+       << ", " << vec_extract< 3>( v )
+       << ", " << vec_extract< 4>( v )
+       << ", " << vec_extract< 5>( v )
+       << ", " << vec_extract< 6>( v )
+       << ", " << vec_extract< 7>( v )
+       << ", " << vec_extract< 8>( v )
+       << ", " << vec_extract< 9>( v )
+       << ", " << vec_extract<10>( v )
+       << ", " << vec_extract<11>( v )
+       << ", " << vec_extract<12>( v )
+       << ", " << vec_extract<13>( v )
+       << ", " << vec_extract<14>( v )
+       << ", " << vec_extract<15>( v )
+       << "]";
 
     return os;
 }
@@ -112,7 +143,7 @@ std::ostream& operator<<(std::ostream& os, const __m512 v) {
  * 
  * @return __m512 
  */
-static inline __m512 vec_zero_float() {
+inline __m512 vec_zero_float() {
     return _mm512_setzero_ps();
 }
 
@@ -122,7 +153,7 @@ static inline __m512 vec_zero_float() {
  * @param s 
  * @return __m512 
  */
-static inline __m512 vec_float( float s ) {
+inline __m512 vec_float( float s ) {
     return _mm512_set1_ps(s);
 }
 
@@ -132,7 +163,7 @@ static inline __m512 vec_float( float s ) {
  * @param vi 
  * @return __m512 
  */
-static inline __m512 vec_float( __m512i vi ) {
+inline __m512 vec_float( __m512i vi ) {
     return _mm512_cvtepi32_ps( vi );
 }
 
@@ -149,7 +180,7 @@ static inline __m512 vec_float( __m512i vi ) {
  * @param h 
  * @return __m512 
  */
-static inline __m512 vec_float( 
+inline __m512 vec_float( 
     float e0, float e1, float e2, float e3, float e4, float e5, float e6, float e7,
     float e8, float e9, float e10, float e11, float e12, float e13, float e14, float e15 ) 
 {
@@ -164,7 +195,7 @@ static inline __m512 vec_float(
  * @param mem_addr 
  * @return __m512 
  */
-static inline __m512 vec_load( const float * mem_addr) { 
+inline __m512 vec_load( const float * mem_addr) { 
     return _mm512_load_ps( mem_addr );
 }
 
@@ -176,11 +207,11 @@ static inline __m512 vec_load( const float * mem_addr) {
  * @param mem_addr 
  * @param a 
  */
-static inline __m512 vec_store( float * mem_addr, __m512 a ) {
+inline __m512 vec_store( float * mem_addr, __m512 a ) {
     _mm512_store_ps( mem_addr, a ); return a;
 }
 
-static inline __m512 vec_neg( __m512 a ) {
+inline __m512 vec_neg( __m512 a ) {
     return _mm512_sub_ps( _mm512_setzero_ps(), a );
 }
 
@@ -191,7 +222,7 @@ static inline __m512 vec_neg( __m512 a ) {
  * @param b 
  * @return __m512 
  */
-static inline __m512 vec_add( __m512 a, __m512 b ) {
+inline __m512 vec_add( __m512 a, __m512 b ) {
     return _mm512_add_ps(a,b);
 }
 
@@ -202,7 +233,7 @@ static inline __m512 vec_add( __m512 a, __m512 b ) {
  * @param b 
  * @return __m512 
  */
-static inline __m512 vec_add( __m512 a, float s ) { 
+inline __m512 vec_add( __m512 a, float s ) { 
     return _mm512_add_ps(a,_mm512_set1_ps(s));
 }
 
@@ -213,7 +244,7 @@ static inline __m512 vec_add( __m512 a, float s ) {
  * @param b 
  * @return __m512 
  */
-static inline __m512 vec_sub( __m512 a, __m512 b ) {
+inline __m512 vec_sub( __m512 a, __m512 b ) {
     return _mm512_sub_ps(a,b);
 }
 
@@ -224,7 +255,7 @@ static inline __m512 vec_sub( __m512 a, __m512 b ) {
  * @param b 
  * @return __m512 
  */
-static inline __m512 vec_mul( __m512 a, __m512 b ) { 
+inline __m512 vec_mul( __m512 a, __m512 b ) { 
     return _mm512_mul_ps(a,b);
 }
 
@@ -235,7 +266,7 @@ static inline __m512 vec_mul( __m512 a, __m512 b ) {
  * @param s 
  * @return __m512 
  */
-static inline __m512 vec_mul( __m512 a, float s ) {
+inline __m512 vec_mul( __m512 a, float s ) {
     return _mm512_mul_ps(a,_mm512_set1_ps(s));
 }
 
@@ -246,7 +277,7 @@ static inline __m512 vec_mul( __m512 a, float s ) {
  * @param b 
  * @return __m512 
  */
-static inline __m512 vec_div( __m512 a, __m512 b ) {
+inline __m512 vec_div( __m512 a, __m512 b ) {
     return _mm512_div_ps(a,b);
 }
 
@@ -257,7 +288,7 @@ static inline __m512 vec_div( __m512 a, __m512 b ) {
  * @param b 
  * @return __mmask16
  */
-static inline __mmask16 vec_eq( __m512 a, __m512 b ) { 
+inline __mmask16 vec_eq( __m512 a, __m512 b ) { 
     return _mm512_cmp_ps_mask(a,b,_CMP_EQ_OQ);
 }
 
@@ -268,7 +299,7 @@ static inline __mmask16 vec_eq( __m512 a, __m512 b ) {
  * @param b 
  * @return __mmask16
  */
-static inline __mmask16 vec_ne( __m512 a, __m512 b ) { 
+inline __mmask16 vec_ne( __m512 a, __m512 b ) { 
     return _mm512_cmp_ps_mask(a,b,_CMP_NEQ_OQ);
 }
 
@@ -279,7 +310,7 @@ static inline __mmask16 vec_ne( __m512 a, __m512 b ) {
  * @param b 
  * @return __mmask16 
  */
-static inline __mmask16 vec_gt( __m512 a, __m512 b ) { 
+inline __mmask16 vec_gt( __m512 a, __m512 b ) { 
     return _mm512_cmp_ps_mask(a,b,_CMP_GT_OQ);
 }
 
@@ -290,7 +321,7 @@ static inline __mmask16 vec_gt( __m512 a, __m512 b ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-static inline __mmask16 vec_ge( __m512 a, __m512 b ) { 
+inline __mmask16 vec_ge( __m512 a, __m512 b ) { 
     return _mm512_cmp_ps_mask(a,b,_CMP_GE_OQ);
 }
 
@@ -302,7 +333,7 @@ static inline __mmask16 vec_ge( __m512 a, __m512 b ) {
  * @param v
  * @return      Result, for each element i, 0 if false and v[i] if true
  */
-static inline __m512 vec_ge( __m512 a, __m512 b, __m512 v ) { 
+inline __m512 vec_ge( __m512 a, __m512 b, __m512 v ) { 
     const __mmask16 mask = _mm512_cmp_ps_mask(a,b,_CMP_GE_OQ);
     __m512 res = _mm512_setzero_ps();
     return _mm512_mask_mov_ps( res, mask, v );
@@ -316,7 +347,7 @@ static inline __m512 vec_ge( __m512 a, __m512 b, __m512 v ) {
  * @param vi 
  * @return      Result, for each element i, 0 if false and v[i] if true
  */
-static inline __m512i vec_ge( __m512 a, __m512 b, __m512i vi ) {
+inline __m512i vec_ge( __m512 a, __m512 b, __m512i vi ) {
     const __mmask16 mask = _mm512_cmp_ps_mask(a,b,_CMP_GE_OQ);
     __m512i res = _mm512_setzero_epi32();
     return _mm512_mask_mov_epi32( res, mask, vi );
@@ -330,7 +361,7 @@ static inline __m512i vec_ge( __m512 a, __m512 b, __m512i vi ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-static inline __mmask16 vec_lt( __m512 a, __m512 b ) { 
+inline __mmask16 vec_lt( __m512 a, __m512 b ) { 
     return _mm512_cmp_ps_mask(a,b,_CMP_LT_OQ);
 }
 
@@ -342,7 +373,7 @@ static inline __mmask16 vec_lt( __m512 a, __m512 b ) {
  * @param v     Result, for each element i, 0 if false and v[i] if true
  * @return __m512 
  */
-static inline __m512 vec_lt( __m512 a, __m512 b, __m512 v ) { 
+inline __m512 vec_lt( __m512 a, __m512 b, __m512 v ) { 
     const __mmask16 mask = _mm512_cmp_ps_mask(a,b,_CMP_LT_OQ);
     __m512 res = _mm512_setzero_ps();
     return _mm512_mask_mov_ps( res, mask, v );
@@ -357,7 +388,7 @@ static inline __m512 vec_lt( __m512 a, __m512 b, __m512 v ) {
  * @return __m512 
  */
 
-static inline __m512i vec_lt( __m512 a, __m512 b, __m512i vi ) { 
+inline __m512i vec_lt( __m512 a, __m512 b, __m512i vi ) { 
     const __mmask16 mask = _mm512_cmp_ps_mask(a,b,_CMP_LT_OQ);
     __m512i res = _mm512_setzero_epi32();
     return _mm512_mask_mov_epi32( res, mask, vi );
@@ -370,7 +401,7 @@ static inline __m512i vec_lt( __m512 a, __m512 b, __m512i vi ) {
  * @param b 
  * @return __m512 
  */
-static inline __mmask16 vec_le( __m512 a, __m512 b ) { 
+inline __mmask16 vec_le( __m512 a, __m512 b ) { 
     return _mm512_cmp_ps_mask(a,b,_CMP_LE_OQ);
 }
 
@@ -382,7 +413,7 @@ static inline __mmask16 vec_le( __m512 a, __m512 b ) {
  * @param c 
  * @return __m512 
  */
-static inline __m512 vec_fmadd( __m512 a, __m512 b, __m512 c ) { 
+inline __m512 vec_fmadd( __m512 a, __m512 b, __m512 c ) { 
     return _mm512_fmadd_ps( a, b, c );
 }
 
@@ -394,7 +425,7 @@ static inline __m512 vec_fmadd( __m512 a, __m512 b, __m512 c ) {
  * @param c 
  * @return __m512 
  */
-static inline __m512 vec_fmsub( __m512 a, __m512 b, __m512 c ) { 
+inline __m512 vec_fmsub( __m512 a, __m512 b, __m512 c ) { 
     return _mm512_fmsub_ps( a, b, c );
 }
 
@@ -406,7 +437,7 @@ static inline __m512 vec_fmsub( __m512 a, __m512 b, __m512 c ) {
  * @param c 
  * @return __m512 
  */
-static inline __m512 vec_fnmadd( __m512 a, __m512 b, __m512 c ) {
+inline __m512 vec_fnmadd( __m512 a, __m512 b, __m512 c ) {
     return _mm512_fnmadd_ps( a, b, c );
 }
 
@@ -416,7 +447,7 @@ static inline __m512 vec_fnmadd( __m512 a, __m512 b, __m512 c ) {
  * @param a
  * @return __m512 
  */
-static inline __m512 vec_recp( const __m512 a )
+inline __m512 vec_recp( const __m512 a )
 {
     // Full calculation
     auto recp = _mm512_div_ps( _mm512_set1_ps( 1 ), a );
@@ -436,7 +467,7 @@ static inline __m512 vec_recp( const __m512 a )
  * @param a 
  * @return __m512 
  */
-static inline __m512 vec_rsqrt( const __m512 a ) {
+inline __m512 vec_rsqrt( const __m512 a ) {
 
     auto rsqrt = _mm512_div_ps( _mm512_set1_ps(1), _mm512_sqrt_ps(a) );
 
@@ -461,7 +492,7 @@ static inline __m512 vec_rsqrt( const __m512 a ) {
  * @param a 
  * @return __m512 
  */
-static inline __m512 vec_sqrt( const __m512 a ) {
+inline __m512 vec_sqrt( const __m512 a ) {
     return _mm512_sqrt_ps(a);
 }
 
@@ -471,7 +502,7 @@ static inline __m512 vec_sqrt( const __m512 a ) {
  * @param a 
  * @return __m512 
  */
-static inline __m512 vec_fabs( const __m512 a ) { 
+inline __m512 vec_fabs( const __m512 a ) { 
     return _mm512_abs_ps(a);
 }
 
@@ -483,7 +514,7 @@ static inline __m512 vec_fabs( const __m512 a ) {
  * @param mask  selection mask, bit value 0 selects a vector element, 1 selects b vector element
  * @return __m512i 
  */
-static inline __m512 vec_select( const __m512 a, const __m512 b, const __mmask16 mask ) {
+inline __m512 vec_select( const __m512 a, const __m512 b, const __mmask16 mask ) {
     return _mm512_mask_blend_ps( mask, a, b );
 }
 
@@ -494,7 +525,7 @@ static inline __m512 vec_select( const __m512 a, const __m512 b, const __mmask16
  * @param a 
  * @return float 
  */
-static inline float vec_reduce_add( const __m512 a ) {
+inline float vec_reduce_add( const __m512 a ) {
    
    return _mm512_reduce_add_ps( a );
 }
@@ -506,7 +537,7 @@ static inline float vec_reduce_add( const __m512 a ) {
  * @param vindex 
  * @return __m512 
  */
-static inline __m512 vec_gather( float const * __restrict__ base_addr, __m512i vindex ) {
+inline __m512 vec_gather( float const * __restrict__ base_addr, __m512i vindex ) {
 
 /*
     // This has terrible performance
@@ -690,6 +721,123 @@ static inline __m512 vec_gather( float const * __restrict__ base_addr, __m512i v
 }
 
 /**
+ * @brief Cody-Waite reduction and core polynomial evaluation (internal)
+ *
+ * The argument is written as $ x = r + q \pi/2 $, with $ |r| \le \pi/4 $
+ * and q integer, using a 4 term split of $ \pi/2 $. $ \sin r $ and
+ * $ \cos r $ are then evaluated with Taylor series, both accurate to ~1 ulp
+ * on this interval, and the results swapped / sign flipped according to the
+ * quadrant.
+ *
+ * Note that for $ q = 0 $ the reduction is exact (r == x bitwise), so in
+ * that case `sinc_r` is $ \sin x / x $ and no division is required.
+ *
+ * @warning Valid for $ |x| < 2^{24} \pi / 2 \approx 2.6 \times 10^7 $, which
+ *          is the point where q can no longer be held exactly in a float. Above
+ *          this the reduction fails and the result is meaningless (not NaN, just
+ *          wrong); handling it would require a Payne-Hanek reduction
+ *
+ * @param x         (simd vector) Argument
+ * @param s         (simd vector, out) $ \sin x $
+ * @param c         (simd vector, out) $ \cos x $
+ * @param sinc_r    (simd vector, out) $ \sin r / r $, r being the reduced argument
+ * @param q         (simd vector, out) Quadrant index
+ */
+inline void __sin_cos_kernel( const __m512 x, __m512 & s, __m512 & c,
+                            __m512 & sinc_r, __m512i & q )
+{
+    const __m512 PIO2_A = _mm512_set1_ps( 1.5703125f                 );
+    const __m512 PIO2_B = _mm512_set1_ps( 4.8351287841796875e-04f    );
+    const __m512 PIO2_C = _mm512_set1_ps( 3.1385570764541626e-07f    );
+    const __m512 PIO2_D = _mm512_set1_ps( 6.0771006282767103811e-11f );
+ 
+    const __m512 qf = _mm512_roundscale_ps(
+        _mm512_mul_ps( x, _mm512_set1_ps( 0.636619772367581343f ) ),
+        _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
+    q = _mm512_cvtps_epi32( qf );
+ 
+    __m512 r;
+    r = _mm512_fnmadd_ps( qf, PIO2_A, x );
+    r = _mm512_fnmadd_ps( qf, PIO2_B, r );
+    r = _mm512_fnmadd_ps( qf, PIO2_C, r );
+    r = _mm512_fnmadd_ps( qf, PIO2_D, r );
+ 
+    const __m512 r2 = _mm512_mul_ps( r, r );
+ 
+    __m512 sp = _mm512_set1_ps( 1.0f/362880 );
+    sp = _mm512_fmadd_ps( sp, r2, _mm512_set1_ps( -1.0f/5040 ) );
+    sp = _mm512_fmadd_ps( sp, r2, _mm512_set1_ps(  1.0f/120  ) );
+    sp = _mm512_fmadd_ps( sp, r2, _mm512_set1_ps( -1.0f/6    ) );
+    sp = _mm512_fmadd_ps( sp, r2, _mm512_set1_ps(  1.0f      ) );
+ 
+    __m512 cp = _mm512_set1_ps( -1.0f/3628800 );
+    cp = _mm512_fmadd_ps( cp, r2, _mm512_set1_ps(  1.0f/40320 ) );
+    cp = _mm512_fmadd_ps( cp, r2, _mm512_set1_ps( -1.0f/720   ) );
+    cp = _mm512_fmadd_ps( cp, r2, _mm512_set1_ps(  1.0f/24    ) );
+    cp = _mm512_fmadd_ps( cp, r2, _mm512_set1_ps( -1.0f/2     ) );
+    cp = _mm512_fmadd_ps( cp, r2, _mm512_set1_ps(  1.0f       ) );
+ 
+    const __m512 sin_r = _mm512_mul_ps( r, sp );
+    const __m512 cos_r = cp;
+ 
+    const __mmask16 swap = _mm512_test_epi32_mask( q, _mm512_set1_epi32(1) );
+    const __m512 sin_x = _mm512_mask_blend_ps( swap, sin_r, cos_r );
+    const __m512 cos_x = _mm512_mask_blend_ps( swap, cos_r, sin_r );
+ 
+    const __m512i sgn_s = _mm512_slli_epi32(
+        _mm512_and_epi32( q, _mm512_set1_epi32(2) ), 30 );
+    const __m512i sgn_c = _mm512_slli_epi32(
+        _mm512_and_epi32( _mm512_add_epi32( q, _mm512_set1_epi32(1) ),
+                          _mm512_set1_epi32(2) ), 30 );
+ 
+    s = _mm512_castsi512_ps( _mm512_xor_epi32( _mm512_castps_si512( sin_x ), sgn_s ) );
+    c = _mm512_castsi512_ps( _mm512_xor_epi32( _mm512_castps_si512( cos_x ), sgn_c ) );
+ 
+    sinc_r = sp;
+}
+
+/**
+ * @brief Simultaneous evaluation of $ \sin x $ and $ \cos x $
+ *
+ * Absolute error below $ 10^{-7} $ for both outputs, x of either sign. See
+ * `__sin_cos_kernel()` for the algorithm and the range limit.
+ *
+ * @param x     (simd vector) Argument
+ * @param s     (simd vector, out) $ \sin x $
+ * @param c     (simd vector, out) $ \cos x $
+ */
+inline void vec_sin_cos( const __m512 x, __m512 & s, __m512 & c )
+{
+    __m512  sinc_r;
+    __m512i q;
+    __sin_cos_kernel( x, s, c, sinc_r, q );
+}
+
+/**
+ * @brief Simultaneous evaluation of sinc(x) = sin(x)/x and cos(x)
+ *
+ * For $ |x| \le \pi/4 $ the argument needs no reduction (q == 0) and the
+ * core polynomial already is $ \sin x / x $, so it is used directly. This
+ * avoids two roundings (the multiply by r and the division), and since x == 0
+ * implies q == 0 it also removes the need to special case the origin, where the
+ * polynomial evaluates to exactly 1.
+ *
+ * @param x     (simd vector) Argument
+ * @param s     (simd vector, out) sin(x) / x
+ * @param c     (simd vector, out) cos(x)
+ */
+inline void vec_sinc_cos( const __m512 x, __m512 & s, __m512 & c )
+{
+    __m512  sin_x, sinc_r;
+    __m512i q;
+    __sin_cos_kernel( x, sin_x, c, sinc_r, q );
+ 
+    const __mmask16 unreduced = _mm512_cmpeq_epi32_mask( q, _mm512_setzero_si512() );
+    s = _mm512_mask_blend_ps( unreduced, _mm512_div_ps( sin_x, x ), sinc_r );
+}
+
+
+/**
  * @brief Integer (32 bit) SIMD types
  * 
  * @note For AVX this corresponds to the __m512i vector
@@ -704,7 +852,7 @@ static inline __m512 vec_gather( float const * __restrict__ base_addr, __m512i v
  */
 
 template< int imm > 
-static inline int vec_extract( const __m512i v ) {
+inline int vec_extract( const __m512i v ) {
     static_assert( imm >= 0 && imm < 16, "imm must be in the range [0..15]" );
     
     // The compiler will (usually) optimize this and avoid the memory copy
@@ -713,7 +861,7 @@ static inline int vec_extract( const __m512i v ) {
     return buf[imm];
 }
 
-static inline int vec_extract( const __m512i v, int i ) {
+inline int vec_extract( const __m512i v, int i ) {
     union {
         __m512i v;
         int32_t s[16];
@@ -732,7 +880,7 @@ static inline int vec_extract( const __m512i v, int i ) {
  * @param v     int vector value
  * @return std::ostream& 
  */
-static inline
+inline
 std::ostream& operator<<(std::ostream& os, const __m512i v) {
     os << "[";
     os <<         vec_extract< 0>( v );
@@ -761,7 +909,7 @@ std::ostream& operator<<(std::ostream& os, const __m512i v) {
  * 
  * @return __m512i 
  */
-static inline __m512i vec_zero_int() {
+inline __m512i vec_zero_int() {
     return _mm512_setzero_si512();
 }
 
@@ -771,7 +919,7 @@ static inline __m512i vec_zero_int() {
  * @param a 
  * @return __m512i 
  */
-static inline __m512i vec_int( int s ) {
+inline __m512i vec_int( int s ) {
     return _mm512_set1_epi32(s);
 }
 
@@ -788,7 +936,7 @@ static inline __m512i vec_int( int s ) {
  * @param h 
  * @return __m512i 
  */
-static inline __m512i vec_int( 
+inline __m512i vec_int( 
     int e0, int e1, int e2, int e3, int e4, int e5, int e6, int e7,
     int e8, int e9, int e10, int e11, int e12, int e13, int e14, int e15 ) 
 {
@@ -803,7 +951,7 @@ static inline __m512i vec_int(
  * @param mem_addr 
  * @return __m512i 
  */
-static inline __m512i vec_load( const int * mem_addr) { 
+inline __m512i vec_load( const int * mem_addr) { 
     return _mm512_load_epi32( mem_addr );
 }
 
@@ -815,7 +963,7 @@ static inline __m512i vec_load( const int * mem_addr) {
  * @param mem_addr 
  * @param a 
  */
-static inline __m512i vec_store( int * mem_addr, __m512i a ) { 
+inline __m512i vec_store( int * mem_addr, __m512i a ) { 
     _mm512_store_epi32( mem_addr, a ); return a;
 }
 
@@ -826,7 +974,7 @@ static inline __m512i vec_store( int * mem_addr, __m512i a ) {
  * @param b 
  * @return __m512i 
  */
-static inline __m512i vec_add( __m512i a, __m512i b ) { 
+inline __m512i vec_add( __m512i a, __m512i b ) { 
     return _mm512_add_epi32(a,b);
 }
 
@@ -837,7 +985,7 @@ static inline __m512i vec_add( __m512i a, __m512i b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __m512i vec_sub( __m512i a, __m512i b ) {
+inline __m512i vec_sub( __m512i a, __m512i b ) {
     return _mm512_sub_epi32(a,b);
 }
 
@@ -848,7 +996,7 @@ static inline __m512i vec_sub( __m512i a, __m512i b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __m512i vec_add( __m512i a, int s ) { 
+inline __m512i vec_add( __m512i a, int s ) { 
     return _mm512_add_epi32(a, _mm512_set1_epi32(s) );
 }
 
@@ -859,7 +1007,7 @@ static inline __m512i vec_add( __m512i a, int s ) {
  * @param b 
  * @return __m512i 
  */
-static inline __m512i vec_mul( __m512i a, __m512i b ) {
+inline __m512i vec_mul( __m512i a, __m512i b ) {
     return _mm512_mullo_epi32(a,b);
 }
 
@@ -870,7 +1018,7 @@ static inline __m512i vec_mul( __m512i a, __m512i b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __m512i vec_mul( __m512i a, int s ) { 
+inline __m512i vec_mul( __m512i a, int s ) { 
     return _mm512_mullo_epi32(a, _mm512_set1_epi32(s) );
 }
 
@@ -880,7 +1028,7 @@ static inline __m512i vec_mul( __m512i a, int s ) {
  * @param a 
  * @return __m512i 
  */
-static inline __m512i vec_mul3( __m512i a ) {
+inline __m512i vec_mul3( __m512i a ) {
     return _mm512_add_epi32( _mm512_add_epi32( a, a ), a );
 }
 
@@ -891,7 +1039,7 @@ static inline __m512i vec_mul3( __m512i a ) {
  * @param b 
  * @return __m512i 
  */
-static inline __mmask16 vec_eq( __m512i a, __m512i b ) { 
+inline __mmask16 vec_eq( __m512i a, __m512i b ) { 
     return _mm512_cmpeq_epi32_mask( a, b );
 }
 
@@ -902,7 +1050,7 @@ static inline __mmask16 vec_eq( __m512i a, __m512i b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __mmask16 vec_ne( __m512i a, __m512i b ) { 
+inline __mmask16 vec_ne( __m512i a, __m512i b ) { 
     return _mm512_cmpneq_epi32_mask( a, b );
 }
 
@@ -913,7 +1061,7 @@ static inline __mmask16 vec_ne( __m512i a, __m512i b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __mmask16 vec_gt( __m512i a, __m512i b ) { 
+inline __mmask16 vec_gt( __m512i a, __m512i b ) { 
     return _mm512_cmpgt_epi32_mask( a, b );
 }
 
@@ -924,7 +1072,7 @@ static inline __mmask16 vec_gt( __m512i a, __m512i b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __mmask16 vec_lt( __m512i a, __m512i b ) { 
+inline __mmask16 vec_lt( __m512i a, __m512i b ) { 
     return _mm512_cmplt_epi32_mask( b, a );
 }
 
@@ -934,7 +1082,7 @@ static inline __mmask16 vec_lt( __m512i a, __m512i b ) {
  * @param a 
  * @return __m512i 
  */
-static inline __m512i vec_abs( __m512i a ) {
+inline __m512i vec_abs( __m512i a ) {
     return _mm512_abs_epi32( a );
 }
 
@@ -946,7 +1094,7 @@ static inline __m512i vec_abs( __m512i a ) {
  * @param mask  selection mask, 0 selects a vector element, 1 selects b vector element
  * @return __m512i 
  */
-static inline __m512i vec_select( const __m512i a, const __m512i b, const __mmask16 mask ) {
+inline __m512i vec_select( const __m512i a, const __m512i b, const __mmask16 mask ) {
     return _mm512_mask_blend_epi32( mask, a, b );
 }
 
@@ -956,7 +1104,7 @@ static inline __m512i vec_select( const __m512i a, const __m512i b, const __mmas
  * @param a 
  * @return __mmask16 
  */
-static inline __mmask16 vec_not( __mmask16 a ) {
+inline __mmask16 vec_not( __mmask16 a ) {
     return _mm512_knot(a);
 }
 
@@ -967,7 +1115,7 @@ static inline __mmask16 vec_not( __mmask16 a ) {
  * @param b 
  * @return __m512i 
  */
-static inline __mmask16 vec_or( __mmask16 a, __mmask16 b ) {
+inline __mmask16 vec_or( __mmask16 a, __mmask16 b ) {
     return  _mm512_kor( a, b );
 }
 
@@ -978,7 +1126,7 @@ static inline __mmask16 vec_or( __mmask16 a, __mmask16 b ) {
  * @param b 
  * @return __m512i 
  */
-static inline __mmask16 vec_and( __mmask16 a, __mmask16 b ) {
+inline __mmask16 vec_and( __mmask16 a, __mmask16 b ) {
     return _mm512_kand( a, b );
 }
 
@@ -988,7 +1136,7 @@ static inline __mmask16 vec_and( __mmask16 a, __mmask16 b ) {
  * @param mask 
  * @return int 
  */
-static inline int vec_all( __mmask16 mask ) {
+inline int vec_all( __mmask16 mask ) {
     return mask == 0xFFFF;
 }
 
@@ -998,16 +1146,16 @@ static inline int vec_all( __mmask16 mask ) {
  * @param mask 
  * @return int 
  */
-static inline int vec_any( const __mmask16 mask ) {
+inline int vec_any( const __mmask16 mask ) {
     return mask != 0;
 }
 
 
-static inline __mmask16 vec_true() { 
+inline __mmask16 vec_true() { 
     return -1;
 }
 
-static inline __mmask16 vec_false() { 
+inline __mmask16 vec_false() { 
     return 0;
 }
 
@@ -1025,7 +1173,7 @@ struct alignas(__m512) vfloat2 {
  * 
  * @return vfloat2 
  */
-static inline vfloat2 vfloat2_zero(  ) {
+inline vfloat2 vfloat2_zero(  ) {
     vfloat2 v{ _mm512_setzero_ps(), _mm512_setzero_ps() };
     return v;
 }
@@ -1038,7 +1186,7 @@ static inline vfloat2 vfloat2_zero(  ) {
  * @param addr 
  * @return vfloat2 
  */
-static inline vfloat2 vec_load_s2( const float * addr ) {
+inline vfloat2 vec_load_s2( const float * addr ) {
 
     const __m512i perm = _mm512_set_epi32(15,13,11, 9, 7, 5, 3, 1,14,12,10, 8, 6, 4, 2, 0);
 
@@ -1061,7 +1209,7 @@ static inline vfloat2 vec_load_s2( const float * addr ) {
  * @param addr 
  * @param v 
  */
-static inline void vec_store_s2( float * addr, const vfloat2 v ) {
+inline void vec_store_s2( float * addr, const vfloat2 v ) {
 
     const __m512i perm0 =  _mm512_set_epi32(15, 7,14, 6,13, 5,12, 4,11, 3,10, 2, 9, 1, 8, 0);
     __m512i t0 = _mm512_permutexvar_epi32( perm0, _mm512_castps_si512(v.x) );
@@ -1084,7 +1232,7 @@ struct alignas(__m512) vfloat3 {
  * 
  * @return vfloat3 
  */
-static inline vfloat3 vfloat3_zero( ) {
+inline vfloat3 vfloat3_zero( ) {
     vfloat3 v{ _mm512_setzero_ps(), _mm512_setzero_ps(), _mm512_setzero_ps() };
     return v;
 }
@@ -1097,7 +1245,7 @@ static inline vfloat3 vfloat3_zero( ) {
  * @param addr 
  * @return vfloat3 
  */
-static inline vfloat3 vec_load_s3( const float * addr ) {
+inline vfloat3 vec_load_s3( const float * addr ) {
 
     const __m512i perm0 = _mm512_set_epi32(14,11,8,5,2,13,10,7,4,1,15,12,9,6,3,0);
     __m512i t0 = _mm512_permutexvar_epi32( perm0, _mm512_loadu_epi32(&addr[ 0]) );
@@ -1123,7 +1271,7 @@ static inline vfloat3 vec_load_s3( const float * addr ) {
  * @param addr 
  * @param v 
  */
-static inline void vec_store_s3( float * addr, const vfloat3 v ) {
+inline void vec_store_s3( float * addr, const vfloat3 v ) {
     const __m512i perm0 =  _mm512_set_epi32( 5,10,15, 4, 9,14, 3, 8,13, 2, 7,12, 1, 6,11, 0);
     __m512i vx = _mm512_permutexvar_epi32( perm0, _mm512_castps_si512( v.x ) );
     __m512i vy = _mm512_permutexvar_epi32( perm0, _mm512_castps_si512( v.y ) );
@@ -1154,7 +1302,7 @@ struct alignas(__m512i) vint2 {
  * @param addr 
  * @return vint2 
  */
-static inline vint2 vec_load_s2( int * addr ) {
+inline vint2 vec_load_s2( int * addr ) {
 
     const __m512i perm =  _mm512_set_epi32(15,13,11, 9, 7, 5, 3, 1,14,12,10, 8, 6, 4, 2, 0);
     __m512i t0 = _mm512_permutexvar_epi32( perm, _mm512_loadu_epi32(&addr[ 0]) );
@@ -1175,7 +1323,7 @@ static inline vint2 vec_load_s2( int * addr ) {
  * @param addr 
  * @param v 
  */
-static inline void vec_store_s2( int * addr, const vint2 v ) {
+inline void vec_store_s2( int * addr, const vint2 v ) {
 const __m512i perm0 =  _mm512_set_epi32(15, 7,14, 6,13, 5,12, 4,11, 3,10, 2, 9, 1, 8, 0);
   __m512i t0 = _mm512_permutexvar_epi32( perm0, v.x );
   __m512i t1 = _mm512_permutexvar_epi32( perm0, v.y );
@@ -1183,7 +1331,7 @@ const __m512i perm0 =  _mm512_set_epi32(15, 7,14, 6,13, 5,12, 4,11, 3,10, 2, 9, 
   _mm512_storeu_epi32( &addr[16], _mm512_mask_alignr_epi32( t1, 0x5555, t0, t0, 1 ) );
 }
 
-static inline vint2 vint2_zero( ) {
+inline vint2 vint2_zero( ) {
     vint2 v{ _mm512_setzero_si512(), _mm512_setzero_si512() };
     return v;
 }
@@ -1196,84 +1344,3 @@ struct alignas(__mmask16) vmask2 {
     __mmask16 x, y;
 };
 
-class Vec16Float {
-    union {
-        __m512 v;
-        float s[16];
-    } data;
-    public:
-    Vec16Float( const __m512 v ) { data.v = v; }
-    Vec16Float( const float s ) { data.v = _mm512_set1_ps(s); }
-    float extract( const int i ) { return data.s[ i ]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec16Float& obj) { 
-        os << obj.data.v;
-        return os;
-    }
-};
-
-class Vec16Int {
-    union {
-        __m512i v;
-        int s[16];
-    } data;
-    public:
-    Vec16Int( const __m512i v ) { data.v = v; }
-    Vec16Int( const int s ) { data.v = _mm512_set1_epi32(s); }
-    int extract( const int i ) { return data.s[ i ]; }
-    friend std::ostream& operator<<(std::ostream& os, const Vec16Int& obj) { 
-        os << obj.data.v;
-        return os;
-    }
-};
-
-
-/*
-
-// This is much slower than the above version
-
-class Vec16Float {
-    __m512 v;
-    public:
-    Vec16Float( const __m512 v ): v(v) {}
-    Vec16Float( const float s ): v(_mm512_set1_ps(s) ) {}
-    float extract( const int i ) { 
-        __mmask16 mask = (1 << i);
-        return _mm512_cvtss_f32( _mm512_maskz_compress_ps( mask, v ) );
-    }
-    friend std::ostream& operator<<(std::ostream& os, const Vec16Float& obj) { 
-        os << obj.v;
-        return os;
-    }
-};
-
-class Vec16Int {
-    __m512i v;
-    public:
-    Vec16Int( const __m512i v ): v(v) {}
-    Vec16Int( const int s ): v( _mm512_set1_epi32(s) ) {}
-    int extract( const int i ) { 
-        __mmask16 mask = (1 << i);
-        return _mm512_cvtsi512_si32( _mm512_maskz_compress_epi32( mask, v ) );
-    }
-    friend std::ostream& operator<<(std::ostream& os, const Vec16Int& obj) { 
-        os << obj.v;
-        return os;
-    }
-};
-*/
-
-class Vec16Mask {
-    __mmask16 mask;
-    public:
-    Vec16Mask( const __mmask16 v ) { mask = v; }
-    int extract( const unsigned i ) const { 
-        return mask & (1 << i);
-    }
-    friend std::ostream& operator<<(std::ostream& os, const Vec16Mask& obj) { 
-        for( unsigned i = 0; i < 16; i ++) 
-            os << (( obj.extract(i) == 0 ) ? 0 : 1);
-        return os;
-    }
-};
-
-#endif

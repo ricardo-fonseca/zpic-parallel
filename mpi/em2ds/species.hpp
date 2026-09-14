@@ -114,7 +114,7 @@ private:
      * @param size      Number of grid points
      */
     void dep_phasespace( float * const d_data, 
-        phasespace::quantity q, float2 const range, unsigned const size ) const;
+        const phasespace::quantity q, float2 range, const int size ) const;
 
     /**
      * @brief Deposit 2D phasespace density
@@ -128,8 +128,8 @@ private:
      * @param size1     axis 1 number of points
      */
     void dep_phasespace( float * const d_data,
-        phasespace::quantity quant0, float2 range0, unsigned const size0,
-        phasespace::quantity quant1, float2 range1, unsigned const size1 ) const;
+        const phasespace::quantity quant0, float2 range0, const int size0,
+        const phasespace::quantity quant1, float2 range1, const int size1 ) const;
 
 public:
 
@@ -152,6 +152,18 @@ public:
     species( std::string const name, float const m_q, uint2 const ppc );
 
     /**
+     * @brief Copy constructor
+     * 
+     */
+    species( const species & ) = delete;
+    
+    /**
+     * @brief Move constructor
+     * 
+     */
+    species( species && ) = delete;
+
+    /**
      * @brief Initialize data structures and inject initial particle distribution
      * 
      * @param box               Global simulation box size
@@ -168,7 +180,7 @@ public:
      * @brief Destroy the Species object
      * 
      */
-    ~species();
+    virtual ~species();
 
     /**
      * @brief Set the density profile object
@@ -178,6 +190,10 @@ public:
     virtual void set_density( density::profile const & new_density ) {
         delete density;
         density = new_density.clone();
+
+        // Recompute charge normalization factor in case initialize()
+        // has already been called
+        q = copysign( density->n0 , m_q ) / (ppc.x * ppc.y);
     }
 
     /**
@@ -230,6 +246,15 @@ public:
                             " When choosing periodic boundaries both lower and upper types"
                             " must be set to species::bc::periodic." );
             }
+        }
+
+        // Only periodic and open boundaries are currently implemented
+        if (( new_bc.x.lower == species::bc::reflecting ) ||
+            ( new_bc.x.upper == species::bc::reflecting ) ||
+            ( new_bc.y.lower == species::bc::reflecting ) ||
+            ( new_bc.y.upper == species::bc::reflecting ) ) {
+            
+            mpi::fatal( "Reflecting boundaries for species is not yet implemented");
         }
 
         // Store new values

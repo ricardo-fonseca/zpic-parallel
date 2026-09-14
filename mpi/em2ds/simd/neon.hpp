@@ -44,12 +44,12 @@ inline float vec_extract( const vec_f32 v, int i ) {
  * @return std::ostream& 
  */
 inline std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
-    os << "[";
-    os <<         vec_extract<0>( v );
-    os << ", " << vec_extract<1>( v );
-    os << ", " << vec_extract<2>( v );
-    os << ", " << vec_extract<3>( v );
-    os << "]";
+    os << "["
+       <<         vec_extract<0>( v )
+       << ", " << vec_extract<1>( v )
+       << ", " << vec_extract<2>( v )
+       << ", " << vec_extract<3>( v )
+       << "]";
 
     return os;
 }
@@ -455,9 +455,128 @@ inline vec_f32 vec_gather( float const * base_addr, vec_i32 vindex ) {
 }
 
 /**
+ * @brief Cody-Waite reduction and core polynomial evaluation (internal)
+ *
+ * The argument is written as $ x = r + q \pi/2 $, with $ |r| \le \pi/4 $
+ * and q integer, using a 4 term split of $ \pi/2 $. $ \sin r $ and
+ * $ \cos r $ are then evaluated with Taylor series, both accurate to ~1 ulp
+ * on this interval, and the results swapped / sign flipped according to the
+ * quadrant.
+ *
+ * Note that for $ q = 0 $ the reduction is exact (r == x bitwise), so in
+ * that case `sinc_r` is $ \sin x / x $ and no division is required.
+ *
+ * @warning Valid for $ |x| < 2^{24} \pi / 2 \approx 2.6 \times 10^7 $, which
+ *          is the point where q can no longer be held exactly in a float. Above
+ *          this the reduction fails and the result is meaningless (not NaN, just
+ *          wrong); handling it would require a Payne-Hanek reduction
+ *
+ * @param x         (simd vector) Argument
+ * @param s         (simd vector, out) $ \sin x $
+ * @param c         (simd vector, out) $ \cos x $
+ * @param sinc_r    (simd vector, out) $ \sin r / r $, r being the reduced argument
+ * @param q         (simd vector, out) Quadrant index
+ */
+inline void __sin_cos_kernel( const vec_f32 x, vec_f32 & s, vec_f32 & c,
+                            vec_f32 & sinc_r, vec_i32 & q )
+{
+    // Cody-Waite split of π/2. Every constant is exactly representable in
+    // single precision (trailing mantissa bits are 0) so that no significance
+    // is lost in the reduction below
+    const vec_f32 PIO2_A = vdupq_n_f32( 1.5703125f                 );
+    const vec_f32 PIO2_B = vdupq_n_f32( 4.8351287841796875e-04f    );
+    const vec_f32 PIO2_C = vdupq_n_f32( 3.1385570764541626e-07f    );
+    const vec_f32 PIO2_D = vdupq_n_f32( 6.0771006282767103811e-11f );
+ 
+    // Argument reduction, x = r + q π/2 with |r| ≤ π/4
+    const vec_f32 qf = vrndnq_f32( vmulq_n_f32( x, 0.636619772367581343f ) );
+    q = vcvtq_s32_f32( qf );
+ 
+    vec_f32 r;
+    r = vfmsq_f32( x, qf, PIO2_A );
+    r = vfmsq_f32( r, qf, PIO2_B );
+    r = vfmsq_f32( r, qf, PIO2_C );
+    r = vfmsq_f32( r, qf, PIO2_D );
+ 
+    const vec_f32 r2 = vmulq_f32( r, r );
+ 
+    // sin(r)/r , |r| ≤ π/4
+    vec_f32 sp = vdupq_n_f32( 1.0f/362880 );
+    sp = vfmaq_f32( vdupq_n_f32( -1.0f/5040 ), sp, r2 );
+    sp = vfmaq_f32( vdupq_n_f32(  1.0f/120  ), sp, r2 );
+    sp = vfmaq_f32( vdupq_n_f32( -1.0f/6    ), sp, r2 );
+    sp = vfmaq_f32( vdupq_n_f32(  1.0f      ), sp, r2 );
+ 
+    // cos(r) , |r| ≤ π/4
+    vec_f32 cp = vdupq_n_f32( -1.0f/3628800 );
+    cp = vfmaq_f32( vdupq_n_f32(  1.0f/40320 ), cp, r2 );
+    cp = vfmaq_f32( vdupq_n_f32( -1.0f/720   ), cp, r2 );
+    cp = vfmaq_f32( vdupq_n_f32(  1.0f/24    ), cp, r2 );
+    cp = vfmaq_f32( vdupq_n_f32( -1.0f/2     ), cp, r2 );
+    cp = vfmaq_f32( vdupq_n_f32(  1.0f       ), cp, r2 );
+ 
+    const vec_f32 sin_r = vmulq_f32( r, sp );
+    const vec_f32 cos_r = cp;
+ 
+    // Odd quadrants swap sin and cos
+    const uint32x4_t swap = vtstq_s32( q, vdupq_n_s32(1) );
+    const vec_f32 sin_x = vbslq_f32( swap, cos_r, sin_r );
+    const vec_f32 cos_x = vbslq_f32( swap, sin_r, cos_r );
+ 
+    // Quadrant sign: bit 1 of q (resp. q+1) moved onto the sign bit
+    const uint32x4_t sgn_s = vshlq_n_u32(
+        vandq_u32( vreinterpretq_u32_s32( q ), vdupq_n_u32(2) ), 30 );
+    const uint32x4_t sgn_c = vshlq_n_u32(
+        vandq_u32( vreinterpretq_u32_s32( vaddq_s32( q, vdupq_n_s32(1) ) ), vdupq_n_u32(2) ), 30 );
+ 
+    s = vreinterpretq_f32_u32( veorq_u32( vreinterpretq_u32_f32( sin_x ), sgn_s ) );
+    c = vreinterpretq_f32_u32( veorq_u32( vreinterpretq_u32_f32( cos_x ), sgn_c ) );
+ 
+    sinc_r = sp;
+}
+
+/**
+ * @brief Simultaneous evaluation of $ \sin x $ and $ \cos x $
+ *
+ * Absolute error below $ 10^{-7} $ for both outputs, x of either sign. See
+ * `__sin_cos_kernel()` for the algorithm and the range limit.
+ *
+ * @param x     (simd vector) Argument
+ * @param s     (simd vector, out) $ \sin x $
+ * @param c     (simd vector, out) $ \cos x $
+ */
+inline void vec_sin_cos( const vec_f32 x, vec_f32 & s, vec_f32 & c )
+{
+    vec_f32 sinc_r;
+    vec_i32 q;
+    __sin_cos_kernel( x, s, c, sinc_r, q );
+}
+
+/**
+ * @brief Simultaneous evaluation of sinc(x) = sin(x)/x and cos(x)
+ *
+ * For $ |x| \le \pi/4 $ the argument needs no reduction (q == 0) and the
+ * core polynomial already is $ \sin x / x $, so it is used directly. This
+ * avoids two roundings (the multiply by r and the division), and since x == 0
+ * implies q == 0 it also removes the need to special case the origin, where the
+ * polynomial evaluates to exactly 1.
+ *
+ * @param x     (simd vector) Argument
+ * @param s     (simd vector, out) sin(x) / x
+ * @param c     (simd vector, out) cos(x)
+ */
+inline void vec_sinc_cos( const vec_f32 x, vec_f32 & s, vec_f32 & c )
+{
+    vec_f32 sin_x, sinc_r;
+    vec_i32 q;
+    __sin_cos_kernel( x, sin_x, c, sinc_r, q );
+ 
+    s = vbslq_f32( vceqzq_s32( q ), sinc_r, vdivq_f32( sin_x, x ) );
+}
+
+/**
  * @brief Integer (32 bit) SIMD types
  * 
- * @note For AVX this corresponds to the vec_i32 vector
  */
 
 /**

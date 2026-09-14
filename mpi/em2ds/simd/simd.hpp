@@ -17,12 +17,10 @@
 
 constexpr char vecname[] = "x86_64 AVX2";
 constexpr int vecwidth = 8;
-typedef __m256 vfloat;
-typedef __m256i vint;
-typedef __m256i vmask;
-typedef Vec8Float VecFloat_s;
-typedef Vec8Int VecInt_s;
-typedef Vec8Mask VecMask_s;
+
+using vfloat = __m256;
+using vint   = __m256i;
+using vmask  = __m256i;
 
 // No initialization requrired
 inline int simd_init() {return 0;}
@@ -45,12 +43,10 @@ inline int simd_init() {return 0;}
 
 constexpr char vecname[] = "x86_64 AVX512f";
 constexpr int vecwidth = 16;
-typedef __m512 vfloat;
-typedef __m512i vint;
-typedef __mmask16 vmask;
-typedef Vec16Float VecFloat_s;
-typedef Vec16Int VecInt_s;
-typedef Vec16Mask VecMask_s;
+
+using vfloat = __m512;
+using vint   = __m512i;
+using vmask  = __mmask16;
 
 // No initialization requrired
 inline int simd_init() {return 0;}

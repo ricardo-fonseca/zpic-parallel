@@ -159,7 +159,7 @@ inline int finalize( ) {
     const std::source_location location =
           std::source_location::current()) {
     std::cerr << "(* fatal *) " << msg << '\n'
-              << "(* fatal * ) " << location.file_name() << ':' << location.line()
+              << "(* fatal *) " << location.file_name() << ':' << location.line()
               << " " << location.function_name() << '\n'
               << "(* fatal *) aborting..." << std::endl;
     MPI_Abort( MPI_COMM_WORLD, 1 );
