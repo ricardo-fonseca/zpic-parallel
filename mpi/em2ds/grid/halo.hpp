@@ -554,8 +554,8 @@ class halo{
 
             T * __restrict__ msg = msg_send.lower-> buffer;
 
-            for( int j = 0; j < local_ext_dims.y; j++ ) {
-                for( int i = 0; i < gc.x.lower; i++ ) {
+            for( int j = 0; j < static_cast<int>(local_ext_dims.y); j++ ) {
+                for( int i = 0; i < static_cast<int>(gc.x.lower); i++ ) {
                     msg[ j * gc.x.lower + i ] = d_buffer[ j * local_ext_dims.x + i ];
                 }
             }
@@ -806,14 +806,14 @@ class halo{
             std::vector<T> curr_row( local_dims.x );
 
             #pragma omp parallel for
-            for( int ix = 0; ix < local_dims.x; ix++ ) {
+            for( int ix = 0; ix < static_cast<int>(local_dims.x); ix++ ) {
                 prev_row[ix] = data[ -1 * ystride + ix ];
                 curr_row[ix] = data[  0 * ystride + ix ];
             }
 
-            for( int iy = 0; iy < local_dims.y; iy++ ) {
+            for( int iy = 0; iy < static_cast<int>(local_dims.y); iy++ ) {
                 #pragma omp parallel for
-                for( int ix = 0; ix < local_dims.x; ix++ ) {
+                for( int ix = 0; ix < static_cast<int>(local_dims.x); ix++ ) {
                     T next = data[ (iy+1) * ystride + ix ];
 
                     data[ iy * ystride + ix ] = prev_row[ix] * a + curr_row[ix] * b + next * c; 
@@ -919,8 +919,8 @@ class halo{
 
         // Gather data on contiguous grid
         #pragma omp parallel for
-        for( int iy = 0; iy < local_dims.y; iy++ ) {
-            for( int ix = 0; ix < local_dims.x; ix++ ) {
+        for( int iy = 0; iy < static_cast<int>(local_dims.y); iy++ ) {
+            for( int ix = 0; ix < static_cast<int>(local_dims.x); ix++ ) {
                 out[ iy * local_dims.x + ix ] = d_buffer[ offset + iy * local_ext_dims.x + ix ];
             }
         }

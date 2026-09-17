@@ -16,7 +16,7 @@ namespace grid {
 template < typename S > 
 class tiled_vec3 : public grid::tiled< vec3<S> >
 {
-    protected:
+    private:
 
     using V = vec3<S>;
 

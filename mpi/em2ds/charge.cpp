@@ -1,29 +1,29 @@
 #include "charge.hpp"
 
-#include <iostream>
-
 /**
- * @brief Physical boundary conditions for the x direction
+ * @brief Physical boundary conditions for the x direction 
  * 
- * @param tile      Tile position on grid
- * @param rho       Tile charge density & d_rho[ gc.y.lower * ystride ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_y    Tile index along y direction
+ * @param charge        View of tiled charge grid
+ * @param bc            Boundary condition
  */
-void charge_bcx( 
-    const uint2 tile_idx,
-    float * const __restrict__ rho,
-    uint2 const nx, uint2 const ext_nx,
+ void charge_bcx( 
+    int bnd_x, int tile_idx_y,
+    const grid::tiled_view<float> charge,
     const charge::bc_type bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = charge.tile_ystride();
 
-    if ( tile_idx.x == 0 ) {
+    if ( bnd_x == 0 ) {
         // Lower boundary
+        float * __restrict__ rho = & charge.tile_buffer
+            (0,tile_idx_y)      // lower x boundary tile
+            [ charge.gc.x.lower ];     // point to first x cell (ix = 0)
+
         switch( bc.x.lower ) {
         case( charge::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
+            for( unsigned idx = 0; idx < charge.tile_ext_dims.y; idx ++ ) {
                 // iy includes the y-stride
                 const int iy = idx * ystride;
 
@@ -36,13 +36,17 @@ void charge_bcx(
         }
     } else {
         // Upper boundary
+        float * __restrict__ rho = & charge.tile_buffer
+            (charge.local_ntiles.x-1,tile_idx_y)    // upper x boundary tile
+            [ charge.gc.x.lower + charge.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
+
         switch( bc.x.upper ) {
         case( charge::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
+            for( unsigned idx = 0; idx < charge.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
 
-                auto tmp =  rho[ nx.x-1 + iy ] + rho[ nx.x + 1 + iy ];
-                rho[ nx.x-1 + iy ] = rho[ nx.x + 1 + iy ] = tmp;
+                auto tmp =  rho[ -1 + iy ] + rho[ 1 + iy ];
+                rho[ -1 + iy ] = rho[ 1 + iy ] = tmp;
             }
             break;
         default:
@@ -52,27 +56,29 @@ void charge_bcx(
 }
 
 /**
- * @brief Physical boundary conditions for the y direction
+ * @brief Physical boundary conditions for the y direction 
  * 
- * @param tile      Tile position on grid
- * @param rho       Tile charge density & d_rho[ gc.y.lower * ystride ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_x    Tile index along x direction
+ * @param charge        View of tiled charge grid
+ * @param bc            Boundary condition
  */
 void charge_bcy( 
-    const uint2 tile_idx,
-    float * const __restrict__ rho,
-    uint2 const nx, uint2 const ext_nx,
+    int bnd_y, int tile_idx_x,
+    const grid::tiled_view<float> charge,
     const charge::bc_type bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = charge.tile_ystride();
     
-    if ( tile_idx.y == 0 ) {
+    if ( bnd_y == 0 ) {
         // Lower boundary
+        float * __restrict__ rho = & charge.tile_buffer
+            (tile_idx_x,0)              // lower y boundary tiles
+            [ charge.gc.y.lower * ystride ];   // point to first y cell (iy = 0)
+
         switch( bc.y.lower ) {
         case( charge::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
+            for( unsigned idx = 0; idx < charge.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
                 auto tmp =  rho[ ix - ystride ] + rho[ ix + ystride ];
@@ -84,13 +90,17 @@ void charge_bcy(
         }
     } else {
         // Upper boundary
+        float * __restrict__ rho = & charge.tile_buffer
+            (tile_idx_x,charge.local_ntiles.y-1)   // upper y boundary tiles
+            [ (charge.gc.y.lower + charge.tile_dims.y ) * ystride ];  // point to first upper gc (iy = tile_dims.y)
+
         switch( bc.y.upper ) {
         case( charge::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
+            for( unsigned idx = 0; idx < charge.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                auto tmp =  rho[ ix + (nx.y-1)*ystride ] + rho[ ix + (nx.y + 1)*ystride ];
-                rho[ ix + (nx.y-1)*ystride ] = rho[ ix + (nx.y + 1)*ystride ] = tmp;
+                auto tmp =  rho[ ix + (-1)*ystride ] + rho[ ix + (+1)*ystride ];
+                rho[ ix + (-1)*ystride ] = rho[ ix + (+1)*ystride ] = tmp;
             }
             break;
         default:
@@ -105,48 +115,23 @@ void charge_bcy(
  */
 void charge::process_bc() {
     const uint2 ntiles          = rho -> get_local_ntiles();
-    const uint2 tile_dims       = rho -> tile_dims;
-    const uint2 tile_ext_dims   = rho -> tile_ext_dims;
 
     // x boundaries
     if ( bc.x.lower > charge::bc::periodic || bc.x.upper > charge::bc::periodic ) {
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.x - 1 ) tiles have physical x boundaries
-
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx : { 0u, ntiles.x-1 } ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-
-                // Start at x cell 0
-                const auto x_offset = rho -> gc.x.lower;
-
-                float * const __restrict__ tile_rho = & rho->tile_buffer(tx,ty)[ x_offset ];
-
-                charge_bcx( tile_idx, tile_rho, tile_dims, tile_ext_dims, bc );
+            for( unsigned bnd_x : {0,1} ) {
+                charge_bcx( bnd_x, ty, rho -> view(), bc );
             }
         }
     }
 
     // y boundaries
     if ( bc.y.lower > charge::bc::periodic || bc.y.upper > charge::bc::periodic ) {
-
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.y - 1 ) tiles have physical y boundaries
-
         #pragma omp parallel for collapse(2)
-        for( unsigned ty : { 0u, ntiles.y-1 } ) {
+        for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-
-                // Start at y cell 0
-                const auto y_offset = rho -> gc.y.lower * tile_ext_dims.x;
-
-                float * const __restrict__ tile_rho = & rho->tile_buffer(tx,ty)[ y_offset ];
-
-                charge_bcy( tile_idx, tile_rho, tile_dims, tile_ext_dims, bc );
+                charge_bcy( bnd_y, tx, rho -> view(), bc );
             }
         }
     }
@@ -165,8 +150,7 @@ void charge::advance() {
     rho ->  add_from_gc( );
 
     // Do additional bc calculations if needed
-    // Currently disabled
-    // process_bc();
+    process_bc();
 
     // Add neutralizing background
     // This is preferable to initializing rho to this value before charge deposition

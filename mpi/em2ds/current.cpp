@@ -1,29 +1,29 @@
 #include "current.hpp"
 
-#include <iostream>
-
 /**
- * @brief Physical boundary conditions for the x direction
+ * @brief Physical boundary conditions for the x direction 
  * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.x.lower ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_y    Tile index along y direction
+ * @param current       View of tiled current grid
+ * @param bc            Boundary condition
  */
 void current_bcx(
-    const uint2 tile_idx,
-    float3 * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
+    int bnd_x, int tile_idx_y,
+    const grid::tiled_view<float3> current,
     const current::bc_type bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = current.tile_ystride();
 
-    if ( tile_idx.x == 0 ) {
+    if ( bnd_x == 0 ) {
         // Lower boundary
+        float3 * __restrict__ J = & current.tile_buffer
+            (0,tile_idx_y)      // lower x boundary tile
+            [ current.gc.x.lower ];     // point to first x cell (ix = 0)
+        
         switch( bc.x.lower ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.y; idx ++ ) {
                 // iy includes the y-stride
                 const int iy = idx * ystride;
 
@@ -41,18 +41,22 @@ void current_bcx(
         }
     } else {
         // Upper boundary
+        float3 * __restrict__ J = & current.tile_buffer
+            (current.local_ntiles.x-1,tile_idx_y)    // upper x boundary tile
+            [ current.gc.x.lower + current.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
+        
         switch( bc.x.upper ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
 
-                float jx0 =  J[ nx.x-1 + iy ].x - J[ nx.x + 0 + iy ].x; 
-                float jy1 =  J[ nx.x-1 + iy ].y + J[ nx.x + 1 + iy ].y;
-                float jz1 =  J[ nx.x-1 + iy ].z + J[ nx.x + 1 + iy ].z;
+                float jx0 =  J[ -1 + iy ].x - J[ + 0 + iy ].x; 
+                float jy1 =  J[ -1 + iy ].y + J[ + 1 + iy ].y;
+                float jz1 =  J[ -1 + iy ].z + J[ + 1 + iy ].z;
 
-                J[ nx.x-1 + iy ].x = J[ nx.x + 0 + iy ].x = jx0;
-                J[ nx.x-1 + iy ].y = J[ nx.x + 1 + iy ].y = jy1;
-                J[ nx.x-1 + iy ].z = J[ nx.x + 1 + iy ].z = jz1;
+                J[ -1 + iy ].x = J[ +0 + iy ].x = jx0;
+                J[ -1 + iy ].y = J[ +1 + iy ].y = jy1;
+                J[ -1 + iy ].z = J[ +1 + iy ].z = jz1;
             }
             break;
         default:
@@ -61,29 +65,30 @@ void current_bcx(
     }
 }
 
-
 /**
- * @brief Physical boundary conditions for the y direction
+ * @brief Physical boundary conditions for the y direction 
  * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.y.lower * ystride ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_x    Tile index along x direction
+ * @param current       View of tiled current grid
+ * @param bc            Boundary condition
  */
 void current_bcy( 
-    const uint2 tile_idx,
-    float3 * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
+    int bnd_y, int tile_idx_x,
+    const grid::tiled_view<float3> current,
     const current::bc_type bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = current.tile_ystride();
     
-    if ( tile_idx.y == 0 ) {
+    if ( bnd_y == 0 ) {
         // Lower boundary
+        float3 * __restrict__ J = & current.tile_buffer
+            (tile_idx_x,0)              // lower y boundary tiles
+            [ current.gc.y.lower * ystride ];   // point to first y cell (iy = 0)
+
         switch( bc.y.lower ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
                 float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
@@ -100,18 +105,22 @@ void current_bcy(
         }
     } else {
         // Upper boundary
+        float3 * __restrict__ J = & current.tile_buffer
+            (tile_idx_x,current.local_ntiles.y-1)   // upper y boundary tiles
+            [ (current.gc.y.lower + current.tile_dims.y ) * ystride ];  // point to first upper gc (iy = tile_dims.y)
+        
         switch( bc.y.upper ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                float jx1 =  J[ ix + (nx.y-1)*ystride ].x + J[ ix + (nx.y + 1)*ystride ].x; 
-                float jy0 =  J[ ix + (nx.y-1)*ystride ].y - J[ ix + (nx.y + 0)*ystride ].y;
-                float jz1 =  J[ ix + (nx.y-1)*ystride ].z + J[ ix + (nx.y + 1)*ystride ].z;
+                float jx1 =  J[ ix + (-1)*ystride ].x + J[ ix + (+ 1)*ystride ].x; 
+                float jy0 =  J[ ix + (-1)*ystride ].y - J[ ix + (+ 0)*ystride ].y;
+                float jz1 =  J[ ix + (-1)*ystride ].z + J[ ix + (+ 1)*ystride ].z;
 
-                J[ ix + (nx.y-1)*ystride ].x = J[ ix + (nx.y + 1)*ystride ].x = jx1;
-                J[ ix + (nx.y-1)*ystride ].y = J[ ix + (nx.y + 0)*ystride ].y = jy0;
-                J[ ix + (nx.y-1)*ystride ].z = J[ ix + (nx.y + 1)*ystride ].z = jz1;
+                J[ ix + (-1)*ystride ].x = J[ ix + (+1)*ystride ].x = jx1;
+                J[ ix + (-1)*ystride ].y = J[ ix + (+0)*ystride ].y = jy0;
+                J[ ix + (-1)*ystride ].z = J[ ix + (+1)*ystride ].z = jz1;
             }
             break;
         default:
@@ -127,53 +136,27 @@ void current_bcy(
 void current::process_bc() {
 
     const uint2 ntiles          = J -> get_local_ntiles();
-    const uint2 tile_dims       = J -> tile_dims;
-    const uint2 tile_ext_dims   = J -> tile_ext_dims;
 
     // x boundaries
     if ( bc.x.lower > current::bc::periodic || bc.x.upper > current::bc::periodic ) {
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.x - 1 ) tiles have physical x boundaries
-
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx : { 0u, ntiles.x-1 } ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-
-                // Start at x cell 0
-                const auto x_offset = J -> gc.x.lower;
-
-                float3 * const __restrict__ tile_J = & J->tile_buffer(tx,ty)[ x_offset ];
-
-                current_bcx( tile_idx, tile_J, tile_dims, tile_ext_dims, bc );
+            for( unsigned bnd_x : {0,1} ) {
+                current_bcx( bnd_x, ty, J -> view(), bc );
             }
         }
     }
 
     // y boundaries
     if ( bc.y.lower > current::bc::periodic || bc.y.upper > current::bc::periodic ) {
-
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.y - 1 ) tiles have physical y boundaries
-
-        #pragma omp parallel for collapse(2)
-        for( unsigned ty : { 0u, ntiles.y-1 } ) {
+       #pragma omp parallel for collapse(2)
+        for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-
-                // Start at y cell 0
-                const auto y_offset = J -> gc.y.lower * tile_ext_dims.x;
-
-                float3 * const __restrict__ tile_J = & J->tile_buffer(tx,ty)[ y_offset ];
-
-                current_bcy( tile_idx, tile_J, tile_dims, tile_ext_dims, bc );
+                current_bcy( bnd_y, tx, J -> view(), bc );
             }
         }
     }
 }
-
 
 /**
  * @brief Advance electric current to next iteration
@@ -187,8 +170,7 @@ void current::advance() {
     J -> add_from_gc( );
 
     // Do additional bc calculations if needed
-    // This is currently disabled
-    // Process_bc();
+    process_bc();
 
     // Calculate fJ
     fft_forward -> transform( *fJ, *J );

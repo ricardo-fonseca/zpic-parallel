@@ -310,17 +310,14 @@ void density::uniform::np_inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
-    const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
-
-    #pragma omp parallel for
-    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-        auto tx = tid % ntiles.x;
-        auto ty = tid / ntiles.x;
-        const auto tile_idx = make_uint2( tx, ty );
-        np_inject_uniform_kernel(
-            tile_idx, range, ppc,
-            part, np
-        );
+    #pragma omp parallel for collapse(2)
+    for( unsigned ty = 0; ty < part.local_ntiles.y; ty++ ) {
+        for( unsigned tx = 0; tx < part.local_ntiles.x; tx++ ) {
+            np_inject_uniform_kernel(
+                make_uint2( tx, ty ), range, ppc,
+                part, np
+            );
+        }
     }
 }
 
@@ -452,9 +449,8 @@ void density::step::inject( part::particles & part,
         #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 inject_step_kernel <coord::x> (
-                    tile_idx, range, step_pos, ppc, 
+                    make_uint2( tx, ty ), range, step_pos, ppc, 
                     part );
             }
         }
@@ -464,9 +460,8 @@ void density::step::inject( part::particles & part,
         #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.y; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 inject_step_kernel <coord::y> (
-                    tile_idx, range, step_pos, ppc,
+                    make_uint2( tx, ty ), range, step_pos, ppc,
                     part );
             }
         }
@@ -591,9 +586,8 @@ void density::step::np_inject( part::particles & part,
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 np_inject_step_kernel <coord::x> (
-                    tile_idx, range, step_pos, ppc,
+                    make_uint2( tx, ty ), range, step_pos, ppc,
                     part, np );
             }
         }
@@ -603,9 +597,8 @@ void density::step::np_inject( part::particles & part,
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.y; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 np_inject_step_kernel <coord::y> (
-                    tile_idx, range, step_pos, ppc,
+                    make_uint2( tx, ty ), range, step_pos, ppc,
                     part, np );
             }
         }
@@ -750,9 +743,8 @@ void density::slab::inject( part::particles & part,
         #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 inject_slab_kernel < coord::x > (
-                    tile_idx, range, slab_begin, slab_end, ppc,
+                    make_uint2( tx, ty ), range, slab_begin, slab_end, ppc,
                     part );
             }
         }
@@ -763,9 +755,8 @@ void density::slab::inject( part::particles & part,
         #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 inject_slab_kernel < coord::y > (
-                    tile_idx, range, slab_begin, slab_end, ppc,
+                    make_uint2( tx, ty ), range, slab_begin, slab_end, ppc,
                     part );
             }
         }
@@ -900,9 +891,8 @@ void density::slab::np_inject( part::particles & part,
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 np_inject_slab_kernel < coord::x > (
-                    tile_idx,
+                    make_uint2( tx, ty ),
                     range, slab_begin, slab_end, ppc,
                     part, np );
             }
@@ -914,9 +904,8 @@ void density::slab::np_inject( part::particles & part,
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
             for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
-                const auto tile_idx = make_uint2( tx, ty );
                 np_inject_slab_kernel < coord::y > (
-                    tile_idx, range, slab_begin, slab_end, ppc,
+                    make_uint2( tx, ty ), range, slab_begin, slab_end, ppc,
                     part, np );
             }
         }
@@ -1045,9 +1034,8 @@ void density::sphere::inject( part::particles & part,
     #pragma omp parallel for collapse(2) schedule(dynamic)
     for( unsigned ty = 0; ty < part.local_ntiles.y; ty++ ) {
         for( unsigned tx = 0; tx < part.local_ntiles.x; tx++ ) {
-            const auto tile_idx = make_uint2( tx, ty );
             inject_sphere_kernel (
-                tile_idx, range, sphere_center, radius, dx, ppc,
+                make_uint2( tx, ty ), range, sphere_center, radius, dx, ppc,
                 part );
         }
     }
@@ -1158,9 +1146,8 @@ void density::sphere::np_inject( part::particles & part,
     #pragma omp parallel for collapse(2)
     for( unsigned ty = 0; ty < part.local_ntiles.y; ty++ ) {
         for( unsigned tx = 0; tx < part.local_ntiles.x; tx++ ) {
-            const auto tile_idx =  make_uint2( tx, ty );
             np_inject_sphere_kernel (
-                tile_idx,
+                make_uint2( tx, ty ),
                 range, sphere_center, radius, dx, ppc,
                 part, np );
         }

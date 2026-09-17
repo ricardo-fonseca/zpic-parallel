@@ -311,7 +311,7 @@ class flat3{
 
         size_t const size = buffer_size( );
         #pragma omp parallel for
-        for( int i = 0; i < size; i++ ) {
+        for( size_t i = 0; i < size; i++ ) {
             x_buffer[i] += rhs.x_buffer[i];
             y_buffer[i] += rhs.y_buffer[i];
             z_buffer[i] += rhs.z_buffer[i];

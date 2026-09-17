@@ -2,6 +2,7 @@
 
 #include "zpic.hpp"
 #include "vec_types.hpp"
+#include "utils.hpp"
 
 #include <mpi.h>
 #include <iostream>

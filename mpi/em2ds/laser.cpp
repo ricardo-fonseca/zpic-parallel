@@ -310,8 +310,8 @@ int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
             const int ix0 = (tile_start.x + tx) * tile_dims.x;
             const int iy0 = (tile_start.y + ty) * tile_dims.y;
 
-            for( int iy = 0; iy < tile_dims.y; iy++ ) {
-                for( int ix = 0; ix < tile_dims.x; ix++ ) {
+            for( int iy = 0; iy < static_cast<int>(tile_dims.y); iy++ ) {
+                for( int ix = 0; ix < static_cast<int>(tile_dims.x); ix++ ) {
                     const float z = ( ix0 + ix ) * dx.x;
                     const float r = ( iy0 + iy ) * dx.y - axis;
 

@@ -207,8 +207,8 @@ void test_halo( ) {
 
     auto stridey = data.get_local_ext_dims().x;
     auto * __restrict__ buffer = & data.data()[ data.get_offset() ];
-    for( int iy = 0; iy < local_dims.y; iy++ ) {
-        for( int ix = 0; ix < local_dims.x; ix++ ) {
+    for( int iy = 0; iy < static_cast<int>(local_dims.y); iy++ ) {
+        for( int ix = 0; ix < static_cast<int>(local_dims.x); ix++ ) {
             buffer[ iy * stridey + ix ] = (local_start.y + iy ) + (local_start.x + ix );
         }
     }
@@ -276,8 +276,8 @@ void test_flat( ) {
 
     auto stridey = data.get_local_dims().x;
     auto * __restrict__ buffer = & data.data()[ 0 ];
-    for( int iy = 0; iy < local_dims.y; iy++ ) {
-        for( int ix = 0; ix < local_dims.x; ix++ ) {
+    for( int iy = 0; iy < static_cast<int>(local_dims.y); iy++ ) {
+        for( int ix = 0; ix < static_cast<int>(local_dims.x); ix++ ) {
             buffer[ iy * stridey + ix ] = (local_start.y + iy ) + (local_start.x + ix );
         }
     }
@@ -333,8 +333,8 @@ void test_fft_tile( ) {
             unsigned int ix0 = ( tile_start.x + tx ) * tile_dims.x;
             unsigned int iy0 = ( tile_start.y + ty ) * tile_dims.y;
             
-            for( int iy = 0; iy < tile_dims.y; iy++ ) {
-                for( int ix = 0; ix < tile_dims.x; ix++ ) {
+            for( int iy = 0; iy < static_cast<int>(tile_dims.y); iy++ ) {
+                for( int ix = 0; ix < static_cast<int>(tile_dims.x); ix++ ) {
                     float x = ( ix0 + ix - 512.0f ) / 512.f;
                     float y = ( iy0 + iy - 256.0f ) / 256.f;
                     tile_data[ iy * stridey + ix ] = std::exp( - (x*x)/0.001 - (y*y)/0.006 );
@@ -390,8 +390,8 @@ void set_charge( grid::tiled<float> & charge, const float2 dx, const float2 cent
             unsigned int ix0 = ( tile_start.x + tx ) * tile_dims.x;
             unsigned int iy0 = ( tile_start.y + ty ) * tile_dims.y;
             
-            for( int iy = 0; iy < tile_dims.y; iy++ ) {
-                for( int ix = 0; ix < tile_dims.x; ix++ ) {
+            for( int iy = 0; iy < static_cast<int>(tile_dims.y); iy++ ) {
+                for( int ix = 0; ix < static_cast<int>(tile_dims.x); ix++ ) {
                     float x = ( ix0 + ix ) * dx.x;
                     float y = ( iy0 + iy ) * dx.y;
                     tile_data[ iy * stridey + ix ] = (x-center.x)*(x-center.x) + (y-center.y) * (y-center.y) <= r*r;

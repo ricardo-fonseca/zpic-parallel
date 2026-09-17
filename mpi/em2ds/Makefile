@@ -65,7 +65,7 @@ CXXFLAGS += -DUSE_NEON
 CFLAGS += -Wall -std=c11
 
 # c++20 compliance and full warnings (except for VLA extension)
-CXXFLAGS += -Wall -std=c++20 -Wno-unknown-pragmas 
+CXXFLAGS += -Wall -std=c++20 -Wno-unknown-pragmas -Wsign-compare
 
 # Disable VLA extension warnings (clang compilers)
 # CXXFLAGS += -Wno-vla-cxx-extension

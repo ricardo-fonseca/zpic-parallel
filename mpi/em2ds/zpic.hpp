@@ -1,6 +1,11 @@
 #pragma once
 
-#include "utils.hpp"
+#include <cmath>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "vec_types.hpp"
 
 /**
@@ -18,17 +23,6 @@ namespace coord {
 namespace edge {
     enum pos { lower = 0, upper };
 }
-
-/**
- * C++ 20 mathematical constants
- * 
- * std::numbers::e
- * std::numbers::pi
- * etc.
- */
-
-#include <numbers>
-#include <cmath>
 
 namespace zpic {
 

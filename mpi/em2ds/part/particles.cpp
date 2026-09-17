@@ -463,7 +463,7 @@ uint32_t update_tile_info(
     for( int dir = 0; dir < 9; dir++ ) {
         const int start = part::edge_tile_start( dir, nt );
 
-        for( unsigned k = 0; k < part::edge_ntiles( dir, nt); k++ ) {
+        for( int k = 0; k < part::edge_ntiles( dir, nt); k++ ) {
             offset[ part::local_edge_tid( dir, k, nt ) ] += recv_buffer[ start + k ];
         }
     }
@@ -756,7 +756,7 @@ void copy_sorted(
             float3 * __restrict__ u   = &data.u[ old_offset ];
 
             int * __restrict__ idx    = &sort.idx[ old_offset ];
-            uint32_t const nidx       = sort.nidx[ tid ];
+            int const nidx       = sort.nidx[ tid ];
             
             int _dir_offset[9];
 
@@ -1227,7 +1227,7 @@ void part::particles::unpack_msg( particle_sort &sort, particle_message &recv ) 
         ///@brief number of particles unpacked from this message
         int np_unpack = 0;
 
-        for( unsigned k = 0; k < part::edge_ntiles(dir, nt); k++ ) {
+        for( int k = 0; k < part::edge_ntiles(dir, nt); k++ ) {
             
             ///@brief number of particles received on this tile 
             const int recv_np  =  msg_tile_np[ start + k ];

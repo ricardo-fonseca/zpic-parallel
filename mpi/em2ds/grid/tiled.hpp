@@ -1,16 +1,147 @@
 #pragma once
 
-#include "../utils.hpp"
-#include "../bounds.hpp"
-#include "../vec_types.hpp"
-#include "../parallel.hpp"
-
-#include "../zdf/zdf.hpp"
-
 #include <iostream>
+#include <cassert>
+#include <algorithm>
+#include <string>
+#include <cstddef>
 
+#include "../vec_types.hpp"
+#include "../bounds.hpp"
+#include "../parallel.hpp"
+#include "../zdf/zdf.hpp"
+#include "../utils.hpp"
 
 namespace grid {
+
+template <class T>
+struct tiled_view {
+
+    /// @brief Local number of tiles
+    const uint2 local_ntiles;
+
+    /// @brief Data buffer
+    T * d_buffer;
+
+    /// @brief Tile grid dimensions
+    const uint2 tile_dims;
+    
+    /// @brief Tile grid dimensions including guard cells
+    const uint2 tile_ext_dims;
+
+    /// @brief Offset, in cells, from the start of a tile's data buffer to its local (0,0) point
+    const unsigned int inner_offset;
+
+    /// @brief Tile guard cells
+    const bounds_2d<unsigned int> gc;
+
+    /// @brief Tile volume (may be larger than tile_ext_dim.x * tile_ext_dim.y for alignment)
+    const std::size_t tile_vol;
+
+    /**
+     * @brief Buffer size
+     * 
+     * @return total size of data buffers (in elements)
+     */
+    inline std::size_t buffer_size() const noexcept {
+        return tile_vol * static_cast<std::size_t>(local_ntiles.x) * local_ntiles.y;
+    };
+
+    /**
+     * @brief Get a pointer to the start of a specific tile's data buffer
+     * 
+     * @note This points at the first guard cell of the tile (if any), not at
+     *       the tile's local (0,0) point. Use tile_data() for a pointer to
+     *       the local (0,0) point instead.
+     * 
+     * @param tid   Tile index (flat)
+     * @return T* 
+     */
+    inline T * tile_buffer( const unsigned int tid ) const noexcept {
+        return & d_buffer[ tid * tile_vol ];
+    }
+
+    /**
+     * @brief Get a pointer to the start of a specific tile's data buffer
+     * 
+     * @note This points at the first guard cell of the tile (if any), not at
+     *       the tile's local (0,0) point. Use tile_data() for a pointer to
+     *       the local (0,0) point instead.
+     * 
+     * @param tx    x tile index
+     * @param ty    y tile index
+     * @return T* 
+     */
+    inline T * tile_buffer( const unsigned int tx, const unsigned int ty ) const noexcept {
+        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol ];
+    }
+
+    /**
+     * @brief Get a pointer to the start of a specific tile's data buffer
+     * 
+     * @note This points at the first guard cell of the tile (if any), not at
+     *       the tile's local (0,0) point. Use tile_data() for a pointer to
+     *       the local (0,0) point instead.
+     * 
+     * @param tid   Tile index (x,y)
+     * @return T* 
+     */
+    inline  T * tile_buffer( const uint2 tid ) const noexcept {
+        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol ];
+    }
+
+    /**
+     * @brief Get a pointer to a specific tile's local (0,0) point
+     * 
+     * @note This skips past the tile's guard cells (if any). Use
+     *       tile_buffer() for a pointer to the start of the tile's data
+     *       buffer instead.
+     * 
+     * @param tid   Tile index (flat)
+     * @return T* 
+     */
+    inline T * tile_data( const unsigned int tid ) const noexcept {
+        return & d_buffer[ tid * tile_vol + inner_offset ];
+    }
+
+    /**
+     * @brief Get a pointer to a specific tile's local (0,0) point
+     * 
+     * @note This skips past the tile's guard cells (if any). Use
+     *       tile_buffer() for a pointer to the start of the tile's data
+     *       buffer instead.
+     * 
+     * @param tx    x tile index
+     * @param ty    y tile index
+     * @return T* 
+     */
+    inline T * tile_data( const unsigned int tx, const unsigned int ty ) const noexcept {
+        return & d_buffer[ (ty * local_ntiles.x + tx) * tile_vol + inner_offset ];
+    }
+
+    /**
+     * @brief Get a pointer to a specific tile's local (0,0) point
+     * 
+     * @note This skips past the tile's guard cells (if any). Use
+     *       tile_buffer() for a pointer to the start of the tile's data
+     *       buffer instead.
+     * 
+     * @param tid   Tile index (x,y)
+     * @return T* 
+     */
+    inline T * tile_data( const uint2 tid ) const noexcept {
+        return & d_buffer[ (tid.y * local_ntiles.x + tid.x) * tile_vol + inner_offset ];
+    }
+
+    /**
+     * @brief Y stride in each tile (same as tile_ext_dims.x)
+     * 
+     * @return unsigned int 
+     */
+    inline unsigned int tile_ystride() const noexcept {
+        return tile_ext_dims.x;
+    }
+};
 
 /**
  * @brief Tiled grid class with MPI support
@@ -20,8 +151,8 @@ template <class T>
 class tiled {
     protected:
 
-    // Tags are paired so that a message sent with dest::lower is received
-    // with source::upper (both have value 0). This ensures MPI tag matching
+    // Tags are paired so that a message sent with dest::lower is received with
+    // source::upper (both have the same value). This ensures MPI tag matching
     // between sender and receiver without extra bookkeeping.
 
     /// @brief tags for outgoing messages
@@ -105,6 +236,12 @@ class tiled {
         if ( tile_dims.x == 0 || tile_dims.y == 0 ) {
             mpi::fatal( "Invalid tile dimensions: " + to_string(tile_dims) );
         }
+
+        if ( gc.x.lower > tile_dims.x || gc.x.upper > tile_dims.x )
+            mpi::fatal( "Number of x guard cells exceeds tile size along x" );
+
+        if ( gc.y.lower > tile_dims.y || gc.y.upper > tile_dims.y )
+            mpi::fatal( "Number of y guard cells exceeds tile size along y" );
 
         // Parallel partition
         if ( part.dims.x > global_ntiles.x ) {
@@ -253,10 +390,46 @@ class tiled {
     tiled(const tiled&) = delete;
 
     /**
-     * @brief Delete default copy constructor
+     * @brief Delete default copy assignment
      * 
      */
     tiled& operator=(const tiled&) = delete;
+
+    /**
+     * @brief Returns a view of the tiled grid
+     * 
+     * @return tiled_view<T> 
+     */
+    tiled_view<T> view() noexcept {
+        return { 
+            local_ntiles, 
+            d_buffer, 
+            tile_dims,
+            tile_ext_dims, 
+            inner_offset, 
+            gc,
+            tile_vol };
+    }
+
+    /**
+     * @brief Returns a read-only view of the tiled grid
+     * 
+     * @note const qualified so that a const tiled grid can still hand a view
+     *       to a read-only kernel. view() stays non-const: handing out a
+     *       mutable view is a mutating operation on the grid.
+     * 
+     * @return tiled_view<const T> 
+     */
+    tiled_view<const T> cview() const noexcept {
+        return { 
+            local_ntiles, 
+            d_buffer, 
+            tile_dims,
+            tile_ext_dims, 
+            inner_offset, 
+            gc,
+            tile_vol };
+    }
 
     /**
      * @brief Get a pointer to the data buffer
@@ -415,11 +588,9 @@ class tiled {
     /**
      * @brief zero device data on a grid grid
      * 
-     * @return int       Returns 0 on success, -1 on error
      */
-    int zero() {
+    void zero() {
         memory::zero( d_buffer, buffer_size() );
-        return 0;
     };
 
     /**
@@ -438,10 +609,12 @@ class tiled {
      * @param rhs         Other object to add
      */
     void add( const tiled &rhs ) {
-        size_t const size = buffer_size( );
+        // Check that the objects are compatible
+        assert(( local_ntiles == rhs.get_local_ntiles() && tile_vol == rhs.tile_vol ));
 
         #pragma omp parallel for
-        for( size_t i = 0; i < size; i++ ) d_buffer[i] += rhs.d_buffer[i];
+        for( size_t i = 0; i < buffer_size(); i++ ) 
+            d_buffer[i] += rhs.d_buffer[i];
     };
 
     /**
@@ -476,6 +649,9 @@ class tiled {
         if ( stride.x == 0 ) {
             stride = make_uint2( 1, local_dims.x );
         }
+
+        // Check that y stride is valid
+        assert(( stride.y > 0 ));
 
         if ( stride.x == 1 ) {
             // Optimized version for x stride == 1
@@ -664,9 +840,19 @@ class tiled {
         return local_dims.x * local_dims.y;
     }
 
+    protected:
+
+    // The local_* guard cell routines below only handle tile-to-tile copies
+    // inside this node. Used on their own in a multi-node run they leave the
+    // guard cells on the node boundary stale, with no diagnostic. They are
+    // implementation details of copy_to_gc_x() / copy_to_gc_y(); external
+    // callers should use those instead.
+
     /**
      * @brief Copies edge values to X neighboring guard cells
      * 
+     * @note Node local operation, does not exchange data with other parallel
+     *       nodes. Use copy_to_gc_x() instead.
      */
     void local_copy_to_gc_x() {
 
@@ -674,7 +860,7 @@ class tiled {
 
         // Loop over tiles
         #pragma omp parallel for
-        for( unsigned tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid ++ ) {
 
             const auto tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
             
@@ -713,13 +899,15 @@ class tiled {
     /**
      * @brief Copies edge values to Y neighboring guard cells
      * 
+     * @note Node local operation, does not exchange data with other parallel
+     *       nodes. Use copy_to_gc_y() instead.
      */
     void local_copy_to_gc_y() {
 
         const auto ystride  = tile_ext_dims.x;
 
         #pragma omp parallel for
-        for( unsigned tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid ++ ) {
 
             const int2 tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
             T * __restrict__ local = tile_buffer( tid );
@@ -730,8 +918,8 @@ class tiled {
 
                 if ( neighbor_ty >= 0 ) {
                     auto * __restrict__ y_lower = tile_buffer( tile_idx.x, neighbor_ty );
-                    for( int j = 0; j < gc.y.lower; j++ ) {
-                        for( int i = 0; i < tile_ext_dims.x; i++ ) {
+                    for( int j = 0; j < static_cast<int>(gc.y.lower); j++ ) {
+                        for( int i = 0; i < static_cast<int>(tile_ext_dims.x); i++ ) {
                             local[ i + j * ystride ] = y_lower[ i + ( tile_dims.y + j ) * ystride ];
                         }
                     }
@@ -743,9 +931,9 @@ class tiled {
                 if ( local_periodic.y && neighbor_ty >= static_cast<int>(local_ntiles.y) ) neighbor_ty -= local_ntiles.y;
 
                 if ( neighbor_ty < static_cast<int>(local_ntiles.y) ) {
-                    auto * __restrict__ y_upper = tile_data( tile_idx.x, neighbor_ty );
-                    for( int j = 0; j < gc.y.upper; j++ ) {
-                        for( int i = 0; i < tile_ext_dims.x; i++ ) {
+                    auto * __restrict__ y_upper = tile_buffer( tile_idx.x, neighbor_ty );
+                    for( int j = 0; j < static_cast<int>(gc.y.upper); j++ ) {
+                        for( int i = 0; i < static_cast<int>(tile_ext_dims.x); i++ ) {
                             local[ i + ( gc.y.lower + tile_dims.y + j ) * ystride ] = y_upper[ i + ( gc.y.lower + j ) * ystride ];
                         }
                     }
@@ -754,10 +942,13 @@ class tiled {
         }
     }
 
+    public:
+
     /**
      * @brief Copies x values to neighboring guard cells, including cells on 
      *        other parallel nodes
      * 
+     * @warning Collective operation, must be called by all parallel nodes.
      */
     void copy_to_gc_x() {
 
@@ -854,6 +1045,7 @@ class tiled {
      * @brief Copies y values to neighboring guard cells, including cells on 
      *        other parallel nodes
      * 
+     * @warning Collective operation, must be called by all parallel nodes.
      */
     void copy_to_gc_y() {
 
@@ -948,6 +1140,7 @@ class tiled {
      * @brief Copies edge values to neighboring guard cells, including other
      *        parallel nodes
      * 
+     * @warning Collective operation, must be called by all parallel nodes.
      */
     void copy_to_gc()  {
 
@@ -959,9 +1152,19 @@ class tiled {
 
     };
 
+    protected:
+
+    // As above for the local_* routines. add_from_gc_x() / add_from_gc_y()
+    // are also kept internal: a partial guard cell reduction along a single
+    // direction leaves the tile corners unaccounted for, so callers should
+    // use add_from_gc(), which performs both directions in the required
+    // order. Promote them if a caller genuinely needs a single direction.
+
     /**
      * @brief Adds values from neighboring x guard cells to local data
      * 
+     * @note Node local operation, does not exchange data with other parallel
+     *       nodes. Use add_from_gc() instead.
      */
     void local_add_from_gc_x() {
         // Add along x direction
@@ -970,7 +1173,7 @@ class tiled {
 
         // Loop over tiles
         #pragma omp parallel for
-        for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid ++ ) {
 
             const auto tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
 
@@ -996,8 +1199,8 @@ class tiled {
 
                 if ( neighbor_tx < static_cast<int>(local_ntiles.x) ) {
                     T * __restrict__ x_upper = tile_buffer( neighbor_tx, tile_idx.y );
-                    for( int j = 0; j < tile_ext_dims.y; j++ ) {
-                        for( int i = 0; i < gc.x.lower; i++ ) {
+                    for( int j = 0; j < static_cast<int>(tile_ext_dims.y); j++ ) {
+                        for( int i = 0; i <static_cast<int>(gc.x.lower); i++ ) {
                             local[ tile_dims.x + i + j * ystride ] += x_upper[ i + j * ystride ];
                         }
                     }
@@ -1009,6 +1212,8 @@ class tiled {
     /**
      * @brief Adds values from neighboring y guard cells to local data
      * 
+     * @note Node local operation, does not exchange data with other parallel
+     *       nodes. Use add_from_gc() instead.
      */
     void local_add_from_gc_y(){
 
@@ -1018,7 +1223,7 @@ class tiled {
 
         // Loop over tiles
         #pragma omp parallel for
-        for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid ++ ) {
 
             const int2 tile_idx = make_int2( tid % local_ntiles.x, tid / local_ntiles.x );
             T * __restrict__ local = tile_buffer( tid );
@@ -1030,8 +1235,8 @@ class tiled {
 
                 if ( neighbor_ty >= 0 ) {
                     T * __restrict__ y_lower = tile_buffer( tile_idx.x, neighbor_ty );
-                    for( int j = 0; j < gc.y.upper; j++ ) {
-                        for( int i = 0; i < tile_ext_dims.x; i++ ) {
+                    for( int j = 0; j < static_cast<int>(gc.y.upper); j++ ) {
+                        for( int i = 0; i < static_cast<int>(tile_ext_dims.x); i++ ) {
                             local[ i + ( gc.y.lower + j ) * ystride ] += 
                                 y_lower[ i + ( gc.y.lower + tile_dims.y + j ) * ystride ];
                         }
@@ -1059,6 +1264,8 @@ class tiled {
     /**
      * @brief Adds values from neighboring x guard cells to local data,
      *        including cells from other parallel nodes
+     * 
+     * @warning Collective operation, must be called by all parallel nodes.
      */
     void add_from_gc_x() {
 
@@ -1157,6 +1364,8 @@ class tiled {
     /**
      * @brief Adds values from neighboring y guard cells to local data,
      *        including cells from other parallel nodes
+     * 
+     * @warning Collective operation, must be called by all parallel nodes.
      */
     void add_from_gc_y() {
         // Get y neighbors
@@ -1249,10 +1458,13 @@ class tiled {
         if ( unode >= 0 ) msg_send.upper->wait( );
     }
 
+    public:
+
     /**
      * @brief Adds values from neighboring guard cells to local data, including
      *        values from other parallel nodes
      * 
+     * @warning Collective operation, must be called by all parallel nodes.
      */
     void add_from_gc() {
         // Add along x direction
@@ -1272,20 +1484,20 @@ class tiled {
      */
     void x_shift_left( unsigned int const shift ) {
 
-        if ( shift > 0 && shift < gc.x.upper ) {
+        if ( shift > 0 && shift <= gc.x.upper ) {
 
             const int ystride = tile_ext_dims.x;
 
             // Loop over tiles
             #pragma omp parallel for
-            for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid ++ ) {
+            for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid ++ ) {
                 T * __restrict__ buffer = tile_buffer( tid );
                 
-                for( int iy = 0; iy < tile_ext_dims.y; iy++ ) {
-                    for( int ix = 0; ix < tile_ext_dims.x - shift; ix++ ) {
+                for( int iy = 0; iy < static_cast<int>(tile_ext_dims.y); iy++ ) {
+                    for( int ix = 0; ix < static_cast<int>(tile_ext_dims.x - shift); ix++ ) {
                         buffer[ ix + iy * ystride ] = buffer[ (ix + shift) + iy * ystride ]; 
                     }
-                    for( int ix = tile_ext_dims.x - shift; ix < tile_ext_dims.x; ix++ ) {
+                    for( int ix = tile_ext_dims.x - shift; ix < static_cast<int>(tile_ext_dims.x); ix++ ) {
                         buffer[ ix + iy * ystride ] = T{0};
                     }
                 }
@@ -1315,7 +1527,7 @@ class tiled {
 
             // Loop over tiles
             #pragma omp parallel for
-            for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid++ ) {
+            for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
 
                 // On a GPU these would be on block shared memory
                 T A[ tile_vol ];
@@ -1324,13 +1536,13 @@ class tiled {
                 T * __restrict__ buffer = tile_buffer( tid );
 
                 // Copy data from tile buffer
-                for( int i = 0; i < tile_vol; i++ ) {
+                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) {
                     A[i] = B[i] = buffer[i];
                 }
 
                 // Apply kernel locally
-                for( int iy = 0; iy < tile_ext_dims.y; iy++ ) {
-                    for( int ix = gc.x.lower; ix < gc.x.lower + tile_dims.x; ix ++) {
+                for( int iy = 0; iy < static_cast<int>(tile_ext_dims.y); iy++ ) {
+                    for( int ix = gc.x.lower; ix < static_cast<int>(gc.x.lower + tile_dims.x); ix ++) {
                         B[ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
                                                  A[ iy * ystride +  ix    ] * b +
                                                  A[ iy * ystride + (ix+1) ] * c;
@@ -1338,7 +1550,7 @@ class tiled {
                 }
 
                 // Copy data back to tile buffer
-                for( int i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
+                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) buffer[i] = B[i];
             }
 
             // Update guard cells
@@ -1366,7 +1578,7 @@ class tiled {
 
             // Loop over tiles
             #pragma omp parallel for
-            for( int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid++ ) {
+            for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
 
                 // On a GPU these would be on block shared memory
                 T A[ tile_vol ];
@@ -1375,13 +1587,13 @@ class tiled {
                 auto * __restrict__ buffer = tile_buffer( tid );
 
                 // Copy data from tile buffer
-                for( int i = 0; i < tile_vol; i++ ) {
+                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) {
                     A[i] = B[i] = buffer[i];
                 }
 
                 // Apply kernel locally
-                for( int iy = gc.y.lower; iy < tile_dims.y + gc.y.lower; iy++ ) {
-                    for( int ix = 0; ix < tile_ext_dims.x; ix ++) {
+                for( int iy = gc.y.lower; iy < static_cast<int>(tile_dims.y + gc.y.lower); iy++ ) {
+                    for( int ix = 0; ix < static_cast<int>(tile_ext_dims.x); ix ++) {
                         B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
                                                   A[    iy  * ystride + ix ] * b +
                                                   A[ (iy+1) * ystride + ix ] * c;
@@ -1389,7 +1601,7 @@ class tiled {
                 }
 
                 // Copy data back to tile buffer
-                for( int i = 0; i < tile_vol; i++ ) buffer[i] = B[i];
+                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) buffer[i] = B[i];
             }
 
             // Update guard cells
@@ -1421,7 +1633,7 @@ class tiled {
         info.count[1] = global_ntiles.y * tile_dims.y;
 
         // Allocate buffer on host to gather data
-        T2 * h_data = memory::malloc<T2>( local_dims.x * local_dims.y );
+        T2 * h_data = memory::malloc<T2>( static_cast<std::size_t>(local_dims.x) * local_dims.y );
 
         // Gather data on contiguous grid
         gather( h_data );
@@ -1454,7 +1666,7 @@ class tiled {
     template< typename T2 = T >
     void save( const std::string & filename ) {
         // Allocate buffer on host to gather data
-        T2 * h_data = memory::malloc<T2>( local_dims.x * local_dims.y );
+        T2 * h_data = memory::malloc<T2>( static_cast<std::size_t>(local_dims.x) * local_dims.y );
 
         // Gather data on contiguous grid
         gather( h_data );
