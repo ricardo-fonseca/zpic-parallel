@@ -6,6 +6,42 @@
 #include <iomanip>
 
 /**
+ * @brief SIMD vector unit name
+ * 
+ */
+constexpr char vecname[] = "x86_64 AVX2";
+/**
+ * @brief Main SIMD vector width
+ * 
+ */
+constexpr int vecwidth = 8;
+
+/**
+ * @brief float32 vector
+ * 
+ */
+using vfloat = __m256;
+/**
+ * @brief int32 vector
+ * 
+ */
+using vint   = __m256i;
+/**
+ * @brief vector mask
+ * 
+ */
+using vmask  = __m256i;
+
+/**
+ * @brief SIMD unit initialization
+ * 
+ * @note No initialization required for AVX2
+ *
+ * @return int 
+ */
+inline int simd_init() {return 0;}
+
+/**
  * @brief x86 AVX2 SIMD vectors (256 bit)
  * 
  */

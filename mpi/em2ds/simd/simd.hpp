@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <iostream>
 
@@ -14,17 +15,6 @@
 #endif
 
 #include "avx2.h"
-
-constexpr char vecname[] = "x86_64 AVX2";
-constexpr int vecwidth = 8;
-
-using vfloat = __m256;
-using vint   = __m256i;
-using vmask  = __m256i;
-
-// No initialization requrired
-inline int simd_init() {return 0;}
-
 #define SIMD AVX2
 
 #endif
@@ -40,17 +30,6 @@ inline int simd_init() {return 0;}
 #endif
 
 #include "avx512.h"
-
-constexpr char vecname[] = "x86_64 AVX512f";
-constexpr int vecwidth = 16;
-
-using vfloat = __m512;
-using vint   = __m512i;
-using vmask  = __mmask16;
-
-// No initialization requrired
-inline int simd_init() {return 0;}
-
 #define SIMD AVX512
 
 #endif
@@ -66,17 +45,6 @@ inline int simd_init() {return 0;}
 #endif
 
 #include "neon.hpp"
-
-constexpr char vecname[] = "ARM NEON";
-constexpr int vecwidth = 4;
-
-using vfloat = vec_f32;
-using vint   = vec_i32;
-using vmask  = vec_mask32;
-
-// No initialization requrired
-inline int simd_init() {return 0;}
-
 #define SIMD NEON
 
 #endif
@@ -92,21 +60,6 @@ inline int simd_init() {return 0;}
 #endif
 
 #include "sve.h"
-
-constexpr char vecname[] = "ARM SVE";
-constexpr int vecwidth = sve_vec_width;
-
-typedef vec_f32 vfloat;
-typedef vec_i32 vint;
-typedef vec_mask vmask;
-
-typedef VecFloat  VecFloat_s;
-typedef VecInt    VecInt_s;
-typedef VecMask   VecMask_s;
-
-// Initialize the SVE vector length
-inline int simd_init() { return prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8); };
-
 #define SIMD SVE
 
 #endif
@@ -166,3 +119,45 @@ void assert_aligned( T * addr, std::string msg = "" ) {
         abort();
     }
 }
+
+#ifdef SIMD
+
+/**
+ * @brief Accumulates float values from src into dst ( dst[i] += src[i] )
+ *
+ * @warning dst and tgt must not overlap
+ * @warning Both addresses must be aligned to the SIMD vector size
+ *
+ * @param dst   Target buffer (read-modify-write)
+ * @param src   Source buffer
+ * @param n     Number of float values
+ */
+inline void vec_memadd( float * __restrict__ dst, const float * __restrict__ src, std::size_t n ) {
+
+    constexpr std::size_t blk = 4 * vecwidth;
+
+    std::size_t i = 0;
+
+    // Main loop, unrolled 4x to keep several loads in flight
+    for( ; i + blk <= n; i+= blk ) {
+        vfloat a0 = vec_add( vec_load(&dst[i             ]), vec_load(&src[i             ]) );
+        vfloat a1 = vec_add( vec_load(&dst[i +   vecwidth]), vec_load(&src[i +   vecwidth]) );
+        vfloat a2 = vec_add( vec_load(&dst[i + 2*vecwidth]), vec_load(&src[i + 2*vecwidth]) );
+        vfloat a3 = vec_add( vec_load(&dst[i + 3*vecwidth]), vec_load(&src[i + 3*vecwidth]) );
+
+        vec_store( &dst[i             ], a0 );
+        vec_store( &dst[i +   vecwidth], a1 );
+        vec_store( &dst[i + 2*vecwidth], a2 );
+        vec_store( &dst[i + 3*vecwidth], a3 );
+    }
+
+    // remaining full vectors
+    for( ; i + vecwidth <=n; i += vecwidth )
+        vec_store( &dst[i], vec_add( vec_load( &dst[i] ), vec_load( &src[i] ) ) );
+
+    // remaining scalars
+    for( ; i < n; i++ )
+        dst[i] += src[i];
+}
+
+#endif

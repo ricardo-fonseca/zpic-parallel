@@ -6,6 +6,43 @@
 #include <iomanip>
 
 /**
+ * @brief SIMD vector unit name
+ * 
+ */
+constexpr char vecname[] = "x86_64 AVX512f";
+
+/**
+ * @brief Main SIMD vector width
+ * 
+ */
+constexpr int vecwidth = 16;
+
+/**
+ * @brief float32 vector
+ * 
+ */
+using vfloat = __m512;
+/**
+ * @brief int32 vector
+ * 
+ */
+using vint   = __m512i;
+/**
+ * @brief vector mask
+ * 
+ */
+using vmask  = __mmask16;
+
+/**
+ * @brief SIMD unit initialization
+ * 
+ * @note No initialization required for AVX512f
+ *
+ * @return int 
+ */
+inline int simd_init() {return 0;}
+
+/**
  * @brief 256 bit vector utilities
  * 
  */
@@ -1331,6 +1368,11 @@ const __m512i perm0 =  _mm512_set_epi32(15, 7,14, 6,13, 5,12, 4,11, 3,10, 2, 9, 
   _mm512_storeu_epi32( &addr[16], _mm512_mask_alignr_epi32( t1, 0x5555, t0, t0, 1 ) );
 }
 
+/**
+ * @brief Returns a vint2 with 0 components
+ * 
+ * @return vint2 
+ */
 inline vint2 vint2_zero( ) {
     vint2 v{ _mm512_setzero_si512(), _mm512_setzero_si512() };
     return v;

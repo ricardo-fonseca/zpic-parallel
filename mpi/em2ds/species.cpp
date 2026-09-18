@@ -9,6 +9,7 @@
 #include "parallel.hpp"
 #include "simd/neon.hpp"
 #include "simd/simd.hpp"
+#include "utils.hpp"
 
 /**
  * @brief Memory alignment of local buffers
@@ -677,10 +678,8 @@ void move_deposit_kernel(
     alignas(local_align) float  _charge_buffer[ charge.tile_vol ];
 
     // Zero local buffers
-    for( unsigned int i = 0; i < current.tile_vol; i++ ) 
-        _current_buffer[i] = make_float3(0,0,0);
-    for( unsigned int i = 0; i < charge.tile_vol; i++)
-        _charge_buffer[i] = 0;
+    memory::zero( _current_buffer, current.tile_vol );
+    memory::zero( _charge_buffer, charge.tile_vol );
 
     // sync
 
@@ -797,14 +796,12 @@ void move_deposit_kernel(
         ix[i] = ix1;
     }
 
-    // Add current and charge to global buffers
-    float3 * __restrict__ J_buffer = current.tile_buffer( tid );
-    float  * __restrict__ rho_buffer = charge.tile_buffer( tid );
-    for( unsigned int i = 0; i < current.tile_vol; i++ )
-        J_buffer[i] += _current_buffer[i];
+    // Add current and charge to global buffers using SIMD code
+    vec_memadd( reinterpret_cast<float*>(current.tile_buffer(tid)), 
+                reinterpret_cast<const float*>(_current_buffer),
+                3 * current.tile_vol );
+    vec_memadd( charge.tile_buffer( tid ), _charge_buffer, charge.tile_vol );
 
-    for( unsigned int i = 0; i < charge.tile_vol; i++ )
-        rho_buffer[i] += _charge_buffer[i];
 }
 
 
@@ -932,14 +929,8 @@ void push_kernel (
     alignas(local_align) float3 E_local[ E_grid.tile_vol ];
     alignas(local_align) float3 B_local[ B_grid.tile_vol ];
 
-    {
-        float3 * __restrict__ src_E = E_grid.tile_buffer(tid);
-        float3 * __restrict__ src_B = B_grid.tile_buffer(tid);
-        for( unsigned int i = 0; i < E_grid.tile_vol; i++ ) {
-            E_local[i] = src_E[i];
-            B_local[i] = src_B[i];
-        }
-    }
+    memory::memcpy(E_local, E_grid.tile_buffer(tid), E_grid.tile_vol);
+    memory::memcpy(B_local, B_grid.tile_buffer(tid), B_grid.tile_vol);
 
     float3 const * const __restrict__ E = & E_local[ E_grid.inner_offset ];
     float3 const * const __restrict__ B = & B_local[ B_grid.inner_offset ];
@@ -1024,10 +1015,8 @@ void move_deposit_kernel(
     alignas(local_align) float  _charge_buffer[ charge.tile_vol ];
 
     // Zero local buffers
-    for( unsigned int i = 0; i < current.tile_vol; i++ ) 
-        _current_buffer[i] = make_float3(0,0,0);
-    for( unsigned int i = 0; i < charge.tile_vol; i++)
-        _charge_buffer[i] = 0;
+    memory::zero( _current_buffer, current.tile_vol );
+    memory::zero( _charge_buffer, charge.tile_vol );
 
     // sync
 
@@ -1129,14 +1118,8 @@ void push_kernel (
     alignas(local_align) float3 E_local[ E_grid.tile_vol ];
     alignas(local_align) float3 B_local[ B_grid.tile_vol ];
 
-    {
-        float3 * __restrict__ src_E = E_grid.tile_buffer(tid);
-        float3 * __restrict__ src_B = B_grid.tile_buffer(tid);
-        for( unsigned int i = 0; i < E_grid.tile_vol; i++ ) {
-            E_local[i] = src_E[i];
-            B_local[i] = src_B[i];
-        }
-    }
+    memory::memcpy(E_local, E_grid.tile_buffer(tid), E_grid.tile_vol);
+    memory::memcpy(B_local, B_grid.tile_buffer(tid), B_grid.tile_vol);
 
     float3 const * const __restrict__ E = & E_local[ E_grid.inner_offset ];
     float3 const * const __restrict__ B = & B_local[ B_grid.inner_offset ];

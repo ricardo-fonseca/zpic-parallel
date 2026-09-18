@@ -23,10 +23,43 @@ typedef svuint32_t  vec_u32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SV
 typedef svbool_t    vec_mask __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
 
 /**
- * @brief Floating point (32 bit) SIMD types
+ * @brief SIMD vector unit name
  * 
- * @note For ARM SVE this corresponds to the vec_f32 vector
  */
+constexpr char vecname[] = "ARM SVE";
+/**
+ * @brief Main SIMD vector width
+ * 
+ */
+constexpr int vecwidth = sve_vec_width;
+
+/**
+ * @brief float32 vector
+ * 
+ */
+using vfloat = vec_f32;
+/**
+ * @brief int32 vector
+ * 
+ */
+using vint   = vec_i32;
+/**
+ * @brief vector mask
+ * 
+ */
+using vmask  = vec_mask;
+
+/**
+ * @brief SIMD unit initialization
+ * 
+ * @warning Currently only supported in Linux
+ *
+ * @return int 
+ */
+inline int simd_init() { 
+    return prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8);
+};
+
 
 /**
  * @brief Extract a single float from a vec_f32 vector

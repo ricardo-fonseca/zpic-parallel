@@ -5,6 +5,43 @@
 #include <iostream>
 
 /**
+ * @brief SIMD vector unit name
+ * 
+ */
+constexpr char vecname[] = "ARM NEON";
+
+/**
+ * @brief Main SIMD vector width
+ * 
+ */
+constexpr int vecwidth = 4;
+
+/**
+ * @brief float32 vector
+ * 
+ */
+using vfloat = float32x4_t;
+/**
+ * @brief int32 vector
+ * 
+ */
+using vint   = int32x4_t;
+/**
+ * @brief vector mask
+ * 
+ */
+using vmask  = uint32x4_t;
+
+/**
+ * @brief SIMD unit initialization
+ * 
+ * @note No initialization required for NEON
+ *
+ * @return int 
+ */
+inline int simd_init() {return 0;}
+
+/**
  * @brief ARM NEON SIMD vectors
  * 
  */
