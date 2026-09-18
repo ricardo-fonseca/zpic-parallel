@@ -6,11 +6,13 @@
 #include <string>
 #include <cstddef>
 
-#include "../vec_types.hpp"
-#include "../bounds.hpp"
-#include "../parallel.hpp"
+#include "../core/vec_types.hpp"
+#include "../core/bounds.hpp"
+#include "../parallel/parallel.hpp"
 #include "../zdf/zdf.hpp"
-#include "../utils.hpp"
+
+#include "../util/memory.hpp"
+#include "../util/math.hpp"
 
 namespace grid {
 
@@ -299,7 +301,7 @@ class tiled {
         tile_ext_dims( make_uint2( gc.x.lower + tile_dims.x + gc.x.upper,
                             gc.y.lower + tile_dims.y + gc.y.upper )),
         inner_offset( gc.y.lower * tile_ext_dims.x + gc.x.lower ),
-        tile_vol( roundup4( tile_ext_dims.x * tile_ext_dims.y ) ),
+        tile_vol( roundup<4>( tile_ext_dims.x * tile_ext_dims.y ) ),
         name( "tiled grid" )
     {
         // Validate parameters
@@ -326,7 +328,7 @@ class tiled {
         gc( 0 ),
         tile_ext_dims( make_uint2( tile_dims.x, tile_dims.y )),
         inner_offset( 0 ),
-        tile_vol( roundup4( tile_dims.x * tile_dims.y )),
+        tile_vol( roundup<4>( tile_dims.x * tile_dims.y )),
         name( "tiled grid" )
     {
         // Validate parameters

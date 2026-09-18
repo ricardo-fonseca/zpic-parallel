@@ -1,5 +1,5 @@
 #include "udist.hpp"
-#include "random.hpp"
+#include "util/random.hpp"
 
 /**
  * @brief Sets none(0 temperature, 0 fluid) u distribution

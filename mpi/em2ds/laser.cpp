@@ -3,7 +3,7 @@
 
 #include "grid/fft.hpp"
 #include "filter.hpp"
-#include "parallel.hpp"
+#include "parallel/mpi.hpp"
 
 #include <iostream>
 #include <cassert>

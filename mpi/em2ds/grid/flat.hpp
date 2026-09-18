@@ -1,11 +1,12 @@
 #pragma once
 
-#include "../utils.hpp"
-#include "../parallel.hpp"
-#include "../vec_types.hpp"
+#include "../util/memory.hpp"
+#include "../parallel/partition.hpp"
+#include "../core/vec_types.hpp"
 #include "../zdf/zdf.hpp"
-#include <sstream>
 
+#include <sstream>
+#include <string>
 
 namespace grid {
 

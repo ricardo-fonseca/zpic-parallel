@@ -1,10 +1,12 @@
 #pragma once
 
 #include "mpi.h"
-#include "../parallel.hpp"
+#include "../parallel/partition.hpp"
 
-#include "../vec_types.hpp"
-#include "../bounds.hpp"
+#include "../core/vec_types.hpp"
+#include "../core/bounds.hpp"
+
+#include "../util/memory.hpp"
 
 #include "../zdf/zdf.hpp"
 

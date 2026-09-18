@@ -1,8 +1,8 @@
 #pragma once
 
-#include "vec_types.hpp"
+#include "core/vec_types.hpp"
+#include "core/bounds.hpp"
 
-#include "bounds.hpp"
 #include "grid/tiled_vec3.hpp"
 #include "grid/flat3.hpp"
 #include "grid/fft.hpp"

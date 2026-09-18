@@ -135,15 +135,23 @@ $(OBJDIR)/%.o : %.c $(DEPDIR)/%.d | $(DEPDIR)
 .PHONY: clean
 clean :
 	@echo "[clean] Removing build directory"
-	@rm -rf $(OBJS)
+	@rm -rf $(OBJDIR)
 	@echo "[clean] Removing dependencies directory"
-	@rm -rf $(DEPS)
+	@rm -rf $(DEPDIR)
 	@echo "[clean] Removing build target"
 	@rm -f $(TARGET)
+	@echo "[clean] Removing python cache"
+	@rm -rf __pycache__
 
-$(OBJDIR): ; @ test -d $@ || mkdir -p $@
+$(OBJDIR): 
+	@ test -d $@ || mkdir -p $@
+	@ test -d $@/part || mkdir -p $@/part
+	@ test -d $@/zdf || mkdir -p $@/zdf
 
-$(DEPDIR): ; @ test -d $@ || mkdir -p $@
+$(DEPDIR):
+	@ test -d $@ || mkdir -p $@
+	@ test -d $@/part || mkdir -p $@/part
+	@ test -d $@/zdf || mkdir -p $@/zdf
 
 $(DEPS):
 

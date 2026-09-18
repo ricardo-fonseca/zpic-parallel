@@ -1,15 +1,7 @@
 #pragma once
 
 #include "tiled.hpp"
-#include "../vec_types.hpp"
-
-/**
- * @brief Field components (x,y,z)
- * 
- */
-namespace fcomp {
-    enum cart  { x = 0, y, z };
-}
+#include "../core/vec_types.hpp"
 
 namespace grid {
 
@@ -411,9 +403,7 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
         uint64_t local[2]  = { local_dims.x, local_dims.y };
 
         // Save data
-        std::string comp[] = { "x", "y", "z" };
-
-        zdf::save_grid( h_data, 2, global, start, local, name + "-" + comp[fc], filename, part.get_comm() );
+        zdf::save_grid( h_data, 2, global, start, local, name + "-" + fcomp::name(fc), filename, part.get_comm() );
 
         // Free remaining temporary buffer 
         memory::free( h_data );

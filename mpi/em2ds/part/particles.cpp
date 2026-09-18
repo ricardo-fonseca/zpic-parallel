@@ -6,6 +6,8 @@
 #include <cmath>
 #include <vector>
 
+#include "../parallel/omp.hpp"
+
 /**
  * @brief Exchange number of particles in edge cells
  *

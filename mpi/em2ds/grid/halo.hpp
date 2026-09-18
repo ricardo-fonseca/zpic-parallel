@@ -1,9 +1,9 @@
 #pragma once
 
-#include "../parallel.hpp"
+#include "../parallel/mpi.hpp"
 
-#include "../vec_types.hpp"
-#include "../bounds.hpp"
+#include "../core/vec_types.hpp"
+#include "../core/bounds.hpp"
 #include "../zdf/zdf.hpp"
 
 #include <vector>

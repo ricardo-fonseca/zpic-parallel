@@ -6,10 +6,9 @@
 
 
 #include "grid/tiled.hpp"
-#include "parallel.hpp"
-#include "simd/neon.hpp"
+#include "parallel/partition.hpp"
 #include "simd/simd.hpp"
-#include "utils.hpp"
+#include "util/math.hpp"
 
 /**
  * @brief Memory alignment of local buffers

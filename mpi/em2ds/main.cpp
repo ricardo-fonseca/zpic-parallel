@@ -1,24 +1,10 @@
 #include <iostream>
 
-#include "bounds.hpp"
+#include "zpic.hpp"
+#include "util/term.hpp"
 
-#include "current.hpp"
+#include "core/bounds.hpp"
 #include "grid/grid.hpp"
-
-// #include "transpose.h"
-
-/**
- * MPI support 
- */
-#include "parallel.hpp"
-
-/**
- * SIMD support
- */
-#include "simd/simd.hpp"
-
-#include "grid/fft.hpp"
-#include "species.hpp"
 
 void test_tiled_grid( ) {
     
@@ -498,7 +484,7 @@ void test_poisson(){
 #include "emf.hpp"
 #include "laser.hpp"
 
-#include "timer.hpp"
+#include "util/timer.hpp"
 
 void test_laser( ) {
 
@@ -595,8 +581,6 @@ void test_laser( ) {
     }
 
 }
-
-#include "simulation.hpp"
 
 void test_inj( ) {
 
@@ -769,7 +753,7 @@ void test_weibel( )
     float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
     float dt = 0.07;
                                         
-    Simulation sim( ntiles, nx, box, dt, partition );
+    zpic::simulation sim( ntiles, nx, box, dt, partition );
                             
     uint2 ppc{4, 4};
 
@@ -838,7 +822,7 @@ void test_weibel( )
 
     auto nmove = sim.get_nmove();
     if ( sim.parallel.root() ) {
-        std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
+        std::cout << "simulation complete at i = " << sim.get_iter() << '\n';
         auto time = timer.elapsed(timer::units::s);
         std::cout << "Elapsed time: " << time << " s\n";
         auto perf = nmove / time / 1.e9;
@@ -852,32 +836,7 @@ void test_weibel( )
  */
 void info( ) {
 
-    if ( mpi::root() ) {
 
-        std::cout << "MPI running on " << mpi::size() << " processes\n";
-
-        #ifdef SIMD
-            std::cout << "SIMD support enabled\n";
-            std::cout << "  vector unit : " << vecname << '\n';
-            std::cout << "  vector width: " << vecwidth <<'\n';
-        #else
-            std::cout << "SIMD support not enabled\n";
-        #endif
-        
-        #ifdef _OPENMP
-            std::cout << "OpenMP enabled\n";
-            std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
-            std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
-            #pragma omp parallel
-            {
-                if ( omp_get_thread_num() == 0 )
-                    std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
-            }
-        #else
-            std::cout << "OpenMP support not enabled\n";
-        #endif
-
-    }
 }
 
 int main( int argc, char *argv[] ) {

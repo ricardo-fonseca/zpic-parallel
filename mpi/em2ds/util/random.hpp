@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vec_types.hpp"
+#include "../core/vec_types.hpp"
 #include <cmath>
 
 namespace zrandom {
