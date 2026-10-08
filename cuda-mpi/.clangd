@@ -1,0 +1,21 @@
+If:
+  PathMatch: .*\.(cu|cuh)$
+CompileFlags:
+  Add:
+    - -std=c++20
+    - --language=c++
+    - --cuda-path=/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/
+    - -L/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/13.3/targets/x86_64-linux/lib64
+    - -I/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/13.3/targets/x86_64-linux/include
+
+---
+
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -I/usr/local/cuda-12.8/include
+    - -I/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/comm_libs/13.3/hpcx/hpcx-2.50/ompi5/include
+    - -I/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/13.3/targets/x86_64-linux/include
+
+Documentation:
+  CommentFormat: Doxygen

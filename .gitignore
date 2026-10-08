@@ -59,3 +59,4 @@ openmp/q3d/zpic
 
 cuda/python/build
 openmp/python/build
+cuda-mpi/q3d/zpic
