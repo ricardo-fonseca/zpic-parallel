@@ -412,8 +412,8 @@ class c2r_plan {
         fftwf_complex * data_z_c = reinterpret_cast<fftwf_complex *>( input.z() );
 
         // If y and z scratch buffers have not been allocated yet, do so now
-        if ( scratch_y == nullptr ) scratch_y = fftwf_alloc_real( 2 * scratch_size );
-        if ( scratch_z == nullptr ) scratch_z = fftwf_alloc_real( 2 * scratch_size );
+        if ( scratch_y == nullptr ) scratch_y = fftwf_alloc_real( scratch_size );
+        if ( scratch_z == nullptr ) scratch_z = fftwf_alloc_real( scratch_size );
 
         float * data_x = reinterpret_cast<float *>( scratch_x );
         float * data_y = reinterpret_cast<float *>( scratch_y );

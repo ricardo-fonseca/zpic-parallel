@@ -348,16 +348,15 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
         return local_dims.x * local_dims.y;
     }
 
-
     /**
-     * @brief Save specific field component to disk
+     * @brief Save specific field component to disk using full metadata
      * 
-     * The field type <T> must be supported by ZDF file format
-     * 
-     * @param fc    Field component to save
-     * @param info  Grid metadata (label, units, axis, etc.). Information is used to set file name
-     * @param iter  Iteration metadata
-     * @param path  Path where to save the file
+     * @tparam S2       Output type, defaults to same type as the grid, must
+     *                  be supported by zdf
+     * @param fc        Field component to save
+     * @param metadata  Dataset information
+     * @param iter      Iteration information
+     * @param path      Base path for saving file
      */
     template< typename S2 = S >
     void save( const enum fcomp::cart fc, zdf::grid_info &metadata, zdf::iteration &iter, const std::string & path ) {
@@ -367,8 +366,9 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
         metadata.count[0] = global_ntiles.x * tile_dims.x;
         metadata.count[1] = global_ntiles.y * tile_dims.y;
 
-        // Allocate buffer on host to gather data
-        S2 * h_data = memory::malloc<S2>( metadata.count[0] * metadata.count[1] );
+        // Allocate buffer to gather data
+        const std::size_t bsize = local_dims.x * local_dims.y;
+        S2 * h_data = memory::malloc<S2>( bsize );
 
         gather( fc, h_data );
 
@@ -387,12 +387,19 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
         memory::free( h_data );
     }
 
+    /**
+     * @brief Save specific field component to disk using minimal description
+     * 
+     * @tparam S2       Output type, defaults to same type as the grid, must
+     *                  be supported by zdf
+     * @param fc        Field component to save
+     * @param filename  Output filename
+     */
     template< typename S2 = S >
     void save( const enum fcomp::cart fc, const std::string & filename ) {
-        
-        const std::size_t bsize = local_dims.x * local_dims.y;
 
-        // Allocate buffers on host and device to gather data
+        // Allocate buffer to gather data
+        const std::size_t bsize = local_dims.x * local_dims.y;
         S2 * h_data = memory::malloc<S2>( bsize );
 
         // Gather data on contiguous grid
