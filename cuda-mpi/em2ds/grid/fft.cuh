@@ -3,8 +3,8 @@
 #include <iostream>
 #include <cstddef>
 #include <string>
-#include <complex>
 #include <memory>
+#include <algorithm>
 
 #include "device_types.h"
 #include "tiled.cuh"
@@ -749,6 +749,190 @@ class c2r_plan : public fft_plan {
 
 };
 
+/**
+ * @brief Copy a local k-space buffer to host memory, rotating ky so that
+ *        negative modes come first
+ * 
+ * @note k-space data is stored in FFT order along ky (see grid::fft::k()).
+ *       Rotating by ceil(ny/2) rows gives a monotonic ky axis running from
+ *       -floor(ny/2) to floor((ny-1)/2) modes. This requires the full ky
+ *       extent to be local, which holds for the cuFFTMp slab layout (k-space
+ *       is split along kx only)
+ * 
+ * @param d_data        Device k-space buffer (local data)
+ * @param local_dims    Local grid dimensions
+ * @param global_dims   Global grid dimensions
+ * @return              Host buffer with rotated data, of size
+ *                      local_dims.x * local_dims.y; free it with
+ *                      gpu::host::free()
+ */
+inline complex_t * kspace_to_host( const complex_t * d_data, const uint2 local_dims, const uint2 global_dims ) {
+
+    if ( local_dims.y != global_dims.y ) {
+        mpi::fatal( "kspace_to_host(): the full ky extent must be local to each rank" );
+    }
+
+    const std::size_t size = static_cast<std::size_t>( local_dims.x ) * local_dims.y;
+    complex_t * h_buffer = gpu::host::malloc<complex_t>( size );
+    gpu::device::memcpy_tohost( h_buffer, d_data, size );
+
+    // Rotate whole rows: out[j] = in[(j + yroll) % ny]
+    const std::size_t row   = local_dims.x;
+    const std::size_t yroll = ( local_dims.y + 1 ) / 2;     // ceil(ny/2)
+    std::rotate( h_buffer,
+                 h_buffer + ( yroll % local_dims.y ) * row,
+                 h_buffer + size );
+
+    return h_buffer;
+}
+
+/**
+ * @brief Select one component of a vector k-space grid
+ * 
+ * @param cf    Vector k-space grid
+ * @param fc    Field component
+ * @return      Device pointer to the component data
+ */
+inline const complex_t * kspace_component( const grid::flat3<complex_t> & cf, const fcomp::cart fc ) {
+    switch( fc ) {
+    case fcomp::cart::x : return cf.x();
+    case fcomp::cart::y : return cf.y();
+    case fcomp::cart::z : return cf.z();
+    default:
+        mpi::fatal( "kspace_save(): invalid field component" );
+    }
+    return nullptr;
+}
+
+/**
+ * @brief Saves a k-space grid with full metadata, correcting the ky layout
+ * 
+ * @note Collective. The ky axis metadata in `info` must describe the rotated
+ *       layout, i.e. run from -floor(ny/2)*dk.y to floor((ny-1)/2)*dk.y
+ * 
+ * @param cf        k-space grid
+ * @param info      Grid metadata
+ * @param iter      Iteration metadata
+ * @param path      File path
+ */
+inline void kspace_save( const grid::flat<complex_t> & cf, zdf::grid_info &info, const zdf::iteration &iter, const std::string &path ) {
+
+    const auto global_dims = cf.get_global_dims();
+    const auto local_dims  = cf.get_local_dims();
+    const auto local_start = cf.get_local_start();
+
+    complex_t * h_buffer = kspace_to_host( cf.data(), local_dims, global_dims );
+
+    // Fill in global grid dimensions
+    info.ndims = 2;
+    info.count[0] = global_dims.x;
+    info.count[1] = global_dims.y;
+
+    // Information on local chunk of grid data
+    zdf::chunk chunk;
+    chunk.data = h_buffer;
+    chunk.count[0] = local_dims.x;
+    chunk.count[1] = local_dims.y;
+    chunk.start[0] = local_start.x;
+    chunk.start[1] = local_start.y;
+    chunk.stride[0] = chunk.stride[1] = 1;
+
+    zdf::save_grid<complex_t>( chunk, info, iter, path, cf.get_part().get_comm() );
+
+    gpu::host::free( h_buffer );
+}
+
+/**
+ * @brief Saves one component of a vector k-space grid with full metadata,
+ *        correcting the ky layout
+ * 
+ * @note Collective. The ky axis metadata in `info` must describe the rotated
+ *       layout, i.e. run from -floor(ny/2)*dk.y to floor((ny-1)/2)*dk.y
+ * 
+ * @param cf        Vector k-space grid
+ * @param fc        Field component to save
+ * @param info      Grid metadata
+ * @param iter      Iteration metadata
+ * @param path      File path
+ */
+inline void kspace_save( const grid::flat3<complex_t> & cf, const fcomp::cart fc, zdf::grid_info &info, const zdf::iteration &iter, const std::string &path ) {
+
+    const auto global_dims = cf.get_global_dims();
+    const auto local_dims  = cf.get_local_dims();
+    const auto local_start = cf.get_local_start();
+
+    complex_t * h_buffer = kspace_to_host( kspace_component( cf, fc ), local_dims, global_dims );
+
+    // Fill in global grid dimensions
+    info.ndims = 2;
+    info.count[0] = global_dims.x;
+    info.count[1] = global_dims.y;
+
+    // Information on local chunk of grid data
+    zdf::chunk chunk;
+    chunk.data = h_buffer;
+    chunk.count[0] = local_dims.x;
+    chunk.count[1] = local_dims.y;
+    chunk.start[0] = local_start.x;
+    chunk.start[1] = local_start.y;
+    chunk.stride[0] = chunk.stride[1] = 1;
+
+    zdf::save_grid<complex_t>( chunk, info, iter, path, cf.get_part().get_comm() );
+
+    gpu::host::free( h_buffer );
+}
+
+/**
+ * @brief Saves a k-space grid (no metadata), correcting the ky layout
+ * 
+ * @note Collective
+ * 
+ * @param cf        k-space grid
+ * @param filename  Output file name (includes path)
+ */
+inline void kspace_save( const grid::flat<complex_t> & cf, const std::string & filename ) {
+
+    const auto global_dims = cf.get_global_dims();
+    const auto local_dims  = cf.get_local_dims();
+    const auto local_start = cf.get_local_start();
+
+    uint64_t global[2] = { global_dims.x, global_dims.y };
+    uint64_t start[2]  = { local_start.x, local_start.y };
+    uint64_t local[2]  = { local_dims.x, local_dims.y };
+
+    complex_t * h_buffer = kspace_to_host( cf.data(), local_dims, global_dims );
+
+    zdf::save_grid( h_buffer, 2, global, start, local, cf.name, filename, cf.get_part().get_comm() );
+
+    gpu::host::free( h_buffer );
+}
+
+/**
+ * @brief Saves one component of a vector k-space grid (no metadata),
+ *        correcting the ky layout
+ * 
+ * @note Collective
+ * 
+ * @param cf        Vector k-space grid
+ * @param fc        Field component to save
+ * @param filename  Output file name (includes path)
+ */
+inline void kspace_save( const grid::flat3<complex_t> & cf, const fcomp::cart fc, const std::string & filename ) {
+
+    const auto global_dims = cf.get_global_dims();
+    const auto local_dims  = cf.get_local_dims();
+    const auto local_start = cf.get_local_start();
+
+    uint64_t global[2] = { global_dims.x, global_dims.y };
+    uint64_t start[2]  = { local_start.x, local_start.y };
+    uint64_t local[2]  = { local_dims.x, local_dims.y };
+
+    complex_t * h_buffer = kspace_to_host( kspace_component( cf, fc ), local_dims, global_dims );
+
+    zdf::save_grid( h_buffer, 2, global, start, local, cf.name, filename, cf.get_part().get_comm() );
+
+    gpu::host::free( h_buffer );
+}
 
 } // namespace fft
 

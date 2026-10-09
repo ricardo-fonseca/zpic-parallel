@@ -392,7 +392,7 @@ class flat{
         chunk.stride[0] = chunk.stride[1] = 1;
         
         chunk.data = gpu::host::malloc<T>( buffer_size() );
-        gpu::device::memcpy_tohost( chunk.data, d_buffer, buffer_size() );
+        gpu::device::memcpy_tohost( reinterpret_cast<T*>(chunk.data), d_buffer, buffer_size() );
 
         zdf::save_grid<T>( chunk, info, iter, path, part.get_comm() );
 
