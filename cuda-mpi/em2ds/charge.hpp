@@ -127,7 +127,7 @@ class charge {
      * 
      * @note Owned by this object, use set_filter() to replace it
      */
-    filter::digital *filter;
+    std::unique_ptr<filter::digital> filter;
 
     /**
      * @brief Construct a new Charge object
@@ -171,7 +171,7 @@ class charge {
         set_bc( default_bc );
 
         // Set default filtering
-        filter = new filter::lowpass( make_float2( 0.5, 0.5 ) );
+        filter = std::make_unique<filter::lowpass>( make_float2( 0.5, 0.5 ) );
 
         // Reset iteration number
         iter = 0;
@@ -191,8 +191,6 @@ class charge {
      *          grid::fft::cleanup() is called
      */
     ~charge() {
-        delete (filter);
-        
         delete (rho);
         delete (neutral);
 
@@ -252,9 +250,7 @@ class charge {
      * @param new_filter    New filter object
      */
     void set_filter( const filter::digital & new_filter ) {
-        filter::digital * tmp = new_filter.clone();
-        delete filter;
-        filter = tmp;
+        filter.reset( new_filter.clone() );
     }
 
     /**

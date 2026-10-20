@@ -44,16 +44,20 @@ CFLAGS += --gpu-architecture=compute_80
 CFLAGS += -Xcompiler -Wall -Xcompiler -std=c11
 
 # c++17 compliance and full warnings (except for VLA extension)
-CXXFLAGS += -Xcompiler -Wall -std=c++20
+CXXFLAGS += -Xcompiler -Wall -std=c++20 -Wno-unknown-pragmas -Wsign-compare
+
+# Debug
+# CXXFLAGS += -Xcompiler "-fno-omit-frame-pointer -g -Og"
 
 # --------------------------------------------------------------------------- #
 
-# SOURCE = emf.cpp laser.cpp particles.cpp current.cpp \
-#         udist.cpp density.cpp species.cpp
+SOURCE = emf.cu laser.cu charge.cu current.cu \
+         udist.cu density.cu species.cu
 
-SOURCE = emf.cu laser.cu charge.cu current.cu
+SOURCE += main.cu
 
-SOURCE += main.cpp
+# Support classes
+SOURCE += part/particles.cu part/sort.cu
 
 # Add ZDF library
 SOURCE += zdf/zdf.c zdf/zdf-parallel.c

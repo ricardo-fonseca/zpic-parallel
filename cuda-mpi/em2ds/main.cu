@@ -13,6 +13,8 @@
 #include "core/vec_types.cuh"
 #include "grid/grid.cuh"
 
+#include "zpic.hpp"
+
 namespace kernel {
 
 __global__
@@ -682,8 +684,6 @@ void test_laser( ) {
 
 }
 
-#if 0
-
 void test_inj( ) {
 
     if ( mpi::root() ) {
@@ -710,18 +710,22 @@ void test_inj( ) {
     parallel.barrier();
     if ( mpi::root() ) std::cout << "Created species\n";
 
-    //electrons.set_density(density::step(coord::x, 1.0, 5.0));
+    // electrons.set_density(density::step(coord::x, 1.0, 5.0));
     // electrons.set_density(density::slab(coord::y, 1.0, 5.0, 8.0));
     electrons.set_density( density::sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
 
-    parallel.barrier();
-    if ( mpi::root() ) std::cout << "Density set\n";
-
     electrons.set_udist( udist::thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+
+    parallel.barrier();
+    if ( mpi::root() ) std::cout << "Initializing species...\n";
 
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
+    parallel.barrier();
+    if ( mpi::root() ) std::cout << "Species initialized.\n";
+
     electrons.save_charge();
+
     electrons.save();
     electrons.save_phasespace(
         phasespace::quantity::ux, float2{-1, 3}, 256,
@@ -837,6 +841,7 @@ void test_current_charge( ) {
     }
 }
 
+
 void test_weibel( )
 {
    
@@ -932,8 +937,6 @@ void test_weibel( )
     }                  
 }
 
-#endif
-
 /**
  * @brief Print information about the environment
  * 
@@ -950,9 +953,8 @@ void info( void ) {
         char name[MPI_MAX_PROCESSOR_NAME];
         int len; MPI_Get_processor_name(name, &len);
 
-        std::cout << "MPI running on " << mpi::size() << " processes\n";
-
-        std::cout << "GPU devices on rank 0 (" << name << "):\n";
+        std::cout << "MPI running on " << mpi::size() << " processes\n" 
+                  << "GPU devices on rank 0 (" << name << "):\n";
         gpu::print_info();
     }
 }
@@ -975,13 +977,13 @@ int main( int argc, char *argv[] ) {
 
     // test_fft_tile();
     // test_poisson();
-    test_laser();
+    // test_laser();
 
     // test_inj();
     // test_mov();
     // test_current_charge();
 
-    // test_weibel();
+    test_weibel();
 
     grid::fft::cleanup();
 

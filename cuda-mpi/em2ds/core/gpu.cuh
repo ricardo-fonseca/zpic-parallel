@@ -17,19 +17,6 @@
 
 #include "../parallel/mpi.hpp"
 
-#include "device_types.h"
-
-/**
- * @brief If not using nvcc define dummy kernel variables to allow kernel code linting
- * 
- */
-#ifndef __NVCC__
-inline const dim3 blockIdx{0};
-inline const dim3 blockDim{0};
-inline const dim3 threadIdx{0};
-inline const dim3 gridDim{0};
-#endif
-
 namespace gpu {
 
 /**
@@ -215,13 +202,17 @@ namespace warp {
      */
     template<typename T>
     __device__ __inline__ T reduce_add( T const input ) {
-        T value = input;
-        #pragma unroll
-        for( int i = 1; i < gpu::warp_size; i <<= 1 )
-            value += __shfl_xor_sync( gpu::full_mask, value, i );
-        return value;
+        if constexpr ( std::is_same_v<T,int> || std::is_same_v<T,unsigned int> ) {
+            return __reduce_add_sync( gpu::full_mask, input );
+        } else {
+            T value = input;
+            #pragma unroll
+            for( int i = 1; i < gpu::warp_size; i <<= 1 )
+                value += __shfl_xor_sync( gpu::full_mask, value, i );
+            return value;
+        }
     }
-    
+
     /**
      * @brief Warp level reduce max
      *
@@ -229,13 +220,17 @@ namespace warp {
      */
     template<typename T>
     __device__ __inline__ T reduce_max( T const input ) {
-        T value = input;
-        #pragma unroll
-        for( int i = 1; i < gpu::warp_size; i <<= 1 ) {
-            T tmp = __shfl_xor_sync( gpu::full_mask, value, i );
-            if ( tmp > value ) value = tmp;
+        if constexpr ( std::is_same_v<T,int> || std::is_same_v<T,unsigned int> ) {
+            return __reduce_max_sync( gpu::full_mask, input );
+        } else {
+            T value = input;
+            #pragma unroll
+            for( int i = 1; i < gpu::warp_size; i <<= 1 ) {
+                T tmp = __shfl_xor_sync( gpu::full_mask, value, i );
+                if ( tmp > value ) value = tmp;
+            }
+            return value;
         }
-        return value;
     }
 
     /**
@@ -245,13 +240,17 @@ namespace warp {
      */
     template<typename T>
     __device__ __inline__ T reduce_min( T const input ) {
-        T value = input;
-        #pragma unroll
-        for( int i = 1; i < gpu::warp_size; i <<= 1 ) {
-            T tmp = __shfl_xor_sync( gpu::full_mask, value, i );
-            if ( tmp < value ) value = tmp;
+        if constexpr ( std::is_same_v<T,int> || std::is_same_v<T,unsigned int> ) {
+            return __reduce_min_sync( gpu::full_mask, input );
+        } else {
+            T value = input;
+            #pragma unroll
+            for( int i = 1; i < gpu::warp_size; i <<= 1 ) {
+                T tmp = __shfl_xor_sync( gpu::full_mask, value, i );
+                if ( tmp < value ) value = tmp;
+            }
+            return value;
         }
-        return value;
     }
     
     /**
@@ -480,7 +479,7 @@ namespace block {
     }
     
     /**
-     * @brief Block level exclusive scan (add)
+     * @brief Block level, exclusive scan (add) (scalar)
      *
      * @warning Must be called by all threads in the block. The block must
      *          contain a whole number of warps.
@@ -526,6 +525,22 @@ namespace block {
     }
     
     /**
+     * @brief Block level memcpy
+     * 
+     * @tparam T 
+     * @param dst 
+     * @param src 
+     * @param n 
+     * @return __device__ 
+     */
+    template< class T >
+    __device__
+    inline void memcpy( T * __restrict__ dst, const T * __restrict__ src, size_t n ) {
+        for( size_t i = thread_rank(); i < n; i += num_threads() )
+            dst[i] = src[i];
+    }
+
+    /**
      * @brief Block level memcpy of float3 values
      * 
      * @warning Must be called by all threads in block
@@ -568,6 +583,132 @@ namespace block {
             _dst2[i] = _src2[i];
         }
     }
+
+    /**
+    * @brief Block level exclusive scan (add) (vector)
+    *
+    * @note All data is processed by a single block
+    * 
+    * @tparam T        Data type
+    * @param data      Source data
+    * @param size      Number of elements
+    * @return T        Reduction (sum) of all elements
+    */
+    template < typename T >
+    __device__
+    inline T exscan_add( T * data, size_t const size ) {
+
+        /// @brief [shared] Sum of previous warp
+        __shared__ int prev;
+        /// @brief [shared] Temporary results from each warp
+        __shared__ int tmp[ gpu::max_warps ];
+
+        if ( block::thread_rank() == 0 ) prev = T{0};
+        block::sync();
+
+        const int nthreads = gpu::block::num_threads();
+        const int nwarps   = gpu::block::num_warps();
+        const int lane     = gpu::warp::thread_rank();
+        const int wid      = gpu::warp::group_rank();
+
+        for( int base = 0; base < size; base += nthreads ) {
+            const int i = base + gpu::block::thread_rank();
+            auto s = ( i < size ) ? data[i] : T{0};
+
+            auto v = gpu::warp::exscan_add( s );
+
+            // Last lane of each warp publishes that warp's total
+            if ( lane == gpu::warp_size - 1 ) tmp[ wid ] = v + s;
+            gpu::block::sync();
+
+            // Only warp 0 does this. The number of warps is always <= the warp
+            // size, so a single pass suffices.
+            if ( wid == 0 ) {
+                // Lanes beyond the populated warps contribute zero rather than
+                // whatever was left in tmp[] by the previous iteration
+                T t = ( lane < nwarps ) ? tmp[ lane ] : T{0};
+                t = gpu::warp::exscan_add( t );
+                if ( lane < nwarps ) tmp[ lane ] = t + prev;
+            }
+            gpu::block::sync();
+
+            // Add in contribution from previous warps and chunks
+            v += tmp[ wid ];
+            if ( i < size ) data[i] = v;
+
+            // Running total for the next chunk. The last thread of the block
+            // always holds it, since out-of-range elements contribute zero.
+            if ( gpu::block::thread_rank() == nthreads - 1 ) prev = v + s;
+            gpu::block::sync();
+        }
+
+        // Return reduction (sum)
+        return prev;
+    }
+
+    /**
+    * @brief Block level exclusive scan (add) (vector)
+    *
+    * @note All data is processed by a single block
+    * 
+    * @tparam T        Data type
+    * @param in        Input data
+    * @param out       Output data
+    * @param size      Number of elements
+    * @return T        Reduction (sum) of all elements
+    */
+    template < typename T >
+    __device__
+    inline T exscan_add( T * __restrict__ out, T const * __restrict__ in, size_t const size ) {
+
+        /// @brief [shared] Sum of previous warp
+        __shared__ int prev;
+        /// @brief [shared] Temporary results from each warp
+        __shared__ int tmp[ gpu::max_warps ];
+
+        if ( block::thread_rank() == 0 ) prev = T{0};
+        block::sync();
+
+        const int nthreads = gpu::block::num_threads();
+        const int nwarps   = gpu::block::num_warps();
+        const int lane     = gpu::warp::thread_rank();
+        const int wid      = gpu::warp::group_rank();
+
+        for( int base = 0; base < size; base += nthreads ) {
+            const int i = base + gpu::block::thread_rank();
+            auto s = ( i < size ) ? in[i] : T{0};
+
+            auto v = gpu::warp::exscan_add( s );
+
+            // Last lane of each warp publishes that warp's total
+            if ( lane == gpu::warp_size - 1 ) tmp[ wid ] = v + s;
+            gpu::block::sync();
+
+            // Only warp 0 does this. The number of warps is always <= the warp
+            // size, so a single pass suffices.
+            if ( wid == 0 ) {
+                // Lanes beyond the populated warps contribute zero rather than
+                // whatever was left in tmp[] by the previous iteration
+                T t = ( lane < nwarps ) ? tmp[ lane ] : T{0};
+                t = gpu::warp::exscan_add( t );
+                if ( lane < nwarps ) tmp[ lane ] = t + prev;
+            }
+            gpu::block::sync();
+
+            // Add in contribution from previous warps and chunks
+            v += tmp[ wid ];
+            if ( i < size ) out[i] = v;
+
+            // Running total for the next chunk. The last thread of the block
+            // always holds it, since out-of-range elements contribute zero.
+            if ( gpu::block::thread_rank() == nthreads - 1 ) prev = v + s;
+            gpu::block::sync();
+        }
+
+        // Return reduction (sum)
+        return prev;
+    }
+
 } // namespace block
 
 namespace grid {
@@ -865,11 +1006,7 @@ namespace device {
      * @brief Single block exclusive scan (add) kernel
      *
      * Every thread in the block executes every loop iteration, with
-     * out-of-range elements contributing zero. This keeps __syncthreads() and
-     * the full-mask warp shuffles convergent, which the original
-     * `for( i = tid; i < size; i += nthreads )` form did not: threads with
-     * i >= size dropped out of the loop while the rest were still
-     * synchronizing.
+     * out-of-range elements contributing zero.
      *
      * Because the inactive lanes contribute zero, the running total carried in
      * `prev` is still correct in the final partial chunk.
@@ -888,54 +1025,10 @@ namespace device {
     __global__
     void exscan_add_kernel( T * out, T const * in, size_t const size, T * reduction )
     {
-        static_assert( gpu::max_warps <= gpu::warp_size,
-            "This implementation requires gpu::max_warps to be <= gpu::warp_size" );
-
-        __shared__ T tmp[ gpu::max_warps ];
-        __shared__ T prev;
-
-        const int nthreads = block::num_threads();
-        const int nwarps   = block::num_warps();
-        const int lane     = warp::thread_rank();
-        const int wid      = warp::group_rank();
-
-        if ( block::thread_rank() == 0 ) prev = T{0};
-        block::sync();
-
-        for( size_t base = 0; base < size; base += nthreads ) {
-
-            const size_t i = base + block::thread_rank();
-            const T s = ( i < size ) ? in[i] : T{0};
-
-            T v = warp::exscan_add( s );
-
-            // Last lane of each warp publishes that warp's total
-            if ( lane == gpu::warp_size - 1 ) tmp[ wid ] = v + s;
-            block::sync();
-
-            // Only warp 0 does this. The number of warps is always <= the warp
-            // size, so a single pass suffices.
-            if ( wid == 0 ) {
-                // Lanes beyond the populated warps contribute zero rather than
-                // whatever was left in tmp[] by the previous iteration
-                T t = ( lane < nwarps ) ? tmp[ lane ] : T{0};
-                t = warp::exscan_add( t );
-                if ( lane < nwarps ) tmp[ lane ] = t + prev;
-            }
-            block::sync();
-
-            // Add in contribution from previous warps and chunks
-            v += tmp[ wid ];
-            if ( i < size ) out[i] = v;
-
-            // Running total for the next chunk. The last thread of the block
-            // always holds it, since out-of-range elements contribute zero.
-            if ( block::thread_rank() == nthreads - 1 ) prev = v + s;
-            block::sync();
-        }
+        T sum = block::exscan_add(out, in, size);
 
         // The reduction (sum) value is also available, store it if requested
-        if ( reduction != nullptr && block::thread_rank() == 0 ) *reduction = prev;
+        if ( reduction != nullptr && block::thread_rank() == 0 ) *reduction = sum;
     }
 
     /**
@@ -1018,7 +1111,19 @@ namespace device {
         check_launch();
         return sum.get();
     }
-    
+
+        template< typename T >
+    __host__ inline
+    T exscan_reduce_add( T * const out, T const * const in, size_t const size )
+    {
+        if ( size == 0 ) return T{0};
+        var<T> sum;
+        const unsigned int block = detail::scan_block_size( size );
+        detail::exscan_add_kernel<<< 1, block >>>( out, in, size, sum.ptr() );
+        check_launch();
+        return sum.get();
+    }
+
 } // namespace device
 
 } // namespace gpu
