@@ -2,8 +2,9 @@ If:
   PathMatch: .*\.(cu|cuh)$
 CompileFlags:
   Add:
+    - -xcuda
     - -std=c++20
-    - --language=c++
+    - --cuda-gpu-arch=sm_80
     - --cuda-path=/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/
     - -L/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/13.3/targets/x86_64-linux/lib64
     - -I/opt/nvidia/hpc_sdk/Linux_x86_64/26.9/cuda/13.3/targets/x86_64-linux/include

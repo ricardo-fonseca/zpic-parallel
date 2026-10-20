@@ -1628,17 +1628,23 @@ class tiled {
         // Disable messages if only 1 node along  x direction
         if ( part.dims.x == 1 ) lnode = unode = -1;
 
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.x.upper > 0;
+        const bool send_upper = unode >= 0 && gc.x.lower > 0;
+        const bool recv_lower = lnode >= 0 && gc.x.lower > 0;
+        const bool recv_upper = unode >= 0 && gc.x.upper > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Pack send messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( send_lower || send_upper ) {
             dim3 grid( 2, local_ntiles.y );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+            T * lower = ( send_lower ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( send_upper ) ? msg_send.upper -> buffer : nullptr;
 
             kernel::copy_to_gc_x_send <<< grid, block >>> (
                 lower, upper, view()
@@ -1647,13 +1653,13 @@ class tiled {
         }
 
         // Send message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             int msg_size = ( tile_ext_dims.y * local_ntiles.y ) * gc.x.upper;
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
         // Send message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
             int msg_size = ( tile_ext_dims.y * local_ntiles.y ) * gc.x.lower;
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
@@ -1662,16 +1668,16 @@ class tiled {
         local_copy_to_gc_x();
 
         // Wait for receive messages
-        if ( lnode >= 0 ) msg_recv.lower-> wait();
-        if ( unode >= 0 ) msg_recv.upper-> wait();
+        if ( recv_lower ) msg_recv.lower-> wait();
+        if ( recv_upper ) msg_recv.upper-> wait();
 
         // Unpack receive messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( recv_lower || recv_upper ) {
             dim3 grid( 2, local_ntiles.y );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+            T * lower = ( recv_lower ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( recv_upper ) ? msg_recv.upper -> buffer : nullptr;
 
             kernel::copy_to_gc_x_recv <<< grid, block >>>(
                 lower, upper, view()
@@ -1681,8 +1687,8 @@ class tiled {
 
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     /**
@@ -1699,18 +1705,24 @@ class tiled {
 
         // Disable messages if only 1 node along y direction
         if ( part.dims.y == 1 ) lnode = unode = -1;
-        
+
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.y.upper > 0;
+        const bool send_upper = unode >= 0 && gc.y.lower > 0;
+        const bool recv_lower = lnode >= 0 && gc.y.lower > 0;
+        const bool recv_upper = unode >= 0 && gc.y.upper > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Pack send messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( send_lower || send_upper ) {
             dim3 grid( local_ntiles.x, 2 );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+            T * lower = ( send_lower ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( send_upper ) ? msg_send.upper -> buffer : nullptr;
 
             kernel::copy_to_gc_y_send <<< grid, block >>> (
                 lower, upper, view()
@@ -1719,11 +1731,11 @@ class tiled {
         }
 
         // Post message sends
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             int msg_size =  gc.y.upper * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
             int msg_size = gc.y.lower * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.upper -> isend( msg_size, unode, dest::upper );
         }
@@ -1732,16 +1744,16 @@ class tiled {
         local_copy_to_gc_y();
 
         // Wait for receive messages
-        if ( lnode >= 0 ) msg_recv.lower-> wait();
-        if ( unode >= 0 ) msg_recv.upper-> wait();
+        if ( recv_lower ) msg_recv.lower-> wait();
+        if ( recv_upper ) msg_recv.upper-> wait();
 
         // Unpack receive messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( recv_lower || recv_upper ) {
             dim3 grid( local_ntiles.x, 2 );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+            T * lower = ( recv_lower ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( recv_upper ) ? msg_recv.upper -> buffer : nullptr;
 
             kernel::copy_to_gc_y_recv <<< grid, block >>>(
                 lower, upper, view()
@@ -1750,8 +1762,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     /**
@@ -1824,17 +1836,23 @@ class tiled {
         // Disable messages if only 1 node along  x direction
         if ( part.dims.x == 1 ) lnode = unode = -1;
 
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.x.lower > 0;
+        const bool send_upper = unode >= 0 && gc.x.upper > 0;
+        const bool recv_lower = lnode >= 0 && gc.x.upper > 0;
+        const bool recv_upper = unode >= 0 && gc.x.lower > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Pack send messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( send_lower || send_upper ) {
             dim3 grid( 2, local_ntiles.y );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+            T * lower = ( send_lower ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( send_upper ) ? msg_send.upper -> buffer : nullptr;
 
             kernel::add_from_gc_x_send <<< grid, block >>> (
                 lower, upper, view()
@@ -1843,11 +1861,11 @@ class tiled {
         }
 
         // Send messages
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             int msg_size = ( local_ntiles.y * tile_ext_dims.y ) * gc.x.lower;
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
             int msg_size = ( local_ntiles.y * tile_ext_dims.y ) * gc.x.upper;
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
@@ -1856,16 +1874,16 @@ class tiled {
         local_add_from_gc_x();
 
         // Wait for receive messages
-        if ( lnode >= 0 ) msg_recv.lower-> wait();
-        if ( unode >= 0 ) msg_recv.upper-> wait();
+        if ( recv_lower ) msg_recv.lower-> wait();
+        if ( recv_upper ) msg_recv.upper-> wait();
 
         // Unpack receive messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( recv_lower || recv_upper ) {
             dim3 grid( 2, local_ntiles.y );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+            T * lower = ( recv_lower ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( recv_upper ) ? msg_recv.upper -> buffer : nullptr;
 
             kernel::add_from_gc_x_recv <<< grid, block >>>(
                 lower, upper, view()
@@ -1874,8 +1892,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     /**
@@ -1892,17 +1910,23 @@ class tiled {
         // Disable messages if only 1 node along y direction
         if ( part.dims.y == 1 ) lnode = unode = -1;
 
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.y.lower > 0;
+        const bool send_upper = unode >= 0 && gc.y.upper > 0;
+        const bool recv_lower = lnode >= 0 && gc.y.upper > 0;
+        const bool recv_upper = unode >= 0 && gc.y.lower > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Pack send messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( send_lower || send_upper ) {
             dim3 grid( local_ntiles.x, 2 );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_send.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_send.upper -> buffer : nullptr;
+            T * lower = ( send_lower ) ? msg_send.lower -> buffer : nullptr;
+            T * upper = ( send_upper ) ? msg_send.upper -> buffer : nullptr;
 
             kernel::add_from_gc_y_send <<< grid, block >>> (
                 lower, upper, view()
@@ -1911,13 +1935,13 @@ class tiled {
         }
 
         // Send message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             int msg_size = gc.y.lower * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
         // Send message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
             int msg_size    = gc.y.upper * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
@@ -1926,16 +1950,16 @@ class tiled {
         local_add_from_gc_y();
 
         // Wait for receive messages
-        if ( lnode >= 0 ) msg_recv.lower-> wait();
-        if ( unode >= 0 ) msg_recv.upper-> wait();
+        if ( recv_lower ) msg_recv.lower-> wait();
+        if ( recv_upper ) msg_recv.upper-> wait();
 
         // Unpack receive messages
-        if ( lnode >= 0 || unode >= 0 ) {
+        if ( recv_lower || recv_upper ) {
             dim3 grid( local_ntiles.x, 2 );
             dim3 block( 64 );
 
-            T * lower = ( lnode >= 0 ) ? msg_recv.lower -> buffer : nullptr;
-            T * upper = ( unode >= 0 ) ? msg_recv.upper -> buffer : nullptr;
+            T * lower = ( recv_lower ) ? msg_recv.lower -> buffer : nullptr;
+            T * upper = ( recv_upper ) ? msg_recv.upper -> buffer : nullptr;
 
             kernel::add_from_gc_y_recv <<< grid, block >>>(
                 lower, upper, view()
@@ -1944,8 +1968,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     public:
