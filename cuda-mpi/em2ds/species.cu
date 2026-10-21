@@ -372,10 +372,7 @@ void __launch_bounds__(opt_move_block) move_deposit(
 
    // Select subset of particles to move (if gridDim.z > 1)
     // We are using multiple blocks per tile (blockIdx.z)
-    int set_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
-    
-    // Minimum set size is a warp
-    if ( set_size < gpu::warp_size ) set_size = gpu::warp_size;
+    const int set_size = roundup<gpu::warp_size>(( tile_np + gridDim.z - 1 ) / gridDim.z);
     const int begin = blockIdx.z * set_size;
 
     // If the block does not have any particles to process return
@@ -508,8 +505,7 @@ void push (
 
     // Select subset of particles to move
     // We are using multiple blocks per tile (blockIdx.z)
-    int set_size = ( tile_np + gridDim.z - 1 ) / gridDim.z;
-    if ( set_size < gpu::warp_size ) set_size = gpu::warp_size;
+    const int set_size = roundup<gpu::warp_size>(( tile_np + gridDim.z - 1 ) / gridDim.z);
     const int begin = blockIdx.z * set_size;
 
     // If the block does not have any particles to process then return
@@ -1245,7 +1241,7 @@ void species::save_charge() const {
 
     // Prepare file info
     zdf::grid_axis axis[2];
-    axis[0] = (zdf::grid_axis) {
+    axis[0] = zdf::grid_axis {
         .name = (char *) "x",
         .min = 0.,
         .max = box.x,
@@ -1253,7 +1249,7 @@ void species::save_charge() const {
         .units = (char *) "c/\\omega_n"
     };
 
-    axis[1] = (zdf::grid_axis) {
+    axis[1] = zdf::grid_axis {
         .name = (char *) "y",
         .min = 0.,
         .max = box.y,

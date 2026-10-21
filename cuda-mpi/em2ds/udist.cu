@@ -2,8 +2,11 @@
 #include "udist.hpp"
 #include "util/random.cuh"
 
+#include "util/hash.hpp"
 
 namespace kernel {
+
+constexpr uint32_t udist_rnd_tag = "udist rnd tag"_hash;
 
 __global__
 void none( part::particles_view const part ) {
@@ -72,7 +75,7 @@ void udist::cold::set( part::particles & part, unsigned int seed ) const {
 namespace kernel {
 
 __global__
-void thermal( part::particles_view const part, uint2 rnd_seed, const float3 uth, const float3 ufl ) {
+void thermal( part::particles_view const part, uint2 rnd_key, const float3 uth, const float3 ufl ) {
 
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.local_ntiles.x + tile_idx.x;
@@ -87,19 +90,17 @@ void thermal( part::particles_view const part, uint2 rnd_seed, const float3 uth,
         part.local_tile_start.x + tile_idx.x,
         part.local_tile_start.y + tile_idx.y
     );
-    int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
-
-    uint2 state; double norm;
-    zrandom::rand_init( 
-        global_tid * gpu::block::num_threads() +  gpu::block::thread_rank(),
-        rnd_seed, state, norm
-    );
+    int global_tile_id = global_tile.y * part.global_ntiles.x + global_tile.x;
 
     for( auto i = gpu::block::thread_rank(); i < tile_np; i += gpu::block::num_threads() ) {
+        // Use particle index in the random counter, next particle will use a different counter
+        const uint4 rnd_ctr = make_uint4( i, global_tile_id, 0, udist_rnd_tag );
+        // Generate 4 random deviates from 1 prng call
+        const float4 norm = zrandom::rand_norm4_f(rnd_ctr, rnd_key );
         u[i] = make_float3(
-            ufl.x + uth.x * zrandom::rand_norm( state, norm ),
-            ufl.y + uth.y * zrandom::rand_norm( state, norm ),
-            ufl.z + uth.z * zrandom::rand_norm( state, norm )
+            ufl.x + uth.x * norm.x,
+            ufl.y + uth.y * norm.y,
+            ufl.z + uth.z * norm.z
         );
     }
 }
@@ -112,18 +113,18 @@ void thermal( part::particles_view const part, uint2 rnd_seed, const float3 uth,
  */
 void udist::thermal::set( part::particles & part, unsigned int seed ) const {
 
-    uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
+    uint2 rnd_key = make_uint2( 12345 + seed, 67890 );
 
     auto ntiles = part.get_local_ntiles();
     dim3 grid( ntiles.x, ntiles.y );
     dim3 block( 64 );
-    kernel::thermal <<< grid, block >>> ( part.view(), rnd_seed, uth, ufl );
+    kernel::thermal <<< grid, block >>> ( part.view(), rnd_key, uth, ufl );
 }
 
 namespace kernel {
 
 __global__
-void thermal_corr( part::particles_view const part, uint2 rnd_seed, const float3 uth, const float3 ufl, int const npmin )
+void thermal_corr( part::particles_view const part, uint2 rnd_key, const float3 uth, const float3 ufl, int const npmin )
 {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int   tile_id  = tile_idx.y * part.local_ntiles.x + tile_idx.x;
@@ -141,13 +142,7 @@ void thermal_corr( part::particles_view const part, uint2 rnd_seed, const float3
         part.local_tile_start.x + tile_idx.x,
         part.local_tile_start.y + tile_idx.y
     );
-    int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
-
-    uint2 state; double norm;
-    zrandom::rand_init( 
-        global_tid * gpu::block::num_threads() +  gpu::block::thread_rank(),
-        rnd_seed, state, norm
-    );
+    int global_tile_id = global_tile.y * part.global_ntiles.x + global_tile.x;
 
     // Get shared memory addresses
     extern __shared__ char block_shm[];
@@ -165,10 +160,16 @@ void thermal_corr( part::particles_view const part, uint2 rnd_seed, const float3
     gpu::block::sync();
 
     for( auto i = gpu::block::thread_rank(); i < tile_np; i += gpu::block::num_threads() ) {
+        // Use particle index in the random counter, next particle will use a different counter
+        const uint4 rnd_ctr = make_uint4( i, global_tile_id, 0, udist_rnd_tag );
+        // Generate 4 random deviates from 1 prng call
+        const float4 norm = zrandom::rand_norm4_f(rnd_ctr, rnd_key );
+
+        // Thermal part only; ufl is added after the correction
         float3 upart = make_float3(
-            uth.x * zrandom::rand_norm( state, norm ),
-            uth.y * zrandom::rand_norm( state, norm ),
-            uth.z * zrandom::rand_norm( state, norm )
+            uth.x * norm.x,
+            uth.y * norm.y,
+            uth.z * norm.z
         );
 
         u[i] = upart;
@@ -195,9 +196,15 @@ void thermal_corr( part::particles_view const part, uint2 rnd_seed, const float3
 
     gpu::block::sync();
 
+    // Remove the local fluid fluctuation and restore the temperature:
+    // u_i - <u> ~ N( 0, uth^2 (n-1)/n ), so scaling by sqrt( n / (n-1) )
+    // gives an exactly N( 0, uth^2 ) marginal again. Cells with npcell <= npmin
+    // are left uncorrected (fluid = 0, scale = 1).
     for( auto i = gpu::block::thread_rank(); i < tile_np; i += gpu::block::num_threads() ) {
         int const idx = ix[i].x + ystride * ix[i].y;
-        u[i] += ufl - fluid[idx];
+        int const n   = npcell[idx];
+        float const scale = ( n > npmin ) ? sqrtf( float(n) / float(n - 1) ) : 1.0f;
+        u[i] = ufl + scale * ( u[i] - fluid[idx] );
     }
 }
 
@@ -205,11 +212,15 @@ void thermal_corr( part::particles_view const part, uint2 rnd_seed, const float3
 
 /**
  * @brief Sets particle momentum correcting local ufl fluctuations
- * 
+ *
+ * @note In each cell with more than npmin particles the sample mean of the
+ *       thermal momenta is removed and the remainder rescaled by
+ *       sqrt( n / (n-1) ), so that the cell has fluid momentum exactly ufl and
+ *       the particle momenta keep the requested uth.
  */
 void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const {
 
-    uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
+    uint2 rnd_key = make_uint2( 12345 + seed, 67890 );
 
     auto ntiles = part.get_local_ntiles();
     dim3 grid( ntiles.x, ntiles.y );
@@ -218,5 +229,5 @@ void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const
     const auto bsize = part.get_tile_dims().x * part.get_tile_dims().y;
     const size_t shm_size = bsize * ( sizeof( float3 ) + sizeof( int ) );
     gpu::block::set_shmem_size( kernel::thermal_corr, shm_size );
-    kernel::thermal_corr <<< grid, block, shm_size >>> ( part.view(), rnd_seed, uth, ufl, npmin );
+    kernel::thermal_corr <<< grid, block, shm_size >>> ( part.view(), rnd_key, uth, ufl, npmin );
 }

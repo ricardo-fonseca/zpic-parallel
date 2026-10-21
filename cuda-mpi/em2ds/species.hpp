@@ -234,7 +234,7 @@ public:
      * @param new_density   New density object to be cloned
      */
     virtual void set_density( density::profile const & new_density ) {
-        density.reset( new_density.clone() );
+        density = std::move( new_density.clone() );
 
         // Recompute charge normalization factor in case initialize()
         // has already been called
@@ -256,7 +256,7 @@ public:
      * @param new_udist     New udist object to be cloned
      */
     virtual void set_udist( udist::type const & new_udist ) {
-        udist.reset( new_udist.clone() );
+        udist = std::move( new_udist.clone() );
     }
 
     /**

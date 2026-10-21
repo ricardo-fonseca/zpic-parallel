@@ -3,7 +3,7 @@
 #include <cstring>
 #include <string>
 #include "../core/gpu.cuh"
-#include "device_types.h"
+#include <typeinfo>
 
 namespace gpu {
 
@@ -97,7 +97,7 @@ namespace device {
     template< typename T >
     __host__
     inline void set( T * const __restrict__ d_data, std::size_t const size, const T val ) {
-        
+        if ( size == 0 ) return;
         const auto block = ( size < 1024 ) ? size : 1024 ;
         const auto grid  = ( size - 1 ) / block + 1;
     
@@ -136,6 +136,7 @@ namespace device {
     template< typename T >
     __host__
     inline void add( T * const __restrict__ lhs, T const * const __restrict__ rhs, std::size_t const size ) {
+        if ( size == 0 ) return;
         const auto block = ( size < 1024 ) ? size : 1024 ;
         const auto grid  = ( size - 1 ) / block + 1;
     

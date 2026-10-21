@@ -1,12 +1,14 @@
 #pragma once
 
+#include <memory>
+
 #include "part/particles.hpp"
 
 namespace udist {
 
     class type {
         public:
-        virtual type * clone() const = 0;
+        virtual std::unique_ptr<type> clone() const = 0;
         virtual void set( part::particles & part, unsigned int seed ) const = 0;
         virtual ~type() = default;
     };
@@ -17,7 +19,9 @@ namespace udist {
      */
     class none : public type {
         public:
-        none * clone() const override { return new none(); };
+        std::unique_ptr<type> clone() const override { 
+            return std::make_unique<none>();
+        };
         void set( part::particles & part, unsigned int seed ) const override ;
     };
 
@@ -29,7 +33,9 @@ namespace udist {
         public:
         const float3 ufl;
         cold( float3 const ufl ) : ufl(ufl) {};
-        cold * clone() const override { return new cold(ufl); };
+        std::unique_ptr<type> clone() const override { 
+            return std::make_unique<cold>(ufl);
+        };
         void set( part::particles & part, unsigned int seed ) const override ;
     };
 
@@ -40,7 +46,9 @@ namespace udist {
         thermal( float3 const uth, float3 const ufl ) : uth(uth), ufl(ufl) {};
         thermal( float3 const uth ) : uth(uth), ufl( make_float3(0,0,0) ) {};
 
-        thermal * clone() const override { return new thermal(uth, ufl); };
+        std::unique_ptr<type> clone() const override { 
+            return std::make_unique<thermal>(uth, ufl);
+        };
         void set( part::particles & part, unsigned int seed ) const override ;
     };
 
@@ -52,11 +60,13 @@ namespace udist {
         const int npmin;
         thermal_corr( float3 const uth, float3 const ufl, int const npmin = 2 ) : uth(uth), ufl(ufl), npmin(npmin) {
             if ( npmin <= 1 ) {
-                mpi::fatal( "Invalid npmin (" + std::to_string(npmin) + " parameter, must be > 1" );
+                mpi::fatal( "Invalid npmin (" + std::to_string(npmin) + ") parameter, must be > 1" );
             }
         };
 
-        thermal_corr * clone() const override { return new thermal_corr(uth, ufl,npmin); };
+        std::unique_ptr<type> clone() const override { 
+            return std::make_unique<thermal_corr>(uth, ufl,npmin);
+        };
         void set( part::particles & part, unsigned int seed ) const override ;
     };
 }

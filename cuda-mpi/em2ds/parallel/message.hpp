@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mpi.h"
 #include "mpi.hpp"
 #include "../util/memory.cuh"
 
@@ -23,7 +24,7 @@ class message {
     const MPI_Comm comm;
 
     /// @brief Data buffer - On GPU device memory
-    T * buffer;
+    T * buffer = nullptr;
 
     /// @brief Maximum message size
     const int max_count;
@@ -102,7 +103,7 @@ class message {
         }
 
         int ierr = MPI_Irecv( buffer, max_count, mpi::data_type<T>(), sender, tag, comm, &request);
-        active = ( ierr == MPI_SUCCESS) ? message::receive : message::none;
+        active = ( ierr == MPI_SUCCESS ) ? message::receive : message::none;
         return ierr;
     }
 
@@ -118,6 +119,7 @@ class message {
         }
         int ierr = MPI_Wait( &request, MPI_STATUS_IGNORE );
         active = message::none;
+        request = MPI_REQUEST_NULL;
         return ierr;
     }
 
@@ -139,6 +141,7 @@ class message {
         MPI_Get_count( &status, mpi::data_type<T>(), &count );
         
         active = message::none;
+        request = MPI_REQUEST_NULL;
         return ierr;
     }
 };

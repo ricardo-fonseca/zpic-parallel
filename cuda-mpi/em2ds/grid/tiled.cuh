@@ -1654,13 +1654,13 @@ class tiled {
 
         // Send message - lower neighbor
         if ( send_lower ) {
-            int msg_size = ( tile_ext_dims.y * local_ntiles.y ) * gc.x.upper;
+            const int msg_size = ( tile_ext_dims.y * local_ntiles.y ) * gc.x.upper;
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
         // Send message - upper neighbor
         if ( send_upper ) {
-            int msg_size = ( tile_ext_dims.y * local_ntiles.y ) * gc.x.lower;
+            const int msg_size = ( tile_ext_dims.y * local_ntiles.y ) * gc.x.lower;
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
 
@@ -1732,11 +1732,11 @@ class tiled {
 
         // Post message sends
         if ( send_lower ) {
-            int msg_size =  gc.y.upper * ( local_ntiles.x * tile_ext_dims.x );
+            const int msg_size =  gc.y.upper * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
         if ( send_upper ) {
-            int msg_size = gc.y.lower * ( local_ntiles.x * tile_ext_dims.x );
+            const int msg_size = gc.y.lower * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.upper -> isend( msg_size, unode, dest::upper );
         }
 
@@ -1862,11 +1862,11 @@ class tiled {
 
         // Send messages
         if ( send_lower ) {
-            int msg_size = ( local_ntiles.y * tile_ext_dims.y ) * gc.x.lower;
+            const int msg_size = ( local_ntiles.y * tile_ext_dims.y ) * gc.x.lower;
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
         if ( send_upper ) {
-            int msg_size = ( local_ntiles.y * tile_ext_dims.y ) * gc.x.upper;
+            const int msg_size = ( local_ntiles.y * tile_ext_dims.y ) * gc.x.upper;
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
 
@@ -1936,13 +1936,13 @@ class tiled {
 
         // Send message - lower neighbor
         if ( send_lower ) {
-            int msg_size = gc.y.lower * ( local_ntiles.x * tile_ext_dims.x );
+            const int msg_size = gc.y.lower * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
         // Send message - upper neighbor
         if ( send_upper ) {
-            int msg_size    = gc.y.upper * ( local_ntiles.x * tile_ext_dims.x );
+            const int msg_size    = gc.y.upper * ( local_ntiles.x * tile_ext_dims.x );
             msg_send.upper->isend( msg_size, unode, dest::upper );
         }
 

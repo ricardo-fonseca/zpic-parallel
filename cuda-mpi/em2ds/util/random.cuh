@@ -1,163 +1,276 @@
 #pragma once
 
-#include "../core/vec_types.cuh"
+/**
+ * Counter-based PRNG (Philox4x32-10) for per-thread use in CUDA kernels.
+ *
+ * Salmon, Moraes, Dror & Shaw, "Parallel random numbers: as easy as 1, 2, 3",
+ * SC'11 (Random123). Same generator as cuRAND's Philox4_32_10, but header-only
+ * and usable from both host and device code.
+ */
+
+#include <cstdint>
 #include <cmath>
+#include "../core/vec_types.cuh"
 
 namespace zrandom {
 
 /**
- * @brief Initializes PRNG state
+ * @brief Compute the most and least significant 32 bits of the product of the
+ *        two 32-bit unsigned integers.
  * 
- * @note This is meant to be called by multiple threads supplying different tid values
- *       allowing the PRNG to be used in parallel environment
- * 
- * @param seed      Seed value
- * @param state     PRNG state variable
+ * @param a     Operand a
+ * @param b     Operand b
+ * @param hi    Most significant 32 bits of a*b
+ * @param lo    Least significant 32 bits of a*b
  */
-__host__ __device__
-inline void rand_init( const int global_id, const uint2 seed, uint2 & state ) {
-
-    static_assert( sizeof(seed.x) == 4, "Unsigned int size must be 32 bits" );
-
-    state = make_uint2( 
-        seed.x + global_id ,
-        seed.y + ((global_id)^(0xFFFFFFFF))
-    );
+__host__ __device__ 
+inline void mulhilo32( uint32_t a, uint32_t b, uint32_t & hi, uint32_t & lo ) {
+#ifdef __CUDA_ARCH__
+    lo = a * b;
+    hi = __umulhi( a, b );
+#else
+    uint64_t p = static_cast<uint64_t>(a) * b;
+    lo = static_cast<uint32_t>( p );
+    hi = static_cast<uint32_t>( p >> 32 );
+#endif
 }
 
 /**
- * @brief Initializes PRNG state and Normal distribution generator
+ * @brief Philox4x32-10 bijection: returns 4 random 32-bit words
  * 
- * @note This is meant to be called by multiple threads supplying different tid values
- *       allowing the PRNG to be used in parallel environment
- * 
- * @param seed      Seed value
- * @param state     PRNG state variable
- * @param norm      Normal distribution previous value
+ * @param ctr   Counter (must be unique for each call with the same key)
+ * @param key   PRNG key
+ * @return 
  */
-__host__ __device__
-inline void rand_init( const int global_id, const uint2 seed, uint2 & state, double & norm ) {
-
-    // No previous value 
-    // norm = std::numeric_limits<double>::max();
-    norm = __DBL_MAX__;
-
-    // Initialize state using default routine
-    rand_init( global_id, seed, state );
+__host__ __device__ 
+inline uint4 philox4x32( uint4 ctr, uint2 key ) {
+    #pragma unroll
+    for( int r = 0; r < 10; ++r ) {
+        uint32_t hi0, lo0, hi1, lo1;
+        mulhilo32( 0xD2511F53u, ctr.x, hi0, lo0 );
+        mulhilo32( 0xCD9E8D57u, ctr.z, hi1, lo1 );
+        ctr = make_uint4( hi1 ^ ctr.y ^ key.x, lo1, hi0 ^ ctr.w ^ key.y, lo0 );
+        key.x += 0x9E3779B9u;
+        key.y += 0xBB67AE85u;
+    }
+    return ctr;
 }
 
 /**
- * @brief Returns a 32 bit pseudo random number using Marsaglia MWC algorithm
+ * @brief Convert uint32 to float in [0,1), 24 bit resolution 
  * 
- * Follows George Marsaglia's post to Sci.Stat.Math on 1/12/99:
- * 
- * The  MWC generator concatenates two 16-bit multiply-
- * with-carry generators, x(n)=36969x(n-1)+carry,
- * y(n)=18000y(n-1)+carry  mod 2^16, has period about
- * 2^60 and seems to pass all tests of randomness. A
- * favorite stand-alone generator---faster than KISS,
- * which contains it. [sic]
- * 
- * See for example Numerical Recipes, 3rd edition, Section 7.1.7,
- * "When You Have Only 32-Bit Arithmetic"
- * 
- * @param state     Previous state of the of the PRNG, will be modified by
- *                  this call.
- * @return Random value in the range [0,2^32 - 1]
+ * @param u 
+ * @return float 
  */
-__host__ __device__
-inline unsigned int rand_uint32( uint2 & state ) {
-    state.x = 36969 * (state.x & 65535) + (state.x >> 16);
-    state.y = 18000 * (state.y & 65535) + (state.y >> 16);
-    return (state.x << 16) + state.y;  /* 32-bit result */
-}
-
+__host__ __device__ 
+inline float u01_co_f( uint32_t u ) { return ( u >> 8 ) * 0x1p-24f; }
 
 /**
- * @brief Returns a random number on [0,1]-real-interval (32 bit resolution)
+ * @brief Convert uint32 to float in (0,1), 23 bit resolution
  * 
- * @param state     Previous state of the of the PRNG, will be modified by
- *                  this call.
- * @return double   Random value in the range [0,1]
+ * @param u 
+ * @return float 
+ */
+__host__ __device__ 
+inline float u01_oo_f( uint32_t u ) { return ( ( u >> 9 ) + 0.5f ) * 0x1p-23f; }
+
+/**
+ * @brief Convert uint32 to double in [0,1), 53 bit resolution (uses 2 words)
+ * 
+ * @param a         Word A
+ * @param b         Word B
+ * @return double 
+ */
+__host__ __device__ 
+inline double u01_co_d( uint32_t a, uint32_t b ) {
+    return ( ( a >> 5 ) * 67108864.0 + ( b >> 6 ) ) * 0x1p-53;
+}
+
+/**
+ * @brief Convert uint32 to double in (0,1), 52 bit resolution (uses 2 words)
+ * 
+ * @param a         Word A
+ * @param b         Word B
+ * @return double 
+ */
+__host__ __device__ 
+inline double u01_oo_d( uint32_t a, uint32_t b ) {
+    return ( ( a >> 6 ) * 67108864.0 + ( b >> 6 ) + 0.5 ) * 0x1p-52;
+}
+
+/**
+ * @brief Convert uint32 to float in (0,1]
+ *
+ * @note For use with Box-Muller; 32 bit resolution near 0 (where it matters 
+ *       for the tails, max |n| ~ 6.8 sigma. Rounding to 1.0f near the top is
+ *       harmless (gives radius 0).
+ * 
+ * @param u 
+ * @return float 
+ */
+__host__ __device__ 
+inline float u01_rad_f( uint32_t u ) { return ( u + 0.5f ) * 0x1p-32f; }
+
+/**
+ * @brief Box-Muller method for generating random deviates with a normal
+ *        (Gaussian) distribution
+ *
+ * @note  Takes 2 uint32 random numbers
+ *
+ * @param a         Random value A
+ * @param b         Random value B
+ * @return float2   2 independent N(0,1) floats
+ */
+__host__ __device__ 
+inline float2 box_muller_f( uint32_t a, uint32_t b ) {
+    float rad = sqrtf( -2.0f * logf( u01_rad_f( a ) ) );
+    float u   = u01_co_f( b );
+    float s, c;
+#ifdef __CUDA_ARCH__
+    sincospif( 2.0f * u, &s, &c );
+#else
+    s = sinf( 6.283185307179586f * u ); c = cosf( 6.283185307179586f * u );
+#endif
+    return make_float2( rad * c, rad * s );
+}
+
+/**
+ * @brief Generate two independent N(0,1) floats
+ * 
+ * @param ctr       PRNG counter
+ * @param key       PRNG key
+ * @return float2   2 independent N(0,1) floats
+ */
+__host__ __device__ 
+inline float2 rand_norm2_f( uint4 ctr, uint2 key ) {
+    uint4 r = philox4x32( ctr, key );
+    return box_muller_f( r.x, r.y );
+}
+
+/**
+ * @brief Generate four independent N(0,1) floats
+ * 
+ * @param ctr       PRNG counter
+ * @param key       PRNG key
+ * @return float4   4 independent N(0,1) floats
+ */
+__host__ __device__ 
+inline float4 rand_norm4_f( uint4 ctr, uint2 key ) {
+    uint4 r = philox4x32( ctr, key );
+    float2 n0 = box_muller_f( r.x, r.y );
+    float2 n1 = box_muller_f( r.z, r.w );
+    return make_float4( n0.x, n0.y, n1.x, n1.y );
+}
+
+/**
+ * @brief Generate two independent N(0,1) doubles
+ * 
+ * @note Also uses the Box-Muller algorithm which is reimplemented here in
+ *       double precision
+ *
+ * @param ctr       PRNG counter
+ * @param key       PRNG key
+ * @return float2   2 independent N(0,1) doubles
+ */
+__host__ __device__ 
+inline double2 rand_norm2_d( uint4 ctr, uint2 key ) {
+    uint4 r = philox4x32( ctr, key );
+    double rad = sqrt( -2.0 * log( u01_oo_d( r.x, r.y ) ) );
+    double u   = u01_co_d( r.z, r.w );
+    double s, c;
+#ifdef __CUDA_ARCH__
+    sincospi( 2.0 * u, &s, &c );
+#else
+    s = sin( 6.283185307179586 * u ); c = cos( 6.283185307179586 * u );
+#endif
+    return make_double2( rad * c, rad * s );
+}
+
+// Compatibility interface
+
+/**
+ * @brief PRNG state
+ * 
+ */
+struct rand_state {
+    uint4 ctr;      ///< next counter
+    uint2 key;      ///< seed
+    uint4 buf;      ///< unused words from last Philox call
+    int   nbuf;     ///< number of words left in buf
+};
+
+/**
+ * @brief Initialize random number generator
+ * 
+ * @param stream_id     Unique stream id (e.g. global thread or particle id)
+ * @param seed          Seed value
+ * @param state         PRNG state
+ * @param tag           (optional) Call-site tag, so different uses of the same
+ *                      seed and stream_id get independent numbers
+ */
+__host__ __device__ 
+inline void rand_init( const uint64_t stream_id, const uint2 seed,
+    rand_state & state, const uint32_t tag = 0 ) {
+    state.ctr  = make_uint4( 0, uint32_t( stream_id ), uint32_t( stream_id >> 32 ), tag );
+    state.key  = seed;
+    state.buf  = make_uint4( 0, 0, 0, 0 );
+    state.nbuf = 0;
+}
+
+/**
+ * @brief 32 bit pseudo random number using Philox algorithm
+ * 
+ * @note Given that each Philox call generates 4 new random numbers, we will
+ *       try to use numbers from previous call
+ *
+ * @param state         PRNG state, will be modified by this call
+ * @return uint32_t     Random value
+ */
+__host__ __device__ 
+inline uint32_t rand_uint32( rand_state & state ) {
+    if ( state.nbuf == 0 ) {
+        state.buf  = philox4x32( state.ctr, state.key );
+        state.ctr.x++;
+        state.nbuf = 4;
+    }
+    const uint32_t r = state.buf.x;
+    state.buf = make_uint4( state.buf.y, state.buf.z, state.buf.w, 0 );
+    state.nbuf--;
+    return r;
+}
+
+/**
+ * @brief double on [0,1] (32 bit resolution)
+ * 
+ * @param state 
+ * @return double 
  */
 __host__ __device__
-inline double rand_real1( uint2 & state ) {
+inline double rand_real1( rand_state & state ) {
     return rand_uint32( state ) * 0x1.00000001p-32;
 }
 
 /**
- * @brief Returns a random number on [0,1)-real-interval (32 bit resolution)
+ * @brief double on [0,1) (32 bit resolution); exact k * 2^-32 values
  * 
- * @param state     Previous state of the of the PRNG, will be modified by
- *                  this call.
- * @return double   Random value in the range [0,1)
+ * @param state 
+ * @return double 
  */
 __host__ __device__
-inline double rand_real2( uint2 & state ) {
-    return rand_uint32( state ) * 0x1.00000000fffffp-32;
+inline double rand_real2( rand_state & state ) {
+    return rand_uint32( state ) * 0x1p-32;
 }
 
 /**
- * @brief Returns a random number on (0,1)-real-interval (32 bit resolution)
+ * @brief double on (0,1) (32 bit resolution)
  * 
- * @param state     Previous state of the of the PRNG, will be modified by
- *                  this call.
- * @return double   Random value in the range (0,1)
+ * @param state     PRNG state, will be modified by this call
+ * @return double 
  */
 __host__ __device__
-inline double rand_real3( uint2 & state ) {
-    return ( rand_uint32( state ) + 1.0 ) * 0x1.fffffffep-33;
+inline double rand_real3( rand_state & state ) {
+    return ( rand_uint32( state ) + 0.5 ) * 0x1p-32;
 }
 
-/**
- * @brief Returns a variate of the normal distribution (mean 0, stdev 1)
- * 
- * Uses the Box-Muller method for generating random deviates with a normal
- * (Gaussian) distribution:
- * 
- *  Box, G. E. P.; Muller, Mervin E. (1958). "A Note on the Generation of 
- *  Random Normal Deviates". The Annals of Mathematical Statistics. 29 (2):
- *  610–611. doi:10.1214/aoms/1177706645.
- * 
- * @param state     Previous state of the of the PRNG, will be modified by this
- *                  call
- * @param norm      Previous state of the of the normal random number generator,
- *                  will be modified by this call. The first time the routine
- *                  is called this value should be set to DBL_MAX.
- * 
- * @return Double precision random number following a normal distribution 
- */
-__host__ __device__
-inline double rand_norm( uint2 & state, double & norm ) {
-    double res;
-
-    // if ( norm == std::numeric_limits<double>::max() ) {
-    if ( norm == __DBL_MAX__ ) {
-
-        double v1, v2, rsq, fac;
-        do {
-            v1 = rand_real3( state ) * 2.0 - 1.0;
-            v2 = rand_real3( state ) * 2.0 - 1.0;
-
-            // check if they are inside the unit circle, and not (0,0)
-            // otherwise try again
-            rsq = v1*v1 + v2*v2;
-
-        } while ( rsq == 0.0 || rsq >= 1.0 );
-
-        // Use Box-Muller method to generate random deviates with
-        // normal (gaussian) distribution
-        fac = std::sqrt(-2.0 * std::log(rsq)/rsq);
-
-        // store 1 value for future use
-        norm = v1*fac;
-        res  = v2*fac;
-    } else {
-        res  = norm;
-        // norm = std::numeric_limits<double>::max();
-        norm = __DBL_MAX__;
-    }
-    return res;
-}
 
 } // namespace zrandom

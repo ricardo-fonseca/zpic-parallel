@@ -979,11 +979,11 @@ int main( int argc, char *argv[] ) {
     // test_poisson();
     // test_laser();
 
-    // test_inj();
+    test_inj();
     // test_mov();
     // test_current_charge();
 
-    test_weibel();
+    // test_weibel();
 
     grid::fft::cleanup();
 

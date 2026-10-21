@@ -45,53 +45,53 @@ template < class T >
 using vec2 = typename vec2_class<T>::type;
 
 #define __GEN_VEC2_UTIL( V, S ) \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator+= ( V& lhs, const V& rhs ) { lhs.x += rhs.x; lhs.y += rhs.y; return lhs; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator-= ( V& lhs, const V& rhs ) { lhs.x -= rhs.x; lhs.y -= rhs.y; return lhs; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator*= ( V& lhs, const V& rhs ) { lhs.x *= rhs.x; lhs.y *= rhs.y; return lhs; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator/= ( V& lhs, const V& rhs ) { lhs.x /= rhs.x; lhs.y /= rhs.y; return lhs; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator+ ( V lhs, const V& rhs ) { lhs += rhs; return lhs; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator- ( V lhs, const V& rhs ) { lhs -= rhs; return lhs; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator* ( V lhs, const V& rhs ) { lhs *= rhs; return lhs;  }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator/ ( V lhs, const V& rhs ) { lhs /= rhs; return lhs;  }\
 \
-__inline__ __host__ \
+__host__ inline \
 std::ostream& operator<<(std::ostream& os, const V& obj) { \
     return os << "(" << obj.x << ", " << obj.y << ")"; } \
 \
-__inline__ __host__ \
+__host__ inline \
 std::string to_string( const V& obj ) { \
     std::ostringstream oss; oss << obj; return oss.str(); \
 } \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 bool operator==( const V &lhs, const V &rhs ) { \
     return lhs.x == rhs.x && lhs.y == rhs.y; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 bool operator!=( const V &lhs, const V &rhs ) { \
     return lhs.x != rhs.x || lhs.y != rhs.y; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 auto dot( const V lhs, const V rhs  ) { return lhs.x*rhs.x + lhs.y*rhs.y; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator*( V v2, const S& s ) { v2.x *= s; v2.y *= s; return v2; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator*( const S& s, V v2 ) { v2.x *= s; v2.y *= s; return v2; } \
 \
 template <> struct vec2_class<S> { using type = V; };
@@ -137,54 +137,54 @@ template < class T >
 using vec3 = typename vec3_class<T>::type;
 
 #define __GEN_VEC3_UTIL( V, S ) \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator+= ( V& lhs, const V& rhs ) { lhs.x += rhs.x; lhs.y += rhs.y; lhs.z += rhs.z; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator-= ( V& lhs, const V& rhs ) { lhs.x -= rhs.x; lhs.y -= rhs.y; lhs.z -= rhs.z; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator*= ( V& lhs, const V& rhs ) { lhs.x *= rhs.x; lhs.y *= rhs.y; lhs.z *= rhs.z; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V& operator/= ( V& lhs, const V& rhs ) { lhs.x /= rhs.x; lhs.y /= rhs.y; lhs.z /= rhs.z; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator+ ( V lhs, const V& rhs ) { lhs += rhs; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator- ( V lhs, const V& rhs ) { lhs -= rhs; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator* ( V lhs, const V& rhs ) { lhs *= rhs; return lhs; }\
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator/ ( V lhs, const V& rhs ) { lhs /= rhs; return lhs; }\
 \
-__inline__ __host__ std::ostream& operator<<(std::ostream& os, const V& obj) { \
+__host__ inline std::ostream& operator<<(std::ostream& os, const V& obj) { \
     return os << "(" << obj.x << ", " << obj.y << ", " << obj.z << ")"; } \
 \
-__inline__ __host__ std::string to_string( const V& obj ) { \
+__host__ inline std::string to_string( const V& obj ) { \
     std::ostringstream oss; oss << obj; return oss.str(); \
 } \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 bool operator==( const V &lhs, const V &rhs ) { \
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 bool operator!=( const V &lhs, const V &rhs ) { \
     return lhs.x != rhs.x || lhs.y != rhs.y || lhs.z != rhs.z; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 auto dot( const V lhs, const V rhs  ) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 auto cross( const V u, const V v  ) { return V{ u.y*v.z - u.z*v.y, u.z*v.x - u.x*v.z, u.x*v.y - u.y*v.x }; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator*( V v3, const S& s ) { v3.x *= s; v3.y *= s; v3.z *= s; return v3; } \
 \
-__inline__ __host__ __device__ \
+__host__ __device__ inline constexpr \
 V operator*( const S& s, V v3 ) { v3.x *= s; v3.y *= s; v3.z *= s; return v3; } \
 \
 template <> struct vec3_class<S> { using type = V; };
