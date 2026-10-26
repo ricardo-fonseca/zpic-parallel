@@ -214,7 +214,7 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u,
 
     {
         const float utsq = fma( ut.z, ut.z, fma( ut.y, ut.y, ut.x * ut.x ) );
-        const float gamma = std::sqrt( 1.0f + utsq );
+        const float gamma = sqrt( 1.0f + utsq );
         
         // Get time centered energy
         energy += utsq / (gamma + 1.0f);
@@ -594,34 +594,21 @@ void species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     uint2 local_ntiles = parallel.grid_size( global_ntiles );
 
     /// @brief Local parallel node grid size
-    auto  local_dims = tile_dims * local_ntiles;
+    uint2  local_dims = tile_dims * local_ntiles;
 
     // Reference number maximum number of particles
     unsigned int max_part = 1.2 * local_dims.x * local_dims.y * ppc.x * ppc.y;
 
-    // Create particle data structure
-    particles = new part::particles( global_ntiles, tile_dims, max_part, parallel );
+    // Validate boundary conditions against the parallel partition
+    validate_bc( global_bc, parallel );
 
-    // Disable periodic boundaries if parallel partition does not support it
-    if ( ! parallel.periodic.x ) {
-        if ( global_bc.x.lower == species::bc::periodic ) {
-            global_bc.x.lower = global_bc.x.upper = species::bc::open;
-        }
-    };
+    // Compute local_bc
+    // (part, tmp and sort are still null here, they get the periodic flags on construction)
+    update_bc( parallel );
 
-    if ( ! parallel.periodic.y ) {
-        if ( global_bc.y.lower == species::bc::periodic ) {
-            global_bc.y.lower = global_bc.y.upper = species::bc::open;
-        }
-    };
-
-    // Set periodic boundaries
-    int2 periodic = {
-        ( global_bc.x.lower == species::bc::periodic ),
-        ( global_bc.y.lower == species::bc::periodic )
-    };
-    particles -> set_periodic( periodic );
-
+    // Create particle data structures 
+    int2 const periodic = global_periodic();
+    particles = new part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
     tmp = new part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
     sort = new part::particle_sort( local_ntiles, max_part, parallel, periodic );
     np_inj = gpu::device::malloc<int>( local_ntiles.x * local_ntiles.y );
@@ -645,10 +632,14 @@ void species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     // Do an exclusive scan to get the required offsets
     auto num_part = gpu::device::exscan_reduce_add( particles -> get_tile_offset(), np_inj, local_ntiles.x * local_ntiles.y );
 
+    // In case the reference maximum number of particles was too small, grow
+    // the buffers. Note: this is just a safeguard, it should never happen
     if ( static_cast<unsigned int>(num_part) > max_part ) {
         mpi::cout << "(*warning*) Particle buffer too small for initial injection,"
                      " growing buffer\n";
         particles -> grow_buffer(num_part);
+        tmp -> grow_buffer(num_part );
+        sort -> check_buffer(num_part);
     }
 
     // Inject the particles
@@ -710,7 +701,8 @@ void species_bcx(
             for( int i = gpu::block::thread_rank(); i < np; i+= gpu::block::num_threads() ) {
                 if( ix[i].x >=  nx ) {
                     ix[i].x -= 1;
-                    x[i].x = -x[i].x;
+                    // Protects against x[i].x exactly == -0.5
+                    x[i].x = fminf( -x[i].x, nextafterf( 0.5f, 0.f ) );
                     u[i].x = -u[i].x;
                 }
             }
@@ -773,7 +765,8 @@ void species_bcy(
             for( int i = gpu::block::thread_rank(); i < np; i+= gpu::block::num_threads() ) {
                 if( ix[i].y >=  ny ) {
                     ix[i].y -= 1;
-                    x[i].y = -x[i].y;
+                    // Protects against x[i].y exactly == -0.5
+                    x[i].y = fminf( -x[i].y, nextafterf( 0.5f, 0.f ) );
                     u[i].y = -u[i].y;
                 }
             }
@@ -804,7 +797,7 @@ void species::process_bc() {
     if ( local_bc.y.lower > species::bc::periodic || local_bc.y.upper > species::bc::periodic ) {
         dim3 block( 1024 );
         dim3 grid( particles->get_local_ntiles().x, 2 );
-        kernel::species_bcx <<< grid, block >>> ( particles -> view(), local_bc );
+        kernel::species_bcy <<< grid, block >>> ( particles -> view(), local_bc );
 
     }
 }
@@ -986,13 +979,9 @@ namespace kernel {
 /**
  * @brief kernel for depositing charge from all species particles
  * 
- * @param d_charge  Charge density grid (will be zeroed by this kernel)
- * @param offset    Offset to position (0,0) of grid
- * @param ext_nx    External tile size (i.e. including guard cells)
- * @param d_tile    Particle tiles information
- * @param d_ix      Particle buffer (cells)
- * @param d_x       Particle buffer (position)
+ * @param part      Particle data
  * @param q         Species charge per particle
+ * @param charge    Charge density grid
  */
 __global__
 void dep_charge_all(
@@ -1027,7 +1016,7 @@ void dep_charge_all(
         const float s0y = 0.5f - x[i].y;
         const float s1y = 0.5f + x[i].y;
 
-        // When use more than 1 thread per tile, these need to be atomic inside tile
+        // Multiple threads per tile, these need to be atomic inside tile
         gpu::block::atomic_fetch_add( &rho[ idx               ], s0y * s0x * q );
         gpu::block::atomic_fetch_add( &rho[ idx + 1           ], s0y * s1x * q );
         gpu::block::atomic_fetch_add( &rho[ idx     + ystride ], s1y * s0x * q );
@@ -1037,11 +1026,9 @@ void dep_charge_all(
    gpu::block::sync();
 
     // Copy data to global memory
-    {
-        float * __restrict__ tgt = charge.tile_buffer(tid);
-        for( unsigned i = 0; i < charge.tile_vol; i ++ )
-            tgt[i] += _charge_buffer[i];
-    } 
+    float * __restrict__ tgt = charge.tile_buffer(tid);
+    for( unsigned i = gpu::block::thread_rank(); i < charge.tile_vol; i += gpu::block::num_threads() )
+        tgt[i] += _charge_buffer[i];
 }
 
 }
@@ -1170,12 +1157,12 @@ void species::save() const {
             float2 scale;
             
             // x and y quantities are scaled before saving to file
-            scale = make_float2( dx.x, 0 );
+            scale = make_float2( dx.x, dx.x/2 );
             particles -> gather( part::quantity::x, scale, d_data );
             gpu::device::memcpy_tohost( h_data, d_data, local );
             zdf::write_cdset( part_file, dsets[0], chunk, file_off );
 
-            scale = make_float2( dx.y, 0 );
+            scale = make_float2( dx.y, dx.y/2 );
             particles -> gather( part::quantity::y, scale, d_data );
             gpu::device::memcpy_tohost( h_data, d_data, local );
             zdf::write_cdset( part_file, dsets[1], chunk, file_off );
@@ -1321,14 +1308,14 @@ void dep_pha1(
     const int shiftx = (part.local_tile_start.x + tile_idx.x) * tile_dims.x;
     const int shifty = (part.local_tile_start.y + tile_idx.y) * tile_dims.y;
 
-    for( int i = 0; i < np; i++ ) {
+    for( int i = gpu::block::thread_rank(); i < np; i += gpu::block::num_threads() ) {
         float d = phasespace::value<quant>( i, shiftx, shifty, ix, x, u );
 
         float n =  (d - range.x ) * pha_rdx - 0.5f;
-        int   k = int( n + 1 ) - 1;
+        int   k = floorf( n );
         float w = n - k;
 
-        // When using multi-threading these need to be atomic accross tiles
+        // Atomic across threads and tiles
         if ((k   >= 0) && (k   < size)) gpu::device::atomic_fetch_add( &d_data[k  ], (1-w) * norm );
         if ((k+1 >= 0) && (k+1 < size)) gpu::device::atomic_fetch_add( &d_data[k+1],    w  * norm );
     }
@@ -1363,17 +1350,17 @@ void dep_pha2(
     const int shiftx = (part.local_tile_start.x + tile_idx.x) * tile_dims.x;
     const int shifty = (part.local_tile_start.y + tile_idx.y) * tile_dims.y;
 
-    for( int i = 0; i < np; i++ ) {
+    for( int i = gpu::block::thread_rank(); i < np; i += gpu::block::num_threads() ) {
         float d0 = phasespace::value<quant0>( i, shiftx, shifty, ix, x, u );;
 
         float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
-        int   k0 = int( n0 + 1 ) - 1;
+        int   k0 = floorf( n0 );
         float w0 = n0 - k0;
 
         float d1 = phasespace::value<quant1>( i, shiftx, shifty, ix, x, u );;
 
         float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
-        int   k1 = int( n1 + 1 ) - 1;
+        int   k1 = floorf( n1 );
         float w1 = n1 - k1;
 
         // Most common case, particle inside grid for all deposits
@@ -1575,7 +1562,7 @@ void species::save_phasespace( phasespace::quantity quant, float2 const range,
     if ( particles -> parallel.root() ) {
         float * h_data = gpu::host::malloc<float>( size );
         gpu::device::memcpy_tohost(  h_data, d_data, size );
-        zdf::save_grid( d_data, info, iter_info, "PHASESPACE/" + name );
+        zdf::save_grid( h_data, info, iter_info, "PHASESPACE/" + name );
         gpu::host::free( h_data );
     }
 

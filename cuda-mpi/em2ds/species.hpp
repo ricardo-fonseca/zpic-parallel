@@ -1,7 +1,10 @@
 #pragma once
 
 #include <string>
+#include <memory>
+#include <cmath>
 
+#include "parallel/partition.hpp"
 #include "part/particles.hpp"
 
 #include "emf.hpp"
@@ -44,7 +47,7 @@ class species {
 public:
 
     enum class pusher{ boris = 0, euler };
-    struct bc { enum type { open = 0, periodic, reflecting }; };
+    struct bc { enum type { open = 0, comm, periodic, reflecting }; };
     using bc_type = bounds_2d<bc::type>;
 
 protected:
@@ -107,6 +110,89 @@ private:
 
     /// @brief Total number of particles moved
     unsigned long long * d_nmove;
+
+
+    /**
+     * @brief Periodic flags (x,y) corresponding to the current global_bc
+     * 
+     * @return int2 
+     */
+    int2 global_periodic() const {
+        return make_int2(
+            global_bc.x.lower == species::bc::periodic,
+            global_bc.y.lower == species::bc::periodic
+        );
+    }
+
+    /**
+     * @brief Validate boundary conditions against the parallel partition
+     * 
+     * @note Calls mpi::fatal() on invalid combinations
+     * 
+     * @param test_bc   Global boundary conditions to validate
+     */
+    void validate_bc( const species::bc_type & test_bc, const mpi::cart2d & parallel ) const {
+
+        if ( test_bc.x.lower == species::bc::comm || test_bc.x.upper == species::bc::comm ||
+             test_bc.y.lower == species::bc::comm || test_bc.y.upper == species::bc::comm  ) {
+            mpi::fatal( "invalid species boundary type, bc::comm is for internal use only");
+        }
+
+        if ( (test_bc.x.lower == species::bc::periodic) || (test_bc.x.upper == species::bc::periodic) ) {
+            if ( test_bc.x.lower != test_bc.x.upper ) {
+                mpi::fatal( "species boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
+            }
+        }
+
+        if ( (test_bc.y.lower == species::bc::periodic) || (test_bc.y.upper == species::bc::periodic) ) {
+            if ( test_bc.y.lower != test_bc.y.upper ) {
+                mpi::fatal( "species boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
+            }
+        }
+
+        // Issue warning for reflecting boundaries
+        if ( mpi::root() ) {
+            if ( test_bc.x.lower == species::bc::reflecting || test_bc.x.upper == species::bc::reflecting ||
+                 test_bc.y.lower == species::bc::reflecting || test_bc.y.upper == species::bc::reflecting ) {
+                std::cout << "(*warning*) Reflecting species bc only fold particles,"
+                             " the spectral field solve remains periodic\n";
+            }
+        }
+
+        // Test against parallel partition
+        if ( ! parallel.periodic.x && test_bc.x.lower == species::bc::periodic ) {
+            mpi::fatal( "Periodic x boundaries require a periodic x parallel partition.");
+        }
+
+        if ( ! parallel.periodic.y && test_bc.y.lower == species::bc::periodic ) {
+            mpi::fatal( "Periodic y boundaries require a periodic y parallel partition.");
+        }
+    }
+
+    /**
+     * @brief Update values of local_bc and other objects from global_bc
+     *
+     * @note Assumes global_bc have been validated
+     */
+    void update_bc( const mpi::cart2d & parallel ) {
+        // update local rank boundary conditions
+        local_bc = global_bc;
+        if ( ! parallel.on_edge( coord::x, edge::lower ) ) local_bc.x.lower = species::bc::comm;
+        if ( ! parallel.on_edge( coord::x, edge::upper ) ) local_bc.x.upper = species::bc::comm;
+        if ( ! parallel.on_edge( coord::y, edge::lower ) ) local_bc.y.lower = species::bc::comm;
+        if ( ! parallel.on_edge( coord::y, edge::upper ) ) local_bc.y.upper = species::bc::comm;
+
+        // Update particles, tmp and sort objects, if initialized
+        int2 periodic = global_periodic();
+        if ( particles ) particles -> set_periodic( periodic );
+        if ( tmp )  tmp -> set_periodic( periodic );
+        if ( sort ) sort -> update_neighbors( parallel, periodic );
+    };
+
 
     /**
      * @brief Deposit 1D phasespace density
@@ -234,7 +320,7 @@ public:
      * @param new_density   New density object to be cloned
      */
     virtual void set_density( density::profile const & new_density ) {
-        density = std::move( new_density.clone() );
+        density = new_density.clone();
 
         // Recompute charge normalization factor in case initialize()
         // has already been called
@@ -256,7 +342,7 @@ public:
      * @param new_udist     New udist object to be cloned
      */
     virtual void set_udist( udist::type const & new_udist ) {
-        udist = std::move( new_udist.clone() );
+        udist = new_udist.clone();
     }
 
     /**
@@ -275,46 +361,15 @@ public:
      */
     void set_bc( species::bc_type new_bc ) {
 
-        // Validate parameters
-        if ( (new_bc.x.lower == species::bc::periodic) || (new_bc.x.upper == species::bc::periodic) ) {
-            if ( new_bc.x.lower != new_bc.x.upper ) {
-                mpi::fatal( "Species boundary type mismatch along x."
-                            " When choosing periodic boundaries both lower and upper types"
-                            " must be set to species::bc::periodic." );
-            }
-        }
-
-        if ( (new_bc.y.lower == species::bc::periodic) || (new_bc.y.upper == species::bc::periodic) ) {
-            if ( new_bc.y.lower != new_bc.y.upper ) {
-                mpi::fatal( "Species boundary type mismatch along y."
-                            " When choosing periodic boundaries both lower and upper types"
-                            " must be set to species::bc::periodic." );
-            }
-        }
-
-        // Only periodic and open boundaries are currently implemented
-        if (( new_bc.x.lower == species::bc::reflecting ) ||
-            ( new_bc.x.upper == species::bc::reflecting ) ||
-            ( new_bc.y.lower == species::bc::reflecting ) ||
-            ( new_bc.y.upper == species::bc::reflecting ) ) {
-            
-            mpi::fatal( "Reflecting boundaries for species is not yet implemented");
-        }
-
         // Store new values
         global_bc = new_bc;
 
-        // Set periodic flags on particle object
-        int2 periodic = make_int2( 
-                global_bc.x.lower == species::bc::periodic,
-                global_bc.y.lower == species::bc::periodic
-            );
-        if ( particles )
-            particles -> set_periodic( periodic );
-
-        // Recompute sort object comm neighbors
-        if ( sort )
-            sort -> update_neighbors( particles->get_parallel(), periodic );
+        // If initialized, update local_bc and other objects
+        if ( particles ) {
+            const auto & parallel = particles -> get_parallel();
+            validate_bc( new_bc, parallel );
+            update_bc( parallel );
+        }
     }
 
     /**
