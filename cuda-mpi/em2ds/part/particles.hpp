@@ -5,7 +5,7 @@
 #include "../core/bounds.hpp"
 #include "../util/memory.cuh"
 #include "../util/math.hpp"
-#include "../zdf/zdf.hpp"
+#include "../zdf/zdf-parallel.hpp"
 
 
 #include "bnd_type.hpp"

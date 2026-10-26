@@ -1,16 +1,99 @@
 #pragma once
 
+/**
+ * C++ interface to the ZDF library (serial)
+ * 
+ * This header has no MPI dependency. For the parallel (MPI) interface include
+ * zdf-parallel.hpp instead, which also includes this file.
+ * 
+ * The C header is included at global scope. The names are also made available inside the
+ * zdf namespace (e.g. zdf::zdf_float32) for compatibility with code that used the previous
+ * version of this header.
+ * 
+ * All functions return 1 on success and 0 on error.
+ */
+
 #include <string>
 #include <complex>
 #include <iostream>
+#include <cstdio>
+#include <cstdint>
+
+#include "zdf.h"
 
 // Forward declaration for the util::complex64 type
 namespace util { class complex64; }
 
 namespace zdf {
 
-#include "zdf.h"
-#include "zdf-parallel.h"
+// C interface names, also available in the zdf namespace
+
+using ::zdf_magic;
+
+using ::zdf_data_type;
+using ::t_zdf_data_type;
+using ::zdf_null;
+using ::zdf_int8;
+using ::zdf_uint8;
+using ::zdf_int16;
+using ::zdf_uint16;
+using ::zdf_int32;
+using ::zdf_uint32;
+using ::zdf_int64;
+using ::zdf_uint64;
+using ::zdf_float32;
+using ::zdf_float64;
+using ::zdf_complex64;
+using ::zdf_complex128;
+
+using ::zdf_file_access_mode;
+using ::ZDF_CREATE;
+using ::ZDF_READ;
+using ::ZDF_UPDATE;
+
+using ::zdf_axis_type;
+using ::zdf_linear;
+using ::zdf_log10;
+using ::zdf_log2;
+
+using ::t_zdf_file;
+using ::t_zdf_dataset;
+using ::t_zdf_chunk;
+using ::t_zdf_grid_axis;
+using ::t_zdf_grid_info;
+using ::t_zdf_iteration;
+using ::t_zdf_part_info;
+using ::t_zdf_track_info;
+
+using ::create_path;
+using ::zdf_sizeof;
+using ::zdf_sizeof_vector;
+using ::zdf_open_file;
+using ::zdf_close_file;
+using ::zdf_vector_write;
+using ::zdf_add_string;
+using ::zdf_add_int32;
+using ::zdf_add_double;
+using ::zdf_add_iteration;
+using ::zdf_add_grid_info;
+using ::zdf_add_part_info;
+using ::zdf_add_track_info;
+using ::zdf_add_dataset;
+using ::zdf_dataset_header_write;
+using ::zdf_start_cdset;
+using ::size_zdf_chunk_header;
+using ::zdf_write_chunk_header;
+using ::zdf_write_cdset;
+using ::zdf_end_cdset;
+using ::zdf_open_dataset;
+using ::zdf_extend_dataset;
+using ::zdf_open_grid_file;
+using ::zdf_save_grid;
+using ::zdf_open_part_file;
+using ::zdf_add_quant_part_file;
+
+
+// Short type names
 
 using grid_info = t_zdf_grid_info;
 using grid_axis = t_zdf_grid_axis;
@@ -19,10 +102,12 @@ using iteration = t_zdf_iteration;
 using part_info = t_zdf_part_info;
 
 using file = t_zdf_file;
-using par_file = t_zdf_par_file;
 using dataset  = t_zdf_dataset;
 
 using chunk = t_zdf_chunk;
+
+
+// Mapping between C++ types and ZDF data types
 
 template< typename T > 
 constexpr t_zdf_data_type data_type () { return zdf_null; };
@@ -33,6 +118,8 @@ template<> constexpr t_zdf_data_type data_type<int16_t >() { return zdf_int16;  
 template<> constexpr t_zdf_data_type data_type<uint16_t>() { return zdf_uint16;  };
 template<> constexpr t_zdf_data_type data_type<int32_t >() { return zdf_int32;   };
 template<> constexpr t_zdf_data_type data_type<uint32_t>() { return zdf_uint32;  };
+template<> constexpr t_zdf_data_type data_type<int64_t >() { return zdf_int64;   };
+template<> constexpr t_zdf_data_type data_type<uint64_t>() { return zdf_uint64;  };
 template<> constexpr t_zdf_data_type data_type<float   >() { return zdf_float32; };
 template<> constexpr t_zdf_data_type data_type<double  >() { return zdf_float64; };
 
@@ -51,10 +138,10 @@ template<> constexpr t_zdf_data_type data_type<util::complex64>() { return zdf_c
  * @param info      Data information
  * @param iter      Iteration information
  * @param path      File path (file name is built from data information)
- * @return int      0 on success, -1 on error
+ * @return int      1 on success, 0 on error
  */
 template< typename T>
-int save_grid( T *buffer, t_zdf_grid_info &info, t_zdf_iteration &iter, std::string path ) {
+int save_grid( T *buffer, const t_zdf_grid_info &info, const t_zdf_iteration &iter, const std::string & path ) {
     static_assert( data_type<T>() != zdf_null, "Unsupported data type");
     return zdf_save_grid( (void*) buffer, data_type<T>(), &info, &iter, path.c_str() );
 }
@@ -68,41 +155,36 @@ int save_grid( T *buffer, t_zdf_grid_info &info, t_zdf_iteration &iter, std::str
  * @param dims      Grid dimensions
  * @param name      Grid name
  * @param filename  File name
- * @return int      0 on success, -1 on error
+ * @return int      1 on success, 0 on error
  */
 template< typename T >
-int save_grid( T *buffer, unsigned ndims, uint64_t dims[], 
-               std::string name, std::string filename )
+int save_grid( T *buffer, unsigned ndims, const uint64_t dims[], 
+               const std::string & name, const std::string & filename )
 {
-    if( data_type<T>() == zdf_null ) {
-        std::cerr << "(*error*) Unsupported datatype, aborting.\n";
-        return(-1);
+    static_assert( data_type<T>() != zdf_null, "Unsupported data type");
+
+    if ( ndims < 1 || ndims > zdf_max_dims ) {
+        std::cerr << "(*error*) Invalid number of dimensions, aborting.\n";
+        return 0;
     }
 
     // Create ZDF file
     t_zdf_file zdf;
     if ( !zdf_open_file( &zdf, filename.c_str(), ZDF_CREATE ) ) {
         std::cerr << "(*error*) Unable to open ZDF file, aborting.\n";
-        return(-1);
+        return 0;
     }
 
-    // Add file type
-    if ( !zdf_add_string( &zdf, "TYPE", "grid") ) return(0);
-
-    // Add grid info
+    // Grid info
     t_zdf_grid_info info;
-    info.name  = (char *) name.c_str();
+    info.name  = name.c_str();
     info.ndims = ndims;
     for( unsigned i = 0; i < ndims; i++ ) info.count[i] = dims[i];
     info.label = nullptr;
     info.units = nullptr;
     info.axis  = nullptr;
 
-    if ( !zdf_add_grid_info( &zdf, &info ) ) return(0);
-
-    // No iteration data
-
-    // Add dataset
+    // Dataset
     t_zdf_dataset dataset;
     dataset.name = info.name;
     dataset.data_type = data_type<T>();
@@ -110,10 +192,16 @@ int save_grid( T *buffer, unsigned ndims, uint64_t dims[],
     dataset.data = (void *) buffer;
     for( unsigned i = 0; i < info.ndims; i ++) dataset.count[i] = info.count[i];
 
-    if ( !zdf_add_dataset( &zdf, &dataset ) ) return(0);
+    // Add file type, grid info and dataset (no iteration data)
+    int ok = zdf_add_string( &zdf, "TYPE", "grid") &&
+             zdf_add_grid_info( &zdf, &info ) &&
+             zdf_add_dataset( &zdf, &dataset );
+
+    if ( !ok ) std::cerr << "(*error*) Unable to write ZDF file " << filename << '\n';
 
     // Close ZDF file and return
-    return( zdf_close_file( &zdf ) );
+    int closed = zdf_close_file( &zdf );
+    return ok && closed;
 }
 
 /**
@@ -123,170 +211,21 @@ int save_grid( T *buffer, unsigned ndims, uint64_t dims[],
  * @param info          Particle data information
  * @param iteration     Interation information
  * @param path          File path (file name is built from particle data information)
- * @return int          0 on success, -1 on error
+ * @return int          1 on success, 0 on error
  */
 inline
-int open_part_file( t_zdf_file &file, t_zdf_part_info &info, t_zdf_iteration &iteration, std::string path ) {
+int open_part_file( t_zdf_file &file, t_zdf_part_info &info, const t_zdf_iteration &iteration, const std::string & path ) {
     return zdf_open_part_file( &file, &info, &iteration, path.c_str() );
 }
 
 inline
-int add_quant_part_file( t_zdf_file &file, std::string name, float * const data, const uint64_t np ) {
+int add_quant_part_file( t_zdf_file &file, const std::string & name, float * const data, const uint64_t np ) {
     return zdf_add_quant_part_file( &file, name.c_str(), data, np );
 }
 
 inline
 int close_file( t_zdf_file &file ) { return zdf_close_file(&file);};
 
-
-// Parallel interfaces
-
-/**
- * @brief Saves a distributed parallel grid in a zdf file
- * 
- * @param buffer    Data to save (float)
- * @param chunk     Local data grid information
- * @param info      Global data grid information
- * @param iter      Iteration metadata
- * @param path      Base path to save the file
- * @param comm      MPI communicator
- * @param io_mode   Parallel I/O algorithm to use, defaults to ZDF_MPI, see zdf
- *                  documentation for details
- * @return int      Returns 1 on success, 0 on error
- */
-template< typename T>
-int save_grid( t_zdf_chunk &chunk, const t_zdf_grid_info &info,
-    const t_zdf_iteration &iter, const std::string & path, const MPI_Comm comm,
-    const t_zdf_parallel_io_mode par_io_mode = ZDF_MPI )
-{
-    static_assert( data_type<T>() != zdf_null, "Unsupported data type");
-    return zdf_par_save_grid( &chunk, data_type<T>(), &info, &iter, path.c_str(), comm, par_io_mode );
-}
-
-/**
- * @brief Saves a distributed parallel grid in a zdf file, minimal metadata
- * 
- * @tparam T            Template datatype
- * @param buffer        Data buffer   
- * @param ndims         Number of dimensions
- * @param global        Global grid size
- * @param start         Position of local chunck on global grid
- * @param local         Local grid size
- * @param name          Grid name (metadata)
- * @param filename      File name
- * @param comm          MPI communicator
- * @param par_io_mode   Parallel I/O mode, defaults to ZDF_MPI
- * @return int 
- */
-template< typename T >
-int save_grid( 
-    T *buffer, const unsigned ndims,
-    const uint64_t global[], const uint64_t start[], const uint64_t local[], 
-    const std::string & name, const std::string & filename, const MPI_Comm comm,
-    const t_zdf_parallel_io_mode par_io_mode = ZDF_MPI )
-{
-    static_assert( data_type<T>() != zdf_null, "Unsupported data type");
-
-    t_zdf_grid_info info;
-    info.name  = (char *) name.c_str();
-    info.ndims = ndims;
-    for( unsigned i = 0; i < ndims; i++ ) info.count[i] = global[i];
-    info.label = nullptr;
-    info.units = nullptr;
-    info.axis  = nullptr;
-
-    t_zdf_chunk chunk;
-    chunk.data = (void *) buffer;
-    for( unsigned i = 0; i < ndims; i++ ) {
-        chunk.count[i] = local[i];
-        chunk.start[i] = start[i];
-        chunk.stride[i] = 1;
-    }
-
-    t_zdf_par_file zdf;
-    if ( !zdf_par_open_file( &zdf, filename.c_str(), ZDF_CREATE, comm, par_io_mode ) ) {
-        std::cerr << "(*error*) Unable to open parallel ZDF file, aborting.\n";
-        return(-1);
-    }
-
-    // Add file type
-    if ( !zdf_par_add_string( &zdf, "TYPE", "grid") ) return(0);
-
-    // No iteration info
-
-    // Add grid info
-    if ( !zdf_par_add_grid_info( &zdf, &info ) ) return(0);
-
-    // Add chunked dataset header
-    t_zdf_dataset dataset;
-    dataset.name = (char *) name.c_str();
-    dataset.data_type = data_type<T>();
-    dataset.ndims = ndims;
-    for( unsigned i = 0; i < ndims; i ++) dataset.count[i] = global[i];
-
-    if ( !zdf_par_start_cdset( &zdf, &dataset ) ) return(0);
-
-    // Write data
-    zdf_par_write_cdset( &zdf, &dataset, &chunk, -1 );
-
-    // Close dataset
-    zdf_par_end_cdset( &zdf, &dataset );
-
-    // Close ZDF file and return
-    return( zdf_par_close_file( &zdf ) );
-}
-
-inline
-int open_part_file( t_zdf_par_file &file, t_zdf_part_info &info, t_zdf_iteration &iteration, std::string path,
-    MPI_Comm comm, t_zdf_parallel_io_mode par_io_mode = ZDF_MPI ) {
-    
-    // Create base path if necessary
-    int rank; 
-    MPI_Comm_rank( comm, & rank );
-    if ( rank == 0 ) create_path( path.c_str() );
-    MPI_Barrier( comm );
-
-    // Prepare filename
-    char filename[1025];
-    snprintf( filename, 1024, "%s/%s-%s-%06u.zdf", path.c_str(), "particles", info.name, (unsigned) iteration.n );
-
-    // Create file
-    if ( !zdf_par_open_file( &file, filename, ZDF_CREATE, comm, par_io_mode ) ) {
-        std::cerr << "(*error*) Unable to open parallel ZDF file, aborting.\n";
-        return(-1);
-    }
-
-    // Add file type
-    if ( !zdf_par_add_string( &file, "TYPE", "particles") ) return(0);
-
-    // Add particle info
-    if ( !zdf_par_add_part_info( &file, &info ) ) return(0);
-
-    // Add iteration info
-    if ( !zdf_par_add_iteration( &file, &iteration ) ) return(0);
-
-    return(1);
-}
-
-inline
-int close_file( t_zdf_par_file &file ) {
-    return zdf_par_close_file( & file );
-};
-
-inline
-int start_cdset( t_zdf_par_file &file, t_zdf_dataset & dataset ) {
-    return zdf_par_start_cdset( & file, & dataset );
-}
-
-inline
-int write_cdset( t_zdf_par_file &file, t_zdf_dataset & dataset, t_zdf_chunk & chunk, const int64_t offset ) {
-    return zdf_par_write_cdset( &file, &dataset, &chunk, offset );
-}
-
-inline
-int end_cdset( t_zdf_par_file &file, t_zdf_dataset & dataset ) {
-    return zdf_par_end_cdset( & file, & dataset );
-}
 
 // End namespace zdf
 }

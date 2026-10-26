@@ -11,7 +11,7 @@
 #include "../core/vec_types.cuh"
 #include "../core/bounds.hpp"
 #include "../parallel/parallel.hpp"
-#include "../zdf/zdf.hpp"
+#include "../zdf/zdf-parallel.hpp"
 
 #include "../util/memory.cuh"
 #include "../util/math.hpp"
