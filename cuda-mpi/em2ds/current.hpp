@@ -95,6 +95,15 @@ class current {
         if ( ! part.periodic.y && test_bc.y.lower == current::bc::periodic ) {
             mpi::fatal( "Periodic y boundaries require a periodic y parallel partition.");
         }
+
+        // Issue warning for reflecting boundaries
+        if ( mpi::root() ) {
+            if ( test_bc.x.lower == current::bc::reflecting || test_bc.x.upper == current::bc::reflecting ||
+                 test_bc.y.lower == current::bc::reflecting || test_bc.y.upper == current::bc::reflecting ) {
+                std::cout << "(*warning*) Reflecting current bc only fold guard cell current,"
+                             " the spectral field solve remains periodic\n";
+            }
+        }
     }
 
     public:
@@ -219,15 +228,6 @@ class current {
         if ( ! part.on_edge( coord::x, edge::upper ) ) local_bc.x.upper = current::bc::none;
         if ( ! part.on_edge( coord::y, edge::lower ) ) local_bc.y.lower = current::bc::none;
         if ( ! part.on_edge( coord::y, edge::upper ) ) local_bc.y.upper = current::bc::none;
-
-        // Issue warning for reflecting boundaries
-        if ( mpi::root() ) {
-            if ( global_bc.x.lower == current::bc::reflecting || global_bc.x.upper == current::bc::reflecting ||
-                 global_bc.y.lower == current::bc::reflecting || global_bc.y.upper == current::bc::reflecting ) {
-                std::cout << "(*warning*) Reflecting current boundaries only fold guard cell current,"
-                             " the spectral field solve remains periodic\n";
-            }
-        }
     }
 
     /**
