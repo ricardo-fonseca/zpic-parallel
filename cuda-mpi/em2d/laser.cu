@@ -85,6 +85,139 @@ inline float lon_env( const laser::envelope & env, const float z ) {
     return 0.0f;
 }
 
+/**
+ * @brief Divergence correction - Prefix scan local data to get longitudinal components
+ * 
+ * @note Must be called with grid( local_dims.y ) and block( gpu::warp_size ).
+ *       Guard cells must be valid on entry.
+ *
+ * @param E_grid        E field grid
+ * @param B_grid        B field grid
+ * @param dx_dy         dx / dy
+ * @param sendbuf       Message send buffer
+ */
+__global__
+void lon_x_scan (
+    grid::tiled_vec3_view<float> E_grid, 
+    grid::tiled_vec3_view<float> B_grid,
+    double const dx_dy, double * const __restrict__ sendbuf
+)
+{
+    // Must be launched with grid(local_dims.y)
+    const int local_dims_y = gridDim.x;
+
+    // Row is block ID
+    const int local_iy = blockIdx.x;
+
+    // Get tile_idx.y
+    const int tile_idx_y = local_iy / E_grid.tile_dims.y;
+    // Get local tiles iy coordinate
+    const int iy = local_iy - tile_idx_y * E_grid.tile_dims.y;
+
+    const int ystride = E_grid.tile_ystride();
+    const int nx      = E_grid.tile_dims.x;
+    const int laneId  = gpu::block::thread_rank();
+
+    // Running sums, kept in registers (same value on all lanes)
+    double divEx = 0;
+    double divBx = 0;
+
+    // Start of the rightmost warp-sized chunk in a tile
+    const int start = ( ( nx - 1 ) / gpu::warp_size ) * gpu::warp_size;
+    
+    // Process tiles right to left
+    for( int tile_idx_x = E_grid.local_ntiles.x - 1; tile_idx_x >= 0; tile_idx_x-- ) {
+
+        float3 * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
+        float3 * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
+
+        // All lanes leave this loop on the same iteration, so full mask
+        // warp operations are safe
+        for( int ix = start + laneId; ix >= 0; ix -= gpu::warp_size ) {
+
+            double dEx = 0;
+            double dBx = 0;
+
+            // If inside tile read x divergence
+            if ( ix < nx ) {
+                dEx = dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
+                dBx = dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
+            }
+
+            // Do a right to left inclusive scan
+            #pragma unroll
+            for( int i = 1; i < gpu::warp_size; i <<= 1 ) {
+                const double tmpE = __shfl_down_sync( gpu::full_mask, dEx, i );
+                const double tmpB = __shfl_down_sync( gpu::full_mask, dBx, i );
+                if ( laneId < gpu::warp_size - i ) {
+                    dEx += tmpE;
+                    dBx += tmpB;
+                }
+            }
+
+            // If inside tile store longitudinal components
+            if ( ix < nx ) {
+                tile_E[ix + iy * ystride].x = divEx + dEx;
+                tile_B[ix + iy * ystride].x = divBx + dBx;
+            }
+
+            // Lane 0 holds the chunk total, broadcast it to all lanes
+            divEx += __shfl_sync( gpu::full_mask, dEx, 0 );
+            divBx += __shfl_sync( gpu::full_mask, dBx, 0 );
+        }
+    }
+    
+    if ( laneId == 0 ) {
+        // Copy final divergence values to send buffer
+        sendbuf[                local_iy ] = divEx;
+        sendbuf[ local_dims_y + local_iy ] = divBx;
+    }
+}
+
+/**
+ * @brief Divergence correction - Add contribution from other parallel nodes
+ * 
+ * @note Must be called with grid( local_dims.y )
+ * 
+ * @param E_grid        E field grid
+ * @param B_grid        B field grid
+ * @param recvbuf       Message receive buffer
+ */
+__global__
+void lon_x_sum (
+    grid::tiled_vec3_view<float> E_grid, 
+    grid::tiled_vec3_view<float> B_grid,
+    double const * const __restrict__ recvbuf
+)
+{
+    // Must be launched with grid(local_dims.y)
+    const int local_dims_y = gridDim.x;
+
+    // Row is block ID
+    const int local_iy = blockIdx.x;
+
+    const double divEx = recvbuf[                local_iy ];
+    const double divBx = recvbuf[ local_dims_y + local_iy ];
+
+    // Get tile_idx.y
+    const int tile_idx_y = local_iy / E_grid.tile_dims.y;
+    // Get local tiles iy coordinate
+    const int iy = local_iy - tile_idx_y * E_grid.tile_dims.y;
+
+    const int ystride = E_grid.tile_ystride();
+
+    for( int tile_idx_x = 0; tile_idx_x < E_grid.local_ntiles.x; tile_idx_x++ ) {
+
+        float3 * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
+        float3 * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
+
+        for( int ix = gpu::block::thread_rank(); ix < E_grid.tile_dims.x; ix += gpu::block::num_threads() ) {
+            tile_E[ ix + iy * ystride ].x += divEx;
+            tile_B[ ix + iy * ystride ].x += divBx;
+        }
+    }    
+}
+
 } // namespace kernel
 } // namespace laser
 
@@ -185,6 +318,9 @@ int laser::pulse::add( emf & emf ) const {
 
     // Add laser to simulation
     if ( ! ierr ) {
+        // Get longitudinal components if needed
+        lon_x( tmp_E, tmp_B, cell_size( tmp_E, emf.box ) );
+
         if ( filter > 0 ) {
             // Filtering along x commutes with the discrete divergence, so
             // the filtered field remains divergence free
@@ -399,7 +535,7 @@ void gaussian(
 /**
  * @brief Launches a Gaussian pulse
  * 
- * The E and B tiled grids have the complete laser field.
+ * The E and B tiled grids have only the transverse field components
  * 
  * @param E     Electric field
  * @param B     Magnetic field
@@ -429,9 +565,6 @@ int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>
     E.copy_to_gc();
     B.copy_to_gc();
 
-    // Set longitudinal components (also updates guard cells on exit)
-    lon_x( E, B, dx );
-
     return 0;
 }
 
@@ -439,138 +572,7 @@ int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>
 namespace laser {
 namespace kernel {
 
-/**
- * @brief Divergence correction - Prefix scan local data to get longitudinal components
- * 
- * @note Must be called with grid( local_dims.y ) and block( gpu::warp_size ).
- *       Guard cells must be valid on entry.
- *
- * @param E_grid        E field grid
- * @param B_grid        B field grid
- * @param dx_dy         dx / dy
- * @param sendbuf       Message send buffer
- */
-__global__
-void lon_x_scan (
-    grid::tiled_vec3_view<float> E_grid, 
-    grid::tiled_vec3_view<float> B_grid,
-    double const dx_dy, double * const __restrict__ sendbuf
-)
-{
-    // Must be launched with grid(local_dims.y)
-    const int local_dims_y = gridDim.x;
 
-    // Row is block ID
-    const int local_iy = blockIdx.x;
-
-    // Get tile_idx.y
-    const int tile_idx_y = local_iy / E_grid.tile_dims.y;
-    // Get local tiles iy coordinate
-    const int iy = local_iy - tile_idx_y * E_grid.tile_dims.y;
-
-    const int ystride = E_grid.tile_ystride();
-    const int nx      = E_grid.tile_dims.x;
-    const int laneId  = gpu::block::thread_rank();
-
-    // Running sums, kept in registers (same value on all lanes)
-    double divEx = 0;
-    double divBx = 0;
-
-    // Start of the rightmost warp-sized chunk in a tile
-    const int start = ( ( nx - 1 ) / gpu::warp_size ) * gpu::warp_size;
-    
-    // Process tiles right to left
-    for( int tile_idx_x = E_grid.local_ntiles.x - 1; tile_idx_x >= 0; tile_idx_x-- ) {
-
-        float3 * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
-        float3 * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
-
-        // All lanes leave this loop on the same iteration, so full mask
-        // warp operations are safe
-        for( int ix = start + laneId; ix >= 0; ix -= gpu::warp_size ) {
-
-            double dEx = 0;
-            double dBx = 0;
-
-            // If inside tile read x divergence
-            if ( ix < nx ) {
-                dEx = dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                dBx = dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
-            }
-
-            // Do a right to left inclusive scan
-            #pragma unroll
-            for( int i = 1; i < gpu::warp_size; i <<= 1 ) {
-                const double tmpE = __shfl_down_sync( gpu::full_mask, dEx, i );
-                const double tmpB = __shfl_down_sync( gpu::full_mask, dBx, i );
-                if ( laneId < gpu::warp_size - i ) {
-                    dEx += tmpE;
-                    dBx += tmpB;
-                }
-            }
-
-            // If inside tile store longitudinal components
-            if ( ix < nx ) {
-                tile_E[ix + iy * ystride].x = divEx + dEx;
-                tile_B[ix + iy * ystride].x = divBx + dBx;
-            }
-
-            // Lane 0 holds the chunk total, broadcast it to all lanes
-            divEx += __shfl_sync( gpu::full_mask, dEx, 0 );
-            divBx += __shfl_sync( gpu::full_mask, dBx, 0 );
-        }
-    }
-    
-    if ( laneId == 0 ) {
-        // Copy final divergence values to send buffer
-        sendbuf[                local_iy ] = divEx;
-        sendbuf[ local_dims_y + local_iy ] = divBx;
-    }
-}
-
-/**
- * @brief Divergence correction - Add contribution from other parallel nodes
- * 
- * @note Must be called with grid( local_dims.y )
- * 
- * @param E_grid        E field grid
- * @param B_grid        B field grid
- * @param recvbuf       Message receive buffer
- */
-__global__
-void lon_x_sum (
-    grid::tiled_vec3_view<float> E_grid, 
-    grid::tiled_vec3_view<float> B_grid,
-    double const * const __restrict__ recvbuf
-)
-{
-    // Must be launched with grid(local_dims.y)
-    const int local_dims_y = gridDim.x;
-
-    // Row is block ID
-    const int local_iy = blockIdx.x;
-
-    const double divEx = recvbuf[                local_iy ];
-    const double divBx = recvbuf[ local_dims_y + local_iy ];
-
-    // Get tile_idx.y
-    const int tile_idx_y = local_iy / E_grid.tile_dims.y;
-    // Get local tiles iy coordinate
-    const int iy = local_iy - tile_idx_y * E_grid.tile_dims.y;
-
-    const int ystride = E_grid.tile_ystride();
-
-    for( int tile_idx_x = 0; tile_idx_x < E_grid.local_ntiles.x; tile_idx_x++ ) {
-
-        float3 * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
-        float3 * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
-
-        for( int ix = gpu::block::thread_rank(); ix < E_grid.tile_dims.x; ix += gpu::block::num_threads() ) {
-            tile_E[ ix + iy * ystride ].x += divEx;
-            tile_B[ ix + iy * ystride ].x += divBx;
-        }
-    }    
-}
 
 } // namespace kernel
 } // namespace laser

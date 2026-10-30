@@ -120,7 +120,8 @@ class pulse {
 
     /**
      * @brief Launch a laser pulse
-     * @note Sets E and B fields to the laser field
+     * @note Sets the transverse components of the E and B laser fields. The
+     *       longitudinal components are set by lon_x(), called from add().
      * 
      * @param E     Electric field
      * @param B     Magnetic field
@@ -131,8 +132,8 @@ class pulse {
 
     /**
      * @brief Sets longitudinal component
-     * @note Enforces div.fld = 0 by setting x component. Guard cells must be
-     *       valid on entry, and are updated on exit.
+     * @note Enforces div.E = div.B = 0 by setting E.x and B.x components.
+     *       Guard cells must be valid on entry, and are updated on exit.
      * 
      * @param E     E field
      * @param B     B field
@@ -143,6 +144,8 @@ class pulse {
 
     /**
      * @brief Adds a new laser pulse onto an EMF object
+     *
+     * @note This calls lon_x() to compute longitudinal components before adding the fields
      * 
      * @param emf   EMF object
      * @return      Returns 0 on success
