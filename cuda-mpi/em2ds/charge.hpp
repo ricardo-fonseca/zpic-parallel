@@ -250,7 +250,7 @@ class charge {
      * @param new_filter    New filter object
      */
     void set_filter( const filter::digital & new_filter ) {
-        filter.reset( new_filter.clone() );
+        filter = new_filter.clone();
     }
 
     /**

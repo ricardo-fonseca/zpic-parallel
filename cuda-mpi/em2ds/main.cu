@@ -1,7 +1,6 @@
 #include <iostream>
 
 #include "core/gpu.cuh"
-#include "device_types.h"
 #include "grid/tiled.cuh"
 #include "grid/tiled_vec3.cuh"
 
@@ -37,7 +36,7 @@ void test_tiled(
     }
 }
 
-}
+} // namespace kernel
 
 void test_tiled_grid( ) {
     
@@ -644,7 +643,6 @@ void test_laser( ) {
     laser.W0 = 1.5;
     laser.focus = 20.48;
     laser.axis = 12.8;
-
     
     laser.sin_pol = 0;
     laser.cos_pol = 1;
@@ -963,7 +961,7 @@ int main( int argc, char *argv[] ) {
 
     // Initialize the MPI environment
     mpi::init( & argc, & argv );
-
+    // Initialize the gpu device
     gpu::parallel_init( MPI_COMM_WORLD );
 
     info();
@@ -977,9 +975,9 @@ int main( int argc, char *argv[] ) {
 
     // test_fft_tile();
     // test_poisson();
-    // test_laser();
+    test_laser();
 
-    test_inj();
+    // test_inj();
     // test_mov();
     // test_current_charge();
 

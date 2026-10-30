@@ -1,11 +1,11 @@
-#include "core/gpu.cuh"
 #include "species.hpp"
+
 #include <vector>
 #include <cstddef>
 #include <iostream>
 #include <string>
 
-
+#include "core/gpu.cuh"
 #include "grid/tiled.cuh"
 #include "parallel/partition.hpp"
 #include "util/memory.cuh"
@@ -485,7 +485,6 @@ void __launch_bounds__(opt_move_block) move_deposit(
  * @brief Advance particle velocities
  * 
  * @tparam type         Pusher type
- * @param tile_idx      Tile index
  * @param part          Particle data view
  * @param E_grid        E field tiled grid view
  * @param B_grid        B fiels tiled grid view
@@ -494,7 +493,7 @@ void __launch_bounds__(opt_move_block) move_deposit(
  */
 template < species::pusher type >
 __global__
-void push ( 
+void __launch_bounds__(opt_push_block) push ( 
     part::particles_view const part,
     grid::tiled_view<float3> const E_grid, grid::tiled_view<float3> const B_grid,
     float const alpha, double * __restrict__ d_energy )
@@ -804,11 +803,12 @@ void species::process_bc() {
 
 
 /**
- * @brief Moves particles and deposit current
+ * @brief Moves particles and deposit current/charge
  * 
- * current will be accumulated on existing data
+ * current/charge will be accumulated on existing data
  * 
  * @param current   current grid
+ * @param charge    charge grid
  */
 void species::move( grid::tiled_vec3<float> & J, grid::tiled<float> & rho )
 {

@@ -13,7 +13,7 @@ using complex_t = util::complex64;
     
 class digital {
     public:
-    virtual digital * clone() const = 0;
+    virtual std::unique_ptr<digital> clone() const = 0;
     virtual void apply( grid::flat<complex_t> & fld )  = 0;
     virtual void apply( grid::flat3<complex_t> & fld ) = 0;
     virtual ~digital() = default;
@@ -21,7 +21,10 @@ class digital {
 
 class none : public digital {
     public:
-    none * clone() const override { return new none(); };
+    std::unique_ptr<digital> clone() const override {
+        return std::make_unique<none>( *this );
+    }
+
     void apply( grid::flat<complex_t> & ) override { /* do nothing */ };
     void apply( grid::flat3<complex_t> & ) override { /* do nothing */ };
 };
@@ -139,7 +142,10 @@ class lowpass : public digital {
         }
     };
 
-    lowpass * clone() const override { return new lowpass ( cutoff ); };
+    std::unique_ptr<digital> clone() const override {
+        return std::make_unique<lowpass>( *this );
+    }
+
 
     void apply( grid::flat<complex_t> & fld ) override {
         const auto nrows = fld.get_local_dims().y;

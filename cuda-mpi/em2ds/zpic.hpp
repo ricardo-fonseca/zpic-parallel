@@ -74,6 +74,7 @@ class simulation {
 
     private:
 
+    /// @brief number of iterations
     unsigned int iter;
 
     public:
@@ -165,7 +166,7 @@ class simulation {
      *
      * @param s     Particle species 
      */
-    inline void add_species( class species & s ) {
+    void add_species( class species & s ) {
         species.push_back( &s );
         s.initialize( box, global_ntiles, tile_dims, dt, species.size(), parallel );
     }
@@ -176,7 +177,7 @@ class simulation {
      * @param name                species name
      * @return species const* 
      */
-    inline class species * get_species( const std::string & name ) {
+    class species * get_species( const std::string & name ) {
         unsigned id = 0;
         for( id = 0; id < species.size(); id++ )
             if ( (species[id])->name == name ) break;
@@ -187,7 +188,7 @@ class simulation {
      * @brief Advance simulation 1 iteration
      * 
      */
-    inline void advance( ) {
+    void advance( ) {
 
         // Zero global current and charge
         current.zero( );
@@ -213,20 +214,20 @@ class simulation {
      * 
      * @return unsigned int     Iteration
      */
-    inline unsigned int get_iter() const { return iter; };
+    unsigned int get_iter() const { return iter; };
 
     /**
      * @brief Get current simulation time
      * 
      * @return double   simulation time
      */
-    inline double get_t() const { return iter * double(dt); };
+    double get_t() const { return iter * double(dt); };
 
     /**
      * @brief Print global energy diagnostic
      * @note must be called by all MPI nodes
      */
-    inline void energy_info() {
+    void energy_info() {
         if ( parallel.root() ) {
             std::cout << "(*info*) Energy at n = " << iter << ", t = " << iter * double(dt)  << '\n';
         }
@@ -267,12 +268,24 @@ class simulation {
     /**
      * @brief Returns total number of particles moved
      * 
-     * @return unsigned long long 
+     * @note The default behavior is to only return the global result on the
+     *       root MPI node.
+     * 
+     * @param all           (optional) Set to true to return value on all MPI
+     *                      nodes, defaults to false
+     * @return uint64_t 
      */
-    inline uint64_t get_nmove() const {
+    uint64_t get_nmove( bool all = false ) {
         uint64_t nmove = 0;
         for ( auto & sp : species ) 
             nmove += sp -> get_nmove();
+        
+        if ( all ) {
+            parallel.allreduce( &nmove, 1, mpi::sum );
+        } else {
+            parallel.reduce( &nmove, 1, mpi::sum );
+        }
+
         return nmove;
     }
 };

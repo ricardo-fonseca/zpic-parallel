@@ -476,21 +476,21 @@ public:
      * 3. Sort particles according to tiles
      * 
      * @param current   Electric current density
+     * @param charge    Electric charge density
      */
     virtual void advance( current &current, charge &charge ) {
 
-        // Advance positions and deposit current
+        // Advance positions and deposit current/charge
         move( * current.J, * charge.rho );
 
         // Process physical boundary conditions
         process_bc();
 
-        // Increase internal iteration number
-        iter++;
-        
         // Sort particles according to tile
         particles -> tile_sort( *tmp, *sort );
 
+        // Increase internal iteration number
+        iter++;
     }
 
     /**
@@ -502,8 +502,9 @@ public:
     * 3. Process boundary conditions
     * 4. Sort particles according to tiles
     * 
-    * @param emf       EM fields
-    * @param current   Electric durrent density
+    * @param emf        EM fields
+    * @param current    Electric durrent density
+    * @param charge     Electric charge density
     */
     virtual void advance( emf const &emf, current &current, charge &charge ){
 
@@ -516,11 +517,11 @@ public:
         // Process physical boundary conditions
         process_bc();
 
-        // Increase internal iteration number
-        iter++;
-        
         // Sort particles according to tile
         particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
     }
 
 
