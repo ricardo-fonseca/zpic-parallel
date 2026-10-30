@@ -1,9 +1,8 @@
-#ifndef CATHODE_H_
-#define CATHODE_H_
+#pragma once
 
-#include "species.h"
+#include "species.hpp"
 
-class Cathode : public Species {
+class cathode : public species {
 
 private:
 
@@ -39,30 +38,30 @@ public:
     /// @brief Reference density for cathode
     float n0;
 
-    Cathode( std::string const name, float const m_q, uint2 const ppc, 
+    cathode( std::string const name, float const m_q, uint2 const ppc, 
         edge::pos wall, float ufl );
 
     void initialize( float2 const box, uint2 const ntiles, uint2 const nx,
         float const dt, int const id_, sycl::queue & queue ) override;
     
-    ~Cathode();
+    ~cathode();
 
     void advance( EMF const &emf, Current &current ) override;
 
     void advance( Current &current ) override;
 
     int set_moving_window() override {
-        std::cerr << "(*error*) Cathodes cannot be used with moving windows, aborting...\n";
+        std::cerr << "(*error*) cathodes cannot be used with moving windows, aborting...\n";
         exit(1);
     }
 
     void set_udist( UDistribution::Type const & new_udist ) override {
-        std::cerr << "(*error*) Cathodes do not support the set_udist() method, use the uth parameter instead\n";
+        std::cerr << "(*error*) cathodes do not support the set_udist() method, use the uth parameter instead\n";
         exit(1);
     }
 
     void set_density( Density::Profile const & new_density ) override {
-        std::cerr << "(*error*) Cathodes do not support the set_density() method, use the n0 parameter instead\n";
+        std::cerr << "(*error*) cathodes do not support the set_density() method, use the n0 parameter instead\n";
         exit(1);
     }
 
@@ -72,5 +71,3 @@ public:
 
     virtual void np_inject( bnd<unsigned int> range, int * np ) override;
 };
-
-#endif

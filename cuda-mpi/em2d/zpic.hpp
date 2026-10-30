@@ -1,48 +1,106 @@
-#ifndef SIMULATION_H_
-#define SIMULATION_H_
+#pragma once
 
-#include "zpic.h"
-
-#include "parallel.h"
-#include "emf.h"
-#include "current.h"
-#include "species.h"
-
-#include "timer.h"
-
+#include <cmath>
 #include <vector>
 
-class Simulation {
+#include "core/vec_types.cuh"
+#include "parallel/mpi.hpp"
+#include "parallel/partition.hpp"
+#include "core/gpu.cuh"
+
+#include "emf.hpp"
+#include "current.hpp"
+#include "species.hpp"
+
+namespace zpic {
+
+/**
+ * @brief Print out system information
+ *
+ * @note Only root node prints any information
+ * 
+ */
+inline void sys_info() {
+    if ( mpi::root() ) {
+
+        std::cout << "MPI running on " << mpi::size() << " processes\n";
+
+        gpu::print_info();
+    }
+}
+
+/**
+ * @brief EM2D simulation
+ * 
+ */
+class simulation {
+
+    public:
+
+    /**
+    * @brief CFL time limit from cell size
+    * 
+    * @param dx        Cell size
+    * @return float    CFL time limit
+    */
+    static float courant( const float2 dx ) {
+        return std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    }
+
+    /**
+    * @brief CFL time limit number cells and box size 
+    * 
+    * @param gnx       Global number of cells
+    * @param box       Simulation box size (global)
+    * @return float    CFL time limit
+    */
+    static float courant( const uint2 gnx, const float2 box  ) {
+        float2 dx = make_float2( box.x/gnx.x, box.y/gnx.y);
+        return courant(dx);
+    }
+
+    /**
+    * @brief CFL time limit from number of tiles, tile size and simulation box size
+    * 
+    * @param ntiles    Number of tiles
+    * @param nx        Number of cells per tile
+    * @param box       Simulation box size (global)
+    * @return float    CFL time limit
+    */
+    static float courant( const uint2 ntiles, const uint2 nx, const float2 box ) {
+        float2 dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
+        return courant(dx);
+    }
 
     private:
 
+    /// @brief number of iterations
     unsigned int iter;
 
     public:
 
     /// @brief Global number of tiles
     const uint2 global_ntiles;
-    /// @brief Tile grid size
-    const uint2 nx;
+    /// @brief Tile grid dimensions
+    const uint2 tile_dims;
     /// @brief Global simulation box size
     const float2 box;
     /// @brief Time step
     const float dt;
 
     /// @brief MPI parallel partition
-    Partition parallel;
+    mpi::cart2d parallel;
 
-    /// @brief EM fields    
-    EMF emf;
-
-    /// @brief Current density
-    Current current;
+    /// @brief EM fields
+    emf emf;
+    /// @brief Electric current density
+    current current;
 
     /// @brief Vector of particle species
-    std::vector <Species*> species;
+    std::vector <species*> species;
 
     /**
-     * @brief Construct a new Simulation object
+     * @brief Construct a new simulation object
      * 
      * @note Global periodic boundaries are set to true
      * 
@@ -52,16 +110,17 @@ class Simulation {
      * @param dt                Time step
      * @param partition         Parallel partition (number of parallel nodes in each direction)
      */
-    Simulation( uint2 const global_ntiles, uint2 const nx, float2 const box, float const dt, uint2 partition ):
+    simulation( const uint2 global_ntiles, const uint2 tile_dims, const float2 box, const float dt, 
+        const uint2 partition ):
         iter(0), 
-        global_ntiles( global_ntiles ), nx( nx ), box( box ), dt( dt ), 
+        global_ntiles( global_ntiles ), tile_dims( tile_dims ), box( box ), dt( dt ), 
         parallel( partition ),
-        emf( global_ntiles, nx, box, dt, parallel ),
-        current( global_ntiles, nx, box, dt, parallel ) {
+        emf( global_ntiles, tile_dims, box, dt, parallel ),
+        current( global_ntiles, tile_dims, box, dt, parallel ) {
     }
 
     /**
-     * @brief Construct a new Simulation object
+     * @brief Construct a new simulation object
      * 
      * @param global_ntiles     Global number of tiles
      * @param nx                Individual tile grid size
@@ -70,20 +129,32 @@ class Simulation {
      * @param partition         Parallel partition (number of parallel nodes in each direction)
      * @param periodic          Global periodic boundaries
      */
-    Simulation( uint2 const global_ntiles, uint2 const nx, float2 const box, float const dt, 
-        uint2 const partition, int2 const periodic ):
+    simulation( const uint2 global_ntiles, const uint2 tile_dims, const float2 box, const float dt, 
+        const uint2 partition, const int2 periodic ):
         iter(0), 
-        global_ntiles( global_ntiles ), nx( nx ), box( box ), dt( dt ), 
+        global_ntiles( global_ntiles ), tile_dims( tile_dims ), box( box ), dt( dt ), 
         parallel( partition, periodic ),
-        emf( global_ntiles, nx, box, dt, parallel ),
-        current( global_ntiles, nx, box, dt, parallel ) {
+        emf( global_ntiles, tile_dims, box, dt, parallel ),
+        current( global_ntiles, tile_dims, box, dt, parallel ) {
     }
 
     /**
-     * @brief Destroy the Simulation object
+     * @brief Copy constructor
      * 
      */
-    ~Simulation() {
+    simulation( const simulation & ) = delete;
+    
+    /**
+     * @brief Move constructor
+     * 
+     */
+    simulation( simulation && ) = delete;
+
+    /**
+     * @brief Destroy the simulation object
+     * 
+     */
+    ~simulation() {
     };
 
     /**
@@ -102,18 +173,18 @@ class Simulation {
      *
      * @param s     Particle species 
      */
-    void add_species( Species & s ) {
+    void add_species( class species & s ) {
         species.push_back( &s );
-        s.initialize( box, global_ntiles, nx, dt, species.size(), parallel );
+        s.initialize( box, global_ntiles, tile_dims, dt, species.size(), parallel );
     }
 
     /**
      * @brief Gets a pointer to a specific species object
      * 
-     * @param name                Species name
-     * @return Species const* 
+     * @param name                species name
+     * @return species const* 
      */
-    Species * get_species( std::string name ) {
+    class species * get_species( const std::string & name ) {
         unsigned id = 0;
         for( id = 0; id < species.size(); id++ )
             if ( (species[id])->name == name ) break;
@@ -247,5 +318,4 @@ class Simulation {
     }
 };
 
-
-#endif
+} // namespace zpic

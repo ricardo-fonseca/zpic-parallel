@@ -544,47 +544,120 @@ void x_shift_left( tiled_view<T> tiles, const unsigned shift )
         buffer[idx] = local[idx];
 }
 
+/**
+ * @brief CUDA kernel for a 3 point convolution [a,b,c] along x
+ * 
+ * @note The tile is copied to shared memory and the result is written
+ *       directly to global memory. Guard cells are not modified (except as
+ *       noted below) and must be updated afterwards.
+ * 
+ * @note With ext = 1 the result is also computed on the first upper x guard
+ *       column and the first upper y guard row (ix = nx, iy = ny). Requires
+ *       gc.x.upper >= 2 and gc.y.upper >= 1. This is needed when a physical
+ *       boundary node lies on the first upper guard cell (e.g. PEC / PMC
+ *       walls on a staggered grid); on internal tile boundaries these values
+ *       are overwritten by the subsequent guard cell update.
+ * 
+ * @param ext   0 - interior only, 1 - include first upper guard row/column
+ */
 template< typename T, typename S >
 __global__
-void kernel3_x( tiled_view<T> tiles, S const a, S const b, S const c )
+void kernel3_x( tiled_view<T> tiles, S const a, S const b, S const c, int const ext )
 {
-    auto * shm = gpu::block::shared_mem<T>();
+    auto * __restrict__ A = gpu::block::shared_mem<T>();
 
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
     T * __restrict__ buffer = tiles.tile_buffer( tile_idx );
 
-    T * __restrict__ A = & shm[0];
-    T * __restrict__ B = & shm[tiles.tile_vol];
-
     // Copy data from tile buffer
     for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        A[i] = B[i] = buffer[i];
+        A[i] = buffer[i];
 
     // Synchronize 
     gpu::block::sync();
 
-    // Apply kernel locally
-    const int  ystride  = tiles.tile_ystride();
-    for( int idx = gpu::block::thread_rank(); idx < tiles.tile_dims.y * tiles.tile_dims.x ; idx += gpu::block::num_threads() ) {
-        const int iy = idx / tiles.tile_dims.x;
-        const int ix = idx % tiles.tile_dims.x;
-        B [ iy * ystride + ix + tiles.inner_offset ] = 
-            A[ iy * ystride + (ix-1) + tiles.inner_offset ] * a +
-            A[ iy * ystride +  ix    + tiles.inner_offset ] * b +
-            A[ iy * ystride + (ix+1) + tiles.inner_offset ] * c;
+    // Apply kernel, written directly to the tile buffer
+    const int ystride = tiles.tile_ystride();
+    const int nx      = tiles.tile_dims.x + ext;
+    const int ny      = tiles.tile_dims.y + ext;
+    const int offset  = tiles.inner_offset;
+
+    for( int idx = gpu::block::thread_rank(); idx < ny * nx; idx += gpu::block::num_threads() ) {
+        const int iy = idx / nx;
+        const int ix = idx % nx;
+        const int k  = iy * ystride + ix + offset;
+        buffer[ k ] = A[ k - 1 ] * a +
+                      A[ k     ] * b +
+                      A[ k + 1 ] * c;
     }
-
-    // Synchronize 
-    gpu::block::sync();
-
-    // Copy data back to tile buffer
-    for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        buffer[i] = B[i];
 }
 
+/**
+ * @brief CUDA kernel for a 3 point convolution [a,b,c] along y
+ * 
+ * @note The tile is copied to shared memory and the result is written
+ *       directly to global memory. Guard cells are not modified (except as
+ *       noted below) and must be updated afterwards.
+ * 
+ * @note With ext = 1 the result is also computed on the first upper x guard
+ *       column and the first upper y guard row (ix = nx, iy = ny). Requires
+ *       gc.y.upper >= 2 and gc.x.upper >= 1. See kernel3_x().
+ * 
+ * @param ext   0 - interior only, 1 - include first upper guard row/column
+ */
 template< typename T, typename S >
 __global__
-void kernel3_y( tiled_view<T> tiles, S const a, S const b, S const c )
+void kernel3_y( tiled_view<T> tiles, S const a, S const b, S const c, int const ext )
+{
+    auto * __restrict__ A = gpu::block::shared_mem<T>();
+
+    const uint2  tile_idx = { blockIdx.x, blockIdx.y };
+    T * __restrict__ buffer = tiles.tile_buffer( tile_idx );
+
+    // Copy data from tile buffer
+    for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
+        A[i] = buffer[i];
+
+    // Synchronize 
+    gpu::block::sync();
+
+    // Apply kernel, written directly to the tile buffer
+    const int ystride = tiles.tile_ystride();
+    const int nx      = tiles.tile_dims.x + ext;
+    const int ny      = tiles.tile_dims.y + ext;
+    const int offset  = tiles.inner_offset;
+
+    for( int idx = gpu::block::thread_rank(); idx < ny * nx; idx += gpu::block::num_threads() ) {
+        const int iy = idx / nx;
+        const int ix = idx % nx;
+        const int k  = iy * ystride + ix + offset;
+        buffer[ k ] = A[ k - ystride ] * a +
+                      A[ k           ] * b +
+                      A[ k + ystride ] * c;
+    }
+}
+
+/**
+ * @brief CUDA kernel for a separable 3x3 convolution, [a,b,c] along x
+ *        followed by [a,b,c] along y
+ * 
+ * @note The x pass is applied to the tile's interior rows and to the first
+ *       lower / upper y guard rows, so that the y pass can be done locally.
+ *       This reads the corner guard cells, which must be up to date (as is
+ *       the case after copy_to_gc()).
+ * 
+ * @note With ext = 1 the result is also computed on the first upper x guard
+ *       column and the first upper y guard row (ix = nx, iy = ny). Requires
+ *       gc.x.upper >= 2 and gc.y.upper >= 2. See kernel3_x().
+ * 
+ * @note Only the tile interior (plus the extension above, if requested) is
+ *       written; guard cells must be updated afterwards.
+ * 
+ * @param ext   0 - interior only, 1 - include first upper guard row/column
+ */
+template< typename T, typename S >
+__global__
+void kernel3_xy( tiled_view<T> tiles, S const a, S const b, S const c, int const ext )
 {
     auto * shm = gpu::block::shared_mem<T>();
 
@@ -596,29 +669,38 @@ void kernel3_y( tiled_view<T> tiles, S const a, S const b, S const c )
 
     // Copy data from tile buffer
     for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        A[i] = B[i] = buffer[i];
+        A[i] = buffer[i];
 
     // Synchronize 
     gpu::block::sync();
 
-    // Apply kernel locally
-    const int  ystride  = tiles.tile_ystride();
-    for( int idx = gpu::block::thread_rank(); idx < tiles.tile_dims.y * tiles.tile_dims.x ; idx += gpu::block::num_threads() ) {
-        const int iy = idx / tiles.tile_dims.x;
-        const int ix = idx % tiles.tile_dims.x;
+    const int ystride = tiles.tile_ystride();
+    const int nx      = tiles.tile_dims.x + ext;
+    const int ny      = tiles.tile_dims.y + ext;
+    const int offset  = tiles.inner_offset;
 
-        B [ iy * ystride + ix + tiles.inner_offset ] =
-            A[ (iy-1) * ystride + ix + tiles.inner_offset ] * a +
-            A[    iy  * ystride + ix + tiles.inner_offset ] * b +
-            A[ (iy+1) * ystride + ix + tiles.inner_offset ] * c;
+    // x pass, rows -1 to ny (inclusive)
+    for( int idx = gpu::block::thread_rank(); idx < ( ny + 2 ) * nx; idx += gpu::block::num_threads() ) {
+        const int iy = idx / nx - 1;
+        const int ix = idx % nx;
+        const int k  = iy * ystride + ix + offset;
+        B[ k ] = A[ k - 1 ] * a +
+                 A[ k     ] * b +
+                 A[ k + 1 ] * c;
     }
 
     // Synchronize 
     gpu::block::sync();
 
-    // Copy data back to tile buffer
-    for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        buffer[i] = B[i];
+    // y pass, written directly to the tile buffer
+    for( int idx = gpu::block::thread_rank(); idx < ny * nx; idx += gpu::block::num_threads() ) {
+        const int iy = idx / nx;
+        const int ix = idx % nx;
+        const int k  = iy * ystride + ix + offset;
+        buffer[ k ] = B[ k - ystride ] * a +
+                      B[ k           ] * b +
+                      B[ k + ystride ] * c;
+    }
 }
 
 template< typename T >
@@ -2019,18 +2101,30 @@ class tiled {
     /**
      * @brief Perform a convolution with a 3 point kernel [a,b,c] along x
      * 
-     * @param a     Kernel value a
-     * @param b     Kernel value b
-     * @param c     Kernel value c
+     * @note Guard cells must be up to date on entry. Guard cells are updated
+     *       on exit.
+     * 
+     * @param a             Kernel value a
+     * @param b             Kernel value b
+     * @param c             Kernel value c
+     * @param upper_ext     (optional) Also compute the result on the first
+     *                      upper x guard column and first upper y guard row,
+     *                      see kernel::kernel3_x(). Requires gc.x.upper >= 2
+     *                      and gc.y.upper >= 1
      */
     template < typename S >
-    void kernel3_x( S const a, S const b, S const c ) {
+    void kernel3_x( S const a, S const b, S const c, bool const upper_ext = false ) {
 
         if (( gc.x.lower > 0) && (gc.x.upper > 0)) {
 
+            if ( upper_ext && ( gc.x.upper < 2 || gc.y.upper < 1 ) ) {
+                mpi::fatal( "kernel3_x() with upper_ext requires at least 2 upper x guard cells"
+                            " and 1 upper y guard cell." );
+            }
+
             dim3 grid( local_ntiles.x, local_ntiles.y );
 
-            size_t shm_size = 2 * tile_vol * sizeof(T);
+            size_t shm_size = tile_vol * sizeof(T);
 
             if ( shm_size > gpu::block::shared_mem_size() ) {
                 mpi::fatal("grid::kernel3_x(), tile size too large, insufficient shared memory");
@@ -2038,14 +2132,14 @@ class tiled {
 
             gpu::block::set_shmem_size( kernel::kernel3_x<T,S>, shm_size );
             kernel::kernel3_x <<< grid, 1024, shm_size >>> ( 
-                view(), a, b, c
+                view(), a, b, c, upper_ext ? 1 : 0
             ); 
 
             // Update guard cells
             copy_to_gc();
 
         } else {
-            mpi::fatal( "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries." );
+            mpi::fatal( "kernel3_x() requires at least 1 guard cell at both the lower and upper x boundaries." );
         }
 
     }
@@ -2053,18 +2147,30 @@ class tiled {
     /**
      * @brief Perform a convolution with a 3 point kernel [a,b,c] along y
      * 
-     * @param a     Kernel value a
-     * @param b     Kernel value b
-     * @param c     Kernel value c
+     * @note Guard cells must be up to date on entry. Guard cells are updated
+     *       on exit.
+     * 
+     * @param a             Kernel value a
+     * @param b             Kernel value b
+     * @param c             Kernel value c
+     * @param upper_ext     (optional) Also compute the result on the first
+     *                      upper x guard column and first upper y guard row,
+     *                      see kernel::kernel3_y(). Requires gc.y.upper >= 2
+     *                      and gc.x.upper >= 1
      */
     template < typename S >
-    void kernel3_y( S const a, S const b, S const c ) {
+    void kernel3_y( S const a, S const b, S const c, bool const upper_ext = false ) {
 
         if (( gc.y.lower > 0) && (gc.y.upper > 0)) {
 
+            if ( upper_ext && ( gc.y.upper < 2 || gc.x.upper < 1 ) ) {
+                mpi::fatal( "kernel3_y() with upper_ext requires at least 2 upper y guard cells"
+                            " and 1 upper x guard cell." );
+            }
+
             dim3 grid( local_ntiles.x, local_ntiles.y );
 
-            size_t shm_size = 2 * tile_vol * sizeof(T);
+            size_t shm_size = tile_vol * sizeof(T);
 
             if ( shm_size > gpu::block::shared_mem_size() ) {
                 mpi::fatal("grid::kernel3_y(), tile size too large, insufficient shared memory");
@@ -2072,7 +2178,7 @@ class tiled {
 
             gpu::block::set_shmem_size( kernel::kernel3_y<T,S>, shm_size );
             kernel::kernel3_y <<< grid, 1024, shm_size >>> ( 
-                view(), a, b, c
+                view(), a, b, c, upper_ext ? 1 : 0
             ); 
 
             // Update guard cells
@@ -2080,6 +2186,57 @@ class tiled {
 
         } else {
             mpi::fatal( "kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries." );
+        }
+
+    }
+
+    /**
+     * @brief Perform a separable 2D convolution with a 3 point kernel [a,b,c]
+     *        along x and y
+     * 
+     * @note Equivalent to kernel3_x( a, b, c ) followed by kernel3_y( a, b, c ),
+     *       i.e. a 3x3 kernel [a,b,c] ⊗ [a,b,c], but with a single kernel
+     *       launch and a single guard cell update.
+     * 
+     * @note Guard cells (including corners) must be up to date on entry, as
+     *       with kernel3_x() / kernel3_y(). Guard cells are updated on exit.
+     * 
+     * @param a             Kernel value a
+     * @param b             Kernel value b
+     * @param c             Kernel value c
+     * @param upper_ext     (optional) Also compute the result on the first
+     *                      upper x guard column and first upper y guard row,
+     *                      see kernel::kernel3_xy(). Requires gc.x.upper >= 2
+     *                      and gc.y.upper >= 2
+     */
+    template < typename S >
+    void kernel3_xy( S const a, S const b, S const c, bool const upper_ext = false ) {
+
+        if (( gc.x.lower > 0) && (gc.x.upper > 0) && 
+            ( gc.y.lower > 0) && (gc.y.upper > 0)) {
+
+            if ( upper_ext && ( gc.x.upper < 2 || gc.y.upper < 2 ) ) {
+                mpi::fatal( "kernel3_xy() with upper_ext requires at least 2 upper x and y guard cells." );
+            }
+
+            dim3 grid( local_ntiles.x, local_ntiles.y );
+
+            size_t shm_size = 2 * tile_vol * sizeof(T);
+
+            if ( shm_size > gpu::block::shared_mem_size() ) {
+                mpi::fatal("grid::kernel3_xy(), tile size too large, insufficient shared memory");
+            }
+
+            gpu::block::set_shmem_size( kernel::kernel3_xy<T,S>, shm_size );
+            kernel::kernel3_xy <<< grid, 1024, shm_size >>> ( 
+                view(), a, b, c, upper_ext ? 1 : 0
+            ); 
+
+            // Update guard cells
+            copy_to_gc();
+
+        } else {
+            mpi::fatal( "kernel3_xy() requires at least 1 guard cell at all x and y boundaries." );
         }
 
     }

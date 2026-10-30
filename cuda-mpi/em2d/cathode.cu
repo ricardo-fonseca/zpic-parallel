@@ -1,8 +1,8 @@
-#include "cathode.h"
-#include "random.h"
+#include "cathode.hpp"
+#include "util/random.hpp"
 
 /**
- * ## Cathode algorithm
+ * ## cathode algorithm
  * 
  * To minimize differences from a free streaming species with the same (fluid)
  * velocity, this implementation of the cathode stores `ppc.x` longitudinal
@@ -23,18 +23,18 @@
 
 
 /**
- * @brief Construct a new Cathode:: Cathode object
+ * @brief Construct a new cathode:: cathode object
  * 
- * @param name      Cathode name
+ * @param name      cathode name
  * @param m_q       Mass over charge ratio
  * @param ppc       Number of particles per cell
  * @param ufl       Fluid velocity
  */
-Cathode::Cathode( std::string const name, float const m_q, uint2 const ppc, edge::pos wall, float ufl ):
+cathode::cathode( std::string const name, float const m_q, uint2 const ppc, edge::pos wall, float ufl ):
     Species( name, m_q, ppc ), ufl( sycl::fabs(ufl) ), wall( wall )
 { 
     if ( ufl == 0 ) {
-        std::cerr << "(*error*) Cathodes cannot have ufl = 0, aborting...\n";
+        std::cerr << "(*error*) cathodes cannot have ufl = 0, aborting...\n";
         exit(1);
     }
 
@@ -54,10 +54,10 @@ Cathode::Cathode( std::string const name, float const m_q, uint2 const ppc, edge
  * @param dt_       Time step
  * @param id_       Species unique id
  */
-void Cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
+void cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
     float const dt_, int const id_, sycl::queue & queue_ ) {
 
-    // Cathode velocity (always > 0)
+    // cathode velocity (always > 0)
     vel = (ufl / sqrtf( ops::fma( ufl , ufl , 1.0f ) ));
 
     // Initialize position of cathode particles in the cell outside the box
@@ -99,10 +99,10 @@ void Cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
 }
 
 /**
- * @brief Destroy the Cathode
+ * @brief Destroy the cathode
  * 
  */
-Cathode::~Cathode() {
+cathode::~cathode() {
     device::free( d_inj_pos, * queue );
 }
 
@@ -112,7 +112,7 @@ Cathode::~Cathode() {
  * This will only happen if iter == 0 and start < 0
  * This also sets the velocity of the injected particles
  */
-void Cathode::inject() {
+void cathode::inject() {
     
     if ( iter == 0 && start < 0 ) {
 
@@ -132,7 +132,7 @@ void Cathode::inject() {
  * 
  * @param range     Cell range in which to inject
  */
-void Cathode::inject( bnd<unsigned int> range ) {
+void cathode::inject( bnd<unsigned int> range ) {
 
     if ( iter == 0 && start < 0 ) {
         Species::inject( range );
@@ -148,7 +148,7 @@ void Cathode::inject( bnd<unsigned int> range ) {
  * @param range 
  * @param np 
  */
-void Cathode::np_inject( bnd<unsigned int> range, int * np ) {
+void cathode::np_inject( bnd<unsigned int> range, int * np ) {
     
     if ( iter == 0 && start < 0 ) {
         Species::np_inject( range, np );
@@ -158,12 +158,14 @@ void Cathode::np_inject( bnd<unsigned int> range, int * np ) {
 }
 
 
+namespace kernel {
+
 /**
  * @brief Kernel for injecting cathode particles from lower wall
  * 
  * @param tile_idx      Tile index
  * @param d_inj_pos     Pointer to injection position
- * @param ufl           Cathode flow generalized velocity
+ * @param ufl           cathode flow generalized velocity
  * @param uth           Temperature for injected particles
  * @param seed          RNG seed
  * @param ppc           Number of particles per cell
@@ -256,7 +258,7 @@ void inject_cathode_lower(
  * 
  * @param tile_idx      Tile index
  * @param d_inj_pos     Pointer to injection position
- * @param ufl           Cathode flow generalized velocity
+ * @param ufl           cathode flow generalized velocity
  * @param uth           Temperature for injected particles
  * @param seed          RNG seed
  * @param ppc           Number of particles per cell
@@ -433,13 +435,15 @@ void np_inject_cathode_upper(
         np[ tile_id ] = *inj_np_local * ppc.y * part.nx.y;
 }
 
+}
+
 /**
  * @brief Count how many particles will be injected into each tile
  * 
  * The routine also updates d_inj_pos (position of injection particles)
  * 
  */
-void Cathode::cathode_np_inject( int * np )
+void cathode::cathode_np_inject( int * np )
 {
 
     // Injection will be zero on most tiles
@@ -490,7 +494,7 @@ void Cathode::cathode_np_inject( int * np )
  * @brief Inject new cathode particles
  * 
  */
-void Cathode::cathode_inject( )
+void cathode::cathode_inject( )
 {
     uint2 rnd_seed = {12345 + (unsigned int) iter, 67890 + (unsigned int ) id };
 
@@ -541,7 +545,7 @@ void Cathode::cathode_inject( )
  * @brief Updates injection position of cathode particles
  * 
  */
-void Cathode::update_inj_pos() {
+void cathode::update_inj_pos() {
     float motion = vel * dt / dx.x;
 
     const auto d_inj_pos = this -> d_inj_pos;
@@ -581,7 +585,7 @@ void Cathode::update_inj_pos() {
  * @param emf 
  * @param current 
  */
-void Cathode::advance( EMF const &emf, Current &current ) 
+void cathode::advance( EMF const &emf, Current &current ) 
 {
 
     // Advance momenta
@@ -609,7 +613,7 @@ void Cathode::advance( EMF const &emf, Current &current )
         cathode_inject() ;
 
     } else {
-        // Cathode is not active, just sort particles normally
+        // cathode is not active, just sort particles normally
         particles -> tile_sort( *tmp, *sort );
     } 
 
@@ -624,7 +628,7 @@ void Cathode::advance( EMF const &emf, Current &current )
  * 
  * @param current 
  */
-void Cathode::advance( Current &current ) 
+void cathode::advance( Current &current ) 
 {
     // Advance positions and deposit current
     move( current.J );

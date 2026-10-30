@@ -1,8 +1,6 @@
-#ifndef MOVING_WINDOW_H_
-#define MOVING_WINDOW_H_
+#pragma once
 
-
-class MovingWindow {
+class moving_window {
     private:
     bool active_;
     unsigned int n_move_;
@@ -10,7 +8,7 @@ class MovingWindow {
 
     public:
 
-    MovingWindow() : active_(false), n_move_(0), dx_(0) {};
+    moving_window() : active_(false), n_move_(0), dx_(0) {};
 
     /**
      * @brief Turns moving window on
@@ -20,6 +18,16 @@ class MovingWindow {
         active_ = true;
         n_move_ = 0;
         dx_ = dx;
+    }
+
+    /**
+     * @brief Turns moving window on
+     * 
+     */
+    void init( float const box, unsigned int const ncells ) {
+        active_ = true;
+        n_move_ = 0;
+        dx_ = box / ncells;
     }
 
     bool active() const {
@@ -53,5 +61,3 @@ class MovingWindow {
         return active_ && (t > dx_*(n_move_+1));
     }
 };
-
-#endif

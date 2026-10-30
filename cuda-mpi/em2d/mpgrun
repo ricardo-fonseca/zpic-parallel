@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#
+# mpgrun - run a CUDA test with several processes sharing one GPU
+#
+# Usage:  ./mpgrun <nproc> <binary> [binary args...]
+#
+# Optional environment overrides:
+#   GPU=0                 GPU to share (default 0)
+#   MPIRUN=mpirun         MPI launcher (default mpirun)
+#   NVSHMEM_DEBUG=INFO    enable NVSHMEM debug output (default: unset)
+
+# bash safety settings
+# -e            Exit immediately if a command fails
+# -u            Treat use of undefined variables as an error
+# -o pipefail   Fail if any of pipe commands fails
+set -euo pipefail
+
+usage() {
+    echo "Usage: $0 <nproc> <binary> [binary args...]" >&2
+    exit 1
+}
+
+[[ $# -lt 2 ]] && usage
+
+NP=$1
+BIN=$2
+shift 2
+
+if ! [[ "$NP" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: number of processes must be a positive integer (got '$NP')" >&2
+    exit 1
+fi
+
+if [[ ! -x "$BIN" ]]; then
+    echo "Error: '$BIN' not found or not executable" >&2
+    exit 1
+fi
+
+if (( NP > 100 )); then
+    echo "Error: at most 100 processes per GPU (each needs >= 1% of the SMs)" >&2
+    exit 1
+fi
+
+command -v nvidia-cuda-mps-control >/dev/null || {
+    echo "Error: nvidia-cuda-mps-control not found in PATH" >&2
+    exit 1
+}
+
+MPIRUN=${MPIRUN:-mpirun}
+GPU=${GPU:-0}
+
+# --- GPU selection: every rank sees only the shared GPU (as device 0) -------
+export CUDA_VISIBLE_DEVICES=$GPU
+
+# --- MPS setup ---------------------------------------------------------------
+export CUDA_MPS_PIPE_DIRECTORY=${CUDA_MPS_PIPE_DIRECTORY:-/tmp/mps_pipe_$USER}
+export CUDA_MPS_LOG_DIRECTORY=${CUDA_MPS_LOG_DIRECTORY:-/tmp/mps_log_$USER}
+mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+
+STARTED_MPS=0
+if pgrep -u "$USER" -x nvidia-cuda-mps-control >/dev/null; then
+    echo "[mpgrun] Using already running MPS daemon"
+else
+    echo "[mpgrun] Starting MPS daemon"
+    nvidia-cuda-mps-control -d
+    STARTED_MPS=1
+    sleep 1
+fi
+
+cleanup() {
+    if (( STARTED_MPS )); then
+        echo "[mpgrun] Stopping MPS daemon"
+        echo quit | nvidia-cuda-mps-control || true
+    fi
+}
+trap cleanup EXIT
+
+# Split the GPU evenly so the active thread percentages sum to <= 100
+export CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=$(( 100 / NP ))
+
+# --- NVSHMEM settings for single-node, multi-PE-per-GPU runs ------------------
+export NVSHMEM_REMOTE_TRANSPORT=none   # no InfiniBand needed on one node
+export NVSHMEM_DISABLE_NCCL=1          # NCCL doesn't support MPG anyway
+
+echo "[mpgrun] $NP processes on GPU $GPU, ${CUDA_MPS_ACTIVE_THREAD_PERCENTAGE}% SMs each"
+echo "[mpgrun] $MPIRUN -np $NP $BIN $*"
+
+"$MPIRUN" -np "$NP" "$BIN" "$@"
