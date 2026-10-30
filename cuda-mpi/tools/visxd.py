@@ -741,7 +741,8 @@ def _species_prefix(info):
     return _esc(label) + "\\;-\\;" if label else ""
 
 
-def _part2D(particles, info, filename, qx, qy, **kwargs):
+def _part2D(particles, info, filename, qx='x', qy='y', xlim=None, ylim=None,
+            grid=True, marker='.', ms=1, alpha=1, **kwargs):
     _check_quant(info, qx, filename)
     _check_quant(info, qy, filename)
 
@@ -754,17 +755,20 @@ def _part2D(particles, info, filename, qx, qy, **kwargs):
     kwargs.setdefault("xtitle", _qlabel(qlabels[qx], qunits[qx]))
     kwargs.setdefault("ytitle", _qlabel(qlabels[qy], qunits[qy]))
 
-    return plot1d(particles[qx], particles[qy], **kwargs)
+    return plot1d(particles[qx], particles[qy], xlim=xlim, ylim=ylim, grid=grid,
+                  marker=marker, ms=ms, alpha=alpha, **kwargs)
 
 
-def part2D(filename, qx, qy, xlim=None, ylim=None, grid=True,
+def part2D(filename, qx='x', qy='y', xlim=None, ylim=None, grid=True,
            marker='.', ms=1, alpha=1, **kwargs):
     """Generates an (x,y) scatter plot from a ZDF particle file.
 
     Args:
         filename (str): Name of ZDF file to open.
-        qx (str): x axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
-        qy (str): y axis quantity, usually one of "x", "y", "ux", "uy", "uz", etc.
+        qx (str, optional): x axis quantity, usually one of "x", "y", "ux",
+            "uy", "uz", etc. Defaults to "x".
+        qy (str, optional): y axis quantity, usually one of "x", "y", "ux",
+            "uy", "uz", etc. Defaults to "y".
         xlim (list, optional): Range of values for the x-axis. Defaults to the
             limits of the `qx` particle data.
         ylim (list, optional): Range of values for the y-axis. Defaults to the
@@ -863,7 +867,9 @@ def plot_data(data, iteration=None, **kwargs):
             "{data}-{iteration:06d}.zdf". The old `iter=` keyword is also
             accepted.
         **kwargs: Additional arguments passed to `grid1d()`, `grid2d()` or
-            `part2D()`. Particle files require the `qx` and `qy` arguments.
+            `part2D()`. For particle files, `qx` and `qy` select the
+            quantities to plot (default "x" and "y"), and the `part2D()`
+            defaults apply (marker='.', ms=1).
 
     Returns:
         The artist(s) created by the selected plotting function.
@@ -883,12 +889,7 @@ def plot_data(data, iteration=None, **kwargs):
         return _plot_grid(obj, info, filename, **kwargs)
 
     if info.type == "particles":
-        qx = kwargs.pop("qx", None)
-        qy = kwargs.pop("qy", None)
-        if qx is None or qy is None:
-            raise ValueError("Particle file {}: the 'qx' and 'qy' quantities "
-                             "must be specified".format(filename))
-        return _part2D(obj, info, filename, qx, qy, **kwargs)
+        return _part2D(obj, info, filename, **kwargs)
 
     raise ValueError("{}: unsupported file type '{}'".format(filename, info.type))
 
