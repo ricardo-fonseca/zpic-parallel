@@ -42,6 +42,9 @@ struct tiled_view {
     /// @brief Tile volume (may be larger than tile_ext_dim.x * tile_ext_dim.y for alignment)
     const std::size_t tile_vol;
 
+    /// @brief Start position of local tiles in global tile grid
+    uint2 local_tile_start;
+
     /**
      * @brief Buffer size
      * 
@@ -534,7 +537,7 @@ void x_shift_left( tiled_view<T> tiles, const unsigned shift )
         if ( i + shift < tiles.tile_ext_dims.x ) {
             local[ i + j * ystride ] = buffer[ (i + shift) + j * ystride ];
         } else {
-            local[ i + j * ystride ] = T{0};
+            local[ i + j * ystride ] = T{};
         }
     }
 
@@ -1291,7 +1294,8 @@ class tiled {
             tile_ext_dims, 
             inner_offset, 
             gc,
-            tile_vol };
+            tile_vol,
+            local_tile_start };
     }
 
     /**
@@ -1311,7 +1315,8 @@ class tiled {
             tile_ext_dims, 
             inner_offset, 
             gc,
-            tile_vol };
+            tile_vol,
+            local_tile_start };
     }
 
     /**
@@ -2261,7 +2266,7 @@ class tiled {
         info.count[1] = global_ntiles.y * tile_dims.y;
 
         // Allocate buffers on host and device to gather data
-        const std::size_t bsize = local_dims.x * local_dims.y;
+        const std::size_t bsize = static_cast<std::size_t>(local_dims.x) * local_dims.y;
         T2 * h_data = gpu::host::malloc<T2>( bsize );
         T2 * d_data = gpu::device::malloc<T2>( bsize );
 
@@ -2300,7 +2305,7 @@ class tiled {
     template< typename T2 = T >
     void save( const std::string & filename ) {
         // Allocate buffers on host and device to gather data
-        const std::size_t bsize = local_dims.x * local_dims.y;
+        const std::size_t bsize = static_cast<std::size_t>(local_dims.x) * local_dims.y;
         T2 * h_data = gpu::host::malloc<T2>( bsize );
         T2 * d_data = gpu::device::malloc<T2>( bsize );
 

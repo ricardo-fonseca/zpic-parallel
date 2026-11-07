@@ -269,7 +269,7 @@ namespace warp {
         }
 
         value = __shfl_up_sync( gpu::full_mask, value, 1 );
-        return ( laneId > 0 ) ? value : T{0};
+        return ( laneId > 0 ) ? value : T{};
     }
     
     /**
@@ -360,7 +360,48 @@ namespace block {
         extern __shared__ char block_shm[];
         return reinterpret_cast<T *>(block_shm);
     }
-    
+
+    /**
+    * @brief Simple class for managing dynamic block shared memory
+    * 
+    */
+    struct shared_buffer {
+        private:
+
+        /// @brief  Current offset inside shared memory region (in bytes)
+        size_t offset;
+
+        /// @brief  Base address of shared memory region
+        uint8_t * shm;
+
+        public:
+
+        /**
+        * @brief Construct a new shared buffer object
+        * @note If two or more objects are created inside the same kernel block
+        *       they will share the same memory
+        */
+        __device__
+        shared_buffer() : shm( shared_mem<uint8_t>() ), offset(0) { }
+        
+        /**
+        * @brief Reserve memory in the shared memory space
+        * 
+        * @note 
+        * 
+        * @tparam T        Type of data
+        * @param count     Number of elements (not byte size)
+        * @return T*       Pointer to shared memory space
+        */
+        template< class T >
+        __device__
+        inline T * get( size_t count ) {
+            T * r = reinterpret_cast< T * > ( & shm [ offset ] );
+            offset += sizeof( T ) * count;
+            return r;
+        }
+    };
+
     /**
      * @brief Returns max. shared memory per block (opt. in)
      *
@@ -511,7 +552,7 @@ namespace block {
         if ( warp::group_rank() == 0 ) {
             const int lane = warp::thread_rank();
             // Lanes beyond the number of populated warps contribute zero
-            T t = ( lane < nwarps ) ? tmp[ lane ] : T{0};
+            T t = ( lane < nwarps ) ? tmp[ lane ] : T{};
             t = warp::exscan_add( t );
             if ( lane < nwarps ) tmp[ lane ] = t;
         }
@@ -603,7 +644,7 @@ namespace block {
         /// @brief [shared] Temporary results from each warp
         __shared__ int tmp[ gpu::max_warps ];
 
-        if ( block::thread_rank() == 0 ) prev = T{0};
+        if ( block::thread_rank() == 0 ) prev = T{};
         block::sync();
 
         const int nthreads = gpu::block::num_threads();
@@ -613,7 +654,7 @@ namespace block {
 
         for( int base = 0; base < size; base += nthreads ) {
             const int i = base + gpu::block::thread_rank();
-            auto s = ( i < size ) ? data[i] : T{0};
+            auto s = ( i < size ) ? data[i] : T{};
 
             auto v = gpu::warp::exscan_add( s );
 
@@ -626,7 +667,7 @@ namespace block {
             if ( wid == 0 ) {
                 // Lanes beyond the populated warps contribute zero rather than
                 // whatever was left in tmp[] by the previous iteration
-                T t = ( lane < nwarps ) ? tmp[ lane ] : T{0};
+                T t = ( lane < nwarps ) ? tmp[ lane ] : T{};
                 t = gpu::warp::exscan_add( t );
                 if ( lane < nwarps ) tmp[ lane ] = t + prev;
             }
@@ -666,7 +707,7 @@ namespace block {
         /// @brief [shared] Temporary results from each warp
         __shared__ int tmp[ gpu::max_warps ];
 
-        if ( block::thread_rank() == 0 ) prev = T{0};
+        if ( block::thread_rank() == 0 ) prev = T{};
         block::sync();
 
         const int nthreads = gpu::block::num_threads();
@@ -676,7 +717,7 @@ namespace block {
 
         for( int base = 0; base < size; base += nthreads ) {
             const int i = base + gpu::block::thread_rank();
-            auto s = ( i < size ) ? in[i] : T{0};
+            auto s = ( i < size ) ? in[i] : T{};
 
             auto v = gpu::warp::exscan_add( s );
 
@@ -689,7 +730,7 @@ namespace block {
             if ( wid == 0 ) {
                 // Lanes beyond the populated warps contribute zero rather than
                 // whatever was left in tmp[] by the previous iteration
-                T t = ( lane < nwarps ) ? tmp[ lane ] : T{0};
+                T t = ( lane < nwarps ) ? tmp[ lane ] : T{};
                 t = gpu::warp::exscan_add( t );
                 if ( lane < nwarps ) tmp[ lane ] = t + prev;
             }
@@ -1104,7 +1145,7 @@ namespace device {
     __host__ inline
     T exscan_reduce_add( T * const data, size_t const size )
     {
-        if ( size == 0 ) return T{0};
+        if ( size == 0 ) return T{};
         var<T> sum;
         const unsigned int block = detail::scan_block_size( size );
         detail::exscan_add_kernel<<< 1, block >>>( data, data, size, sum.ptr() );
@@ -1116,7 +1157,7 @@ namespace device {
     __host__ inline
     T exscan_reduce_add( T * const out, T const * const in, size_t const size )
     {
-        if ( size == 0 ) return T{0};
+        if ( size == 0 ) return T{};
         var<T> sum;
         const unsigned int block = detail::scan_block_size( size );
         detail::exscan_add_kernel<<< 1, block >>>( out, in, size, sum.ptr() );

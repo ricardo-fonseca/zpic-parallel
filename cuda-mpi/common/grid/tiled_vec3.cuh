@@ -470,4 +470,4 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
     }
 };
 
-}
+} // namespace grid

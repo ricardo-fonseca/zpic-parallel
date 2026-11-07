@@ -8,9 +8,11 @@
 #include <string>
 #include <source_location>
 #include <complex>
+#include <vector>
 
 
 #include "../core/vec_types.cuh"
+#include "../util/complex.hpp"
 
 
 namespace mpi {
@@ -86,24 +88,86 @@ template<> inline MPI_Datatype data_type<double  >(void) { return MPI_DOUBLE; };
 template<> inline MPI_Datatype data_type<std::complex<float >>(void) { return MPI_C_FLOAT_COMPLEX ; };
 template<> inline MPI_Datatype data_type<std::complex<double >>(void) { return MPI_C_DOUBLE_COMPLEX ; };
 
+template<> inline MPI_Datatype data_type<util::complex64 >(void) { return MPI_C_FLOAT_COMPLEX ; };
+template<> inline MPI_Datatype data_type<util::complex128>(void) { return MPI_C_DOUBLE_COMPLEX ; };
+
 inline const MPI_Op sum = MPI_SUM;
 inline const MPI_Op max = MPI_MAX;
 inline constexpr int proc_null = MPI_PROC_NULL;
 
-namespace type {
-    inline MPI_Datatype mpi_int2    = MPI_DATATYPE_NULL;
-    inline MPI_Datatype mpi_float2  = MPI_DATATYPE_NULL;
-    inline MPI_Datatype mpi_float3  = MPI_DATATYPE_NULL;
-    inline MPI_Datatype mpi_double3 = MPI_DATATYPE_NULL;
-}
-
-template<> inline MPI_Datatype data_type<int2 >()   { return mpi::type::mpi_int2; };
-template<> inline MPI_Datatype data_type<float2 >() { return mpi::type::mpi_float2; };
-template<> inline MPI_Datatype data_type<float3 >() { return mpi::type::mpi_float3; };
-template<> inline MPI_Datatype data_type<double3>() { return mpi::type::mpi_double3; };
+namespace detail {
 
 /**
- * @brief Initialize MPI environment and extra MPI types
+ * @brief Registry of derived MPI datatypes created by contiguous_type()
+ * 
+ * @note All types in the registry are freed by mpi::finalize()
+ * 
+ * @return std::vector<MPI_Datatype>& 
+ */
+inline std::vector<MPI_Datatype> & derived_types() {
+    static std::vector<MPI_Datatype> types;
+    return types;
+}
+
+/**
+ * @brief Creates and commits a contiguous MPI datatype
+ * 
+ * @note The type is registered to be freed by mpi::finalize(). Intended to
+ *       initialize a function-local static inside a data_type<T>()
+ *       specialization, so that each type is created once, on first use:
+ * 
+ *          template<> inline MPI_Datatype data_type<my_type>() {
+ *              static const MPI_Datatype t = detail::contiguous_type( 3, MPI_FLOAT );
+ *              return t;
+ *          }
+ * 
+ * @warning Must be called after MPI initialization. When running with
+ *          MPI_THREAD_FUNNELED, the first data_type<T>() call for each type
+ *          must be made from the main thread.
+ * 
+ * @param count     Number of base elements
+ * @param base      Base MPI datatype
+ * @return MPI_Datatype 
+ */
+inline MPI_Datatype contiguous_type( const int count, const MPI_Datatype base ) {
+    MPI_Datatype t;
+    if ( MPI_Type_contiguous( count, base, &t ) != MPI_SUCCESS ||
+         MPI_Type_commit( &t ) != MPI_SUCCESS ) {
+        std::cerr << "(* fatal *) Unable to create contiguous MPI datatype, aborting...\n";
+        MPI_Abort( MPI_COMM_WORLD, 1 );
+        std::exit(1);
+    }
+    derived_types().push_back( t );
+    return t;
+}
+
+}
+
+template<> inline MPI_Datatype data_type<int2>() {
+    static const MPI_Datatype t = detail::contiguous_type( 2, MPI_INT );
+    return t;
+};
+
+template<> inline MPI_Datatype data_type<float2>() {
+    static const MPI_Datatype t = detail::contiguous_type( 2, MPI_FLOAT );
+    return t;
+};
+
+template<> inline MPI_Datatype data_type<float3>() {
+    static const MPI_Datatype t = detail::contiguous_type( 3, MPI_FLOAT );
+    return t;
+};
+
+template<> inline MPI_Datatype data_type<double3>() {
+    static const MPI_Datatype t = detail::contiguous_type( 3, MPI_DOUBLE );
+    return t;
+};
+
+/**
+ * @brief Initialize MPI environment
+ * 
+ * @note Derived MPI datatypes (e.g. data_type<float3>()) are created on
+ *       first use, see detail::contiguous_type()
  * 
  * @param argc      Pointer to command line argument count
  * @param argv      Pointer to command line arguments
@@ -121,20 +185,7 @@ inline int init( int *argc, char ***argv ) {
     int ierr = MPI_Init( argc, argv );
     #endif
 
-    if ( ierr == MPI_SUCCESS ) {
-        // Initialize extra types
-        MPI_Type_contiguous( 2, MPI_INT,  &mpi::type::mpi_int2 ); 
-        MPI_Type_commit( &mpi::type::mpi_int2 );
-
-        MPI_Type_contiguous( 2, MPI_FLOAT,  &mpi::type::mpi_float2 ); 
-        MPI_Type_commit( &mpi::type::mpi_float2 );
-
-        MPI_Type_contiguous( 3, MPI_FLOAT,  &mpi::type::mpi_float3 ); 
-        MPI_Type_commit( &mpi::type::mpi_float3 );
-        
-        MPI_Type_contiguous( 3, MPI_DOUBLE, &mpi::type::mpi_double3 );
-        MPI_Type_commit( &mpi::type::mpi_double3 );
-    } else {
+    if ( ierr != MPI_SUCCESS ) {
         std::cerr << "Failed to initialize MPI\n";
     }
     return ierr;
@@ -147,11 +198,9 @@ inline int init( int *argc, char ***argv ) {
  */
 inline int finalize( ) {
 
-    // These aren't strictly necessary
-    if ( mpi::type::mpi_int2    != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_int2 );
-    if ( mpi::type::mpi_float2  != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_float2 );
-    if ( mpi::type::mpi_float3  != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_float3 );
-    if ( mpi::type::mpi_double3 != MPI_DATATYPE_NULL ) MPI_Type_free( &mpi::type::mpi_double3 );
+    // Free derived datatypes (not strictly necessary)
+    for( auto & t : detail::derived_types() ) MPI_Type_free( &t );
+    detail::derived_types().clear();
 
     return MPI_Finalize();
 }
