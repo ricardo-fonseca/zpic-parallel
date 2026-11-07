@@ -546,7 +546,7 @@ public:
     }
 
     /**
-     * @brief Returns total number of particles moved
+     * @brief Returns total number of particles moved on local node
      * 
      * @return uint64_t
      */
