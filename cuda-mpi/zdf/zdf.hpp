@@ -22,7 +22,7 @@
 #include "zdf.h"
 
 // Forward declaration for the util::complex64 type
-namespace util { class complex64; }
+// namespace util { class complex64; }
 
 namespace zdf {
 
@@ -128,7 +128,8 @@ template<> constexpr t_zdf_data_type data_type<std::complex<float >>() { return 
 template<> constexpr t_zdf_data_type data_type<std::complex<double>>() { return zdf_complex128; };
 
 // Complex datatypes (util)
-template<> constexpr t_zdf_data_type data_type<util::complex64>() { return zdf_complex64; };
+template<> constexpr t_zdf_data_type data_type<util::complex64 >() { return zdf_complex64; };
+template<> constexpr t_zdf_data_type data_type<util::complex128>() { return zdf_complex128; };
 
 /**
  * @brief Save grid data to disk

@@ -788,6 +788,32 @@ def part2D(filename, qx='x', qy='y', xlim=None, ylim=None, grid=True,
                    grid=grid, marker=marker, ms=ms, alpha=alpha, **kwargs)
 
 
+def _histogram(particles, info, filename, q, bins=128, range=None, density=True,
+               log=False, color=None, histtype='bar',
+               xlim=None, ylim=None, grid=False,
+               title=None, xtitle=None, ytitle=None,
+               show=None, save=None, ax=None, **kwargs):
+    _check_quant(info, q, filename)
+
+    ax, user_ax = _get_ax(ax)
+
+    result = ax.hist(particles[q], bins=bins, range=range, density=density,
+                     log=log, color=color, histtype=histtype, **kwargs)
+
+    qlabel = info.particles.qlabels[q]
+    if title is None:
+        title = _title(_sf(_species_prefix(info) + _esc(qlabel)), info)
+    if xtitle is None:
+        xtitle = _qlabel(qlabel, info.particles.qunits[q])
+    if ytitle is None:
+        ytitle = "Probability density" if density else "Counts"
+
+    _decorate(ax, title, xtitle, ytitle, xlim, ylim, grid)
+
+    _finish(ax, user_ax, show, save)
+    return result
+
+
 def histogram(filename, q, bins=128, range=None, density=True, log=False,
               color=None, histtype='bar',
               xlim=None, ylim=None, grid=False,
@@ -832,25 +858,11 @@ def histogram(filename, q, bins=128, range=None, density=True, log=False,
         tuple: (n, bins, patches) as returned by `Axes.hist()`.
     """
     particles, info = _read(filename, "particles")
-    _check_quant(info, q, filename)
-
-    ax, user_ax = _get_ax(ax)
-
-    result = ax.hist(particles[q], bins=bins, range=range, density=density,
-                     log=log, color=color, histtype=histtype, **kwargs)
-
-    qlabel = info.particles.qlabels[q]
-    if title is None:
-        title = _title(_sf(_species_prefix(info) + _esc(qlabel)), info)
-    if xtitle is None:
-        xtitle = _qlabel(qlabel, info.particles.qunits[q])
-    if ytitle is None:
-        ytitle = "Probability density" if density else "Counts"
-
-    _decorate(ax, title, xtitle, ytitle, xlim, ylim, grid)
-
-    _finish(ax, user_ax, show, save)
-    return result
+    return _histogram(particles, info, filename, q, bins=bins, range=range,
+                      density=density, log=log, color=color, histtype=histtype,
+                      xlim=xlim, ylim=ylim, grid=grid,
+                      title=title, xtitle=xtitle, ytitle=ytitle,
+                      show=show, save=save, ax=ax, **kwargs)
 
 
 # -----------------------------------------------------------------------------
