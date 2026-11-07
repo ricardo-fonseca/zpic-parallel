@@ -442,12 +442,13 @@ inline void dep_current_seg(
  * 
  * @param part      particle data
  * @param dt_dx     Time step over cell size
+ * @param shift         Additional cell shift for particles
  * @param d_nmove   Number of particles moved
  */
 __global__
 void move(
     part::particles_view const part,
-    float2 const dt_dx,
+    float2 const dt_dx, int2 const shift,
     unsigned long long * const __restrict__ d_nmove ) 
 {
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
@@ -496,8 +497,8 @@ void move(
 
         // Modify cell and store
         int2 ix1 = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
@@ -944,7 +945,12 @@ void dep_charge_all(
 {
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
     const uint2 ntiles  = part.local_ntiles;
- 
+    const int tid      = tile_idx.y * ntiles.x + tile_idx.x;
+    const int np       = part.tile_np[ tid ];
+
+    // If tile is empty, return
+    if ( np <= 0 ) return;
+
     extern __shared__ float _charge_buffer[];
 
     // Zero shared memory and sync.
@@ -956,9 +962,9 @@ void dep_charge_all(
 
     gpu::block::sync();
 
-    const int tid      = tile_idx.y * ntiles.x + tile_idx.x;
+
     const int part_off = part.tile_offset[ tid ];
-    const int np       = part.tile_np[ tid ];
+
     int2   const * __restrict__ const ix = &part.ix[ part_off ];
     float2 const * __restrict__ const x  = &part.x[ part_off ];
     const int ystride = charge.tile_ystride();
@@ -1007,7 +1013,6 @@ void species::process_bc() {
         dim3 block( 1024 );
         dim3 grid( particles->get_local_ntiles().x, 2 );
         kernel::species_bcy <<< grid, block >>> ( particles -> view(), local_bc );
-
     }
 }
 
@@ -1055,7 +1060,7 @@ void species::move( grid::tiled_vec3<float> & J, const int2 shift )
  * 
  * @param current   current grid
  */
-void species::move( )
+void species::move( int2 const shift )
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -1066,7 +1071,7 @@ void species::move( )
     auto block = 1024;
 
     kernel::move <<< grid, block >>> ( 
-        particles -> view(), dt_dx, d_nmove
+        particles -> view(), dt_dx, shift, d_nmove
     );
 }
 

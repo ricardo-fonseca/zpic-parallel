@@ -30,6 +30,16 @@ class emf {
     };
     using bc_type = bounds_2d<bc::type>;
 
+    /**
+    * @brief CFL time limit from cell size
+    * 
+    * @param dx        Cell size
+    * @return float    CFL time limit
+    */
+    static float courant( const float2 dx ) {
+        return std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    }
+
     private:
 
     /// @brief Boundary condition (global values)
@@ -158,8 +168,8 @@ class emf {
         dt( dt ), box(box)
     {
         // Verify Courant condition
-        auto cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
-        if ( dt >= cour ){
+        auto cour = courant(dx);
+        if ( dt >=  cour){
             std::ostringstream msg;
             msg << "Invalid timestep, courant condition violation."
                 << " For the current resolution " << dx

@@ -349,21 +349,20 @@ namespace kernel {
  * @param p                 Plane wave parameters
  * @param E_fld             E field grid
  * @param B_fld             B field grid
- * @param local_tile_start  Tile start position on global tile grid
  * @param dx                Cell size
  */
 __global__
 void plane_wave(
     plane_wave_params const p,
     grid::tiled_vec3_view<float> E_fld, grid::tiled_vec3_view<float> B_fld, 
-    uint2 const local_tile_start, float2 const dx )
+    float2 const dx )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
 
     float3 * const __restrict__ E = E_fld.tile_data( tile_idx );
     float3 * const __restrict__ B = B_fld.tile_data( tile_idx );
 
-    const int ix0 = ( local_tile_start.x + tile_idx.x ) * E_fld.tile_dims.x;
+    const int ix0 = ( E_fld.local_tile_start.x + tile_idx.x ) * E_fld.tile_dims.x;
     const int ystride = E_fld.tile_ystride();
 
     const auto nx = E_fld.tile_dims;
@@ -420,7 +419,7 @@ int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<floa
     dim3 grid( E.get_local_ntiles().x, E.get_local_ntiles().y );
 
     kernel::plane_wave <<< grid, block >>> (
-        p, E.view(), B.view(), E.get_local_tile_start(), dx
+        p, E.view(), B.view(), dx
     );
 
     E.copy_to_gc();

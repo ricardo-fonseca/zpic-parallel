@@ -38,7 +38,6 @@ class current {
     const float2 box;
     
     /// @brief Time step
-
     const double dt;
 
     /// @brief Moving window information

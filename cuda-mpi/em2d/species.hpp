@@ -442,18 +442,6 @@ public:
     }
 
     /**
-     * @brief Inject particles in the complete simulation box
-     * 
-     */
-    virtual void inject() {
-
-        /// @brief position of lower corner of global grid in simulation units
-        float2 global_ref{static_cast<float>(mov_window.motion()),0};
-
-        density -> inject( *particles, ppc, dx, global_ref, particles -> local_range() );
-    }
-
-    /**
      * @brief Inject particles in the specified range of the simulation
      * 
      * @param range     Range in which to inject particles
@@ -464,6 +452,14 @@ public:
         float2 global_ref{static_cast<float>(mov_window.motion()),0};
 
         density -> inject( *particles, ppc, dx, global_ref, range );
+    }
+
+    /**
+     * @brief Inject particles in the complete simulation box
+     * 
+     */
+    void inject() {
+        inject( particles -> local_range() );
     }
 
 
@@ -505,7 +501,7 @@ public:
      * @brief Move particles (advance positions) without depositing current
      * 
      */
-    void move();
+    void move( int2 const shift = make_int2(0,0) );
 
     /**
      * @brief Free stream particles 1 timestep
@@ -676,7 +672,7 @@ public:
     }
 
     /**
-     * @brief Returns total number of particles moved
+     * @brief Returns total number of particles moved on local node
      * 
      * @return uint64_t
      */
@@ -768,7 +764,7 @@ public:
      * 
      * @param msg   (optional) Message to print before printing particle information
      */
-    void info_np() {
-        particles->info_np();
+    void info_np( std::string msg = "" ) {
+        particles->info_np( msg );
     }
 };

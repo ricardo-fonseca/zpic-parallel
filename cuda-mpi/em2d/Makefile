@@ -69,8 +69,6 @@ CFLAGS   += $(INCLUDES)
 
 SOURCE = emf.cu laser.cu current.cu udist.cu density.cu species.cu
 
-#current.cu \
-#         udist.cu density.cu species.cu
 # cathode.cu
 
 SOURCE += main.cu

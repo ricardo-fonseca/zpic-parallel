@@ -19,13 +19,13 @@ namespace kernel {
 __global__
 void test_tiled( 
     grid::tiled_view<float> tiles,
-    uint2 const global_ntiles, uint2 const local_tile_start )
+    uint2 const global_ntiles )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
     auto * const __restrict__ tile_data = tiles.tile_data( tile_idx );
 
-    const float tile_val = ( local_tile_start.y + tile_idx.y ) * global_ntiles.x + 
-                           ( local_tile_start.x + tile_idx.x );
+    const float tile_val = ( tiles.local_tile_start.y + tile_idx.y ) * global_ntiles.x + 
+                           ( tiles.local_tile_start.x + tile_idx.x );
 
     for( auto idx = gpu::block::thread_rank(); 
         idx < tiles.tile_dims.y * tiles.tile_dims.x; 
@@ -70,8 +70,6 @@ void test_tiled_grid( void ) {
     // Get local number of tiles
     const auto ntiles   = data.get_local_ntiles();
 
-    const uint2 local_tile_start = data.get_local_tile_start();
-
     if ( mpi::root() ) {
         std::cout << "Setting values...\n";
     }
@@ -83,7 +81,7 @@ void test_tiled_grid( void ) {
     dim3 block( 64 );
 
     kernel::test_tiled <<< grid, block >>>
-        (data.view(), global_ntiles, local_tile_start );
+        (data.view(), global_ntiles );
 
     data.add_from_gc();
     data.copy_to_gc();
@@ -1304,11 +1302,11 @@ int main( int argc, char *argv[] ) {
     // test_inj( );
     // test_mov( );
     // test_current( );
-    test_weibel();
+    // test_weibel();
 
     // test_mov_window_emf();
     // test_mov_window_inj();
-    // test_lwfa();
+    test_lwfa();
 
 
     // test_warm( );
