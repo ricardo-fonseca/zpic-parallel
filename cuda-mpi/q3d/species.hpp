@@ -658,7 +658,7 @@ public:
      * 
      * @param charge0   Charge density grid
      */
-    void deposit_charge0( grid::tiled<float> &charge ) const;
+    void deposit_charge_0( grid::tiled<float> &charge ) const;
 
     /**
      * @brief Deposit charge density (high order mode)
@@ -666,7 +666,7 @@ public:
      * @param m         Cylindrical mode to deposit (1 to 4)
      * @param charge    Charge density grid (complex)
      */
-    void deposit_charge( const unsigned m, grid::tiled<complex_t> &charge ) const;
+    void deposit_charge_m( const int m, grid::tiled<complex_t> &charge ) const;
 
     /**
      * @brief Returns total time centered kinetic energy

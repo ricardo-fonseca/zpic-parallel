@@ -32,8 +32,8 @@ LDFLAGS  += -forward-unknown-to-host-compiler $(shell mpic++ --showme:link)
 # --------------------------------------------------------------------------- #
 
 # Generate code for compute 8.0 architectue
-CXXFLAGS += --gpu-architecture=compute_80
-CFLAGS += --gpu-architecture=compute_80
+CXXFLAGS += -arch=sm_80
+CFLAGS += -arch=sm_80
 
 # c11 compliance and full warnings
 CFLAGS += -Xcompiler -Wall -Xcompiler -std=c11
@@ -43,6 +43,7 @@ CXXFLAGS += -Xcompiler -Wall -std=c++20 -Wno-unknown-pragmas -Wsign-compare
 
 # Debug
 # CXXFLAGS += -Xcompiler "-fno-omit-frame-pointer -g -Og"
+# CXXFLAGS += -Xptxas -v
 
 # --------------------------------------------------------------------------- #
 # Shared code locations

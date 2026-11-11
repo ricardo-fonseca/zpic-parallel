@@ -470,6 +470,8 @@ void test_beam( void ) {
 
 }
 
+#include "util/timer.hpp"
+
 void test_pwfa( void ) {
 
     if ( mpi::root() ) {
@@ -478,15 +480,19 @@ void test_pwfa( void ) {
                 << ansi::reset;
     }
 
+    // Purely cylindrical simulation
     int nmodes = 1;
+
     uint2 dims { 256, 256 };
     float2 box { 25.6, 25.6 };
-    uint2 partition { 2, 2 };
+    
+    uint2 partition{ 1, 1 }; // single GPU
+    // uint2 partition { 2, 2 };
 
     // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
 
-    uint2 nx { 32, 32 };
-    uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
+    uint2 tile_dims { 32, 32 };
+    uint2 ntiles { dims.x / tile_dims.x, dims.y / tile_dims.y };
 
     auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.9f;
 
@@ -496,9 +502,9 @@ void test_pwfa( void ) {
     }
 
     // Create simulation
-    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition);
+    zpic::simulation sim( nmodes, ntiles, tile_dims, box, dt, partition);
 
-    uint3 ppc{ 2, 2, 1 };
+    uint3 ppc{ 4, 4, 1 };
 
     species beam( "beam", -1.0f, ppc );
     beam.set_density( density::sphere(1.0, float2{23.0,0.0}, 1.6)); 
@@ -511,6 +517,7 @@ void test_pwfa( void ) {
 
     sim.set_moving_window();
 
+/*
     auto diag = [& sim, & beam, & plasma ]( ) {
         // Save mode 0
         beam.save_charge(0);
@@ -529,22 +536,36 @@ void test_pwfa( void ) {
         sim.current.save( fcomp::cyl::r, 0 );
         sim.current.save( fcomp::cyl::th, 0 );
     };
+*/
 
-    while ( sim.get_t() <= 61.5 ) {
-        if ( sim.get_iter() % 10 == 0 ) diag();
+    auto diag = [](){};
+
+    if ( mpi::root() )
+        std::cout << "Starting simulation, dt = " << dt << '\n';
+
+    timer::clock timer;
+    timer.start();
+
+    while ( sim.get_t() <= box.x * 5 ) {
+        if ( sim.get_iter() % 100 == 0 ) {
+            if ( mpi::root() ) std::cout << "i = " << sim.get_iter() << '\n';
+            diag();
+        }
         sim.advance_mov_window();
     }
 
+    timer.stop();
 
     if ( mpi::root() ) {
-        std::cout << ansi::bold
-                << "Completed " << __func__ << "()\n"
-                << ansi::reset;
+        std::cout << "Simulation run up to t = " << sim.get_t()
+                << " in " << timer.elapsed(timer::units::s) << " s\n";
+
+        std::cout << ansi::bold;
+        std::cout << "Done!\n";
+        std::cout << ansi::reset; 
     }
 }
 
-
-#include "util/timer.hpp"
 
 void test_lwfa() {
 
@@ -557,9 +578,11 @@ void test_lwfa() {
     int nmodes = 2;
     uint2 dims { 1024, 128 };
     float2 box { 20.48, 12.8 };
-    uint2 partition { 2, 2 };
+    
+    uint2 partition{ 1, 1 }; // single GPU
+    //uint2 partition { 2, 2 };
 
-    uint2 nx { 32, 32 };
+    uint2 nx { 16, 16 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
     auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.9f;
@@ -570,6 +593,7 @@ void test_lwfa() {
     // Add electrons
     species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
     electrons.set_density( density::step( coord::cyl::z, 1.0, 20.48 ) );
+    electrons.push_type = species::pusher::euler; 
     sim.add_species( electrons );
     
     // Add Laser
@@ -611,13 +635,15 @@ void test_lwfa() {
         electrons.save_charge( 1 );
     };
 
+    // auto diag = [](){};
+
     if ( mpi::root() )
         std::cout << "Starting simulation, dt = " << dt << '\n';
 
     timer::clock timer;
     timer.start();
 
-    while( sim.get_t() <= 1.05 * box.x ) {
+    while( sim.get_t() <= 4 * box.x ) {
         if ( sim.get_iter() % 100 == 0 ) {
             if ( mpi::root() )
                 std::cout << "i = " << sim.get_iter() << '\n';
@@ -654,13 +680,13 @@ int main( int argc, char *argv[] ) {
     // test_emf();
     // test_laser();
     
-    test_inj();
+    // test_inj();
     // test_mov();
     // test_current();
 
     // test_beam();
     // test_pwfa();
-    // test_lwfa();
+    test_lwfa();
 
     // Finalize the MPI environment
     mpi::finalize();

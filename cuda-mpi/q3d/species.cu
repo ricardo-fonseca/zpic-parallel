@@ -10,15 +10,43 @@ using complex_t = species::complex_t;
  * 
  */
 
-/// @brief Optimal block size for push kernel
-int constexpr opt_push_block = 256;
-
 /// @brief Optimal block size for move kernel
-int constexpr opt_move_block = 256;
+int constexpr opt_move_block = 1024;
 
-/// @brief Optimal minimum number of blocks for move/push kernels
-int constexpr opt_min_blocks = 4096;
+/// @brief Optimal minimum number of blocks for move kernels
+int constexpr opt_move_min_blocks = 1024;
 
+/// @brief Optimal block size for push kernel (mode 0)
+int constexpr opt_push_0_block = 512;
+
+/// @brief Optimal block size for push kernel (mode 0)
+int constexpr opt_push_0_min_blocks = 1024;
+
+/**
+ * Streamed push (push_n, used for nmodes > 2).
+ */
+
+/// @brief Block size for the streamed push kernel
+int constexpr opt_push_n_block = 512;
+
+/// @brief Particles processed per thread in each batch of the streamed push
+int constexpr opt_push_n_ppt = 4;
+
+/// @brief Minimum number of blocks for the streamed push kernel
+int constexpr opt_push_n_min_blocks = 256;
+
+/// @brief Maximum number of cylindrical modes supported by the streamed push
+int constexpr max_push_modes = 16;
+
+/**
+ * Charge deposition (diagnostics only)
+ */
+
+/// @brief Block size for the deposit charge kernels
+int constexpr opt_charge_block = 256;
+
+/// @brief Minimum number of blocks for the deposit charge kernels
+int constexpr opt_charge_min_blocks = 1024;
 
 /**
  * @brief Initialize data structures and inject initial particle distribution
@@ -35,8 +63,8 @@ void species::initialize( const int nmodes_, float2 const box_, uint2 const glob
     double const dt_, int const id_, mpi::cart2d & parallel ) {
     
     // Store number of cylindrical modes
-    if ( nmodes_ < 1 || nmodes_ > 2 ) {
-        mpi::fatal("Unsupported number of modes, must be 1 or 2");
+    if ( nmodes_ < 1 || nmodes_ > max_push_modes ) {
+        mpi::fatal("Invalid number of modes, must be in [1, " + std::to_string( max_push_modes ) + "]");
     }
 
     // The axial cell needs at least 1 particle per cell off axis
@@ -223,6 +251,107 @@ __device__ void interpolate_fld(
     b.th = ( B[ih +     jh*jstride].th * s0zh + B[ih+1 +     jh*jstride].th * s1zh ) * s0rh +
           ( B[ih + (jh+1)*jstride].th * s0zh + B[ih+1 + (jh+1)*jstride].th * s1zh ) * s1rh;
 
+}
+
+/**
+ * @brief Interpolate the E field at the particle position (linear)
+ * 
+ * @note Same interpolation as interpolate_fld(), for the E field only (used by
+ *       the streamed push, which loads E and B into shared memory separately)
+ * 
+ * @param E         Pointer to position (0,0) of E field grid
+ * @param jstride   Grid y stride (must be signed)
+ * @param ix        Particle cell index
+ * @param x         Particle position inside cell
+ * @param e[out]    E field at particle position
+ */
+template< typename T >
+__device__ void interpolate_e( 
+    cyl3<T> const * const __restrict__ E, const int jstride,
+    const int2 ix, const float2 x, cyl3<T> & e )
+{
+    const int i = ix.x;
+    const int j = ix.y;
+
+    const auto z = x.x;
+    const auto r = x.y;
+
+    const auto s0z = 0.5f - z;
+    const auto s1z = 0.5f + z;
+
+    const auto s0r = 0.5f - r;
+    const auto s1r = 0.5f + r;
+
+    const int hz = z < 0;
+    const int hr = r < 0;
+
+    const int ih = i - hz;
+    const int jh = j - hr;
+
+    const auto s0zh = (1-hz) - z;
+    const auto s1zh = (  hz) + z;
+
+    const auto s0rh = (1-hr) - r;
+    const auto s1rh = (  hr) + r;
+
+    e.z = ( E[ih +     j *jstride].z * s0zh + E[ih+1 +     j *jstride].z * s1zh ) * s0r +
+          ( E[ih + (j +1)*jstride].z * s0zh + E[ih+1 + (j +1)*jstride].z * s1zh ) * s1r;
+
+    e.r = ( E[i  +     jh*jstride].r * s0z  + E[i+1  +     jh*jstride].r * s1z ) * s0rh +
+          ( E[i  + (jh+1)*jstride].r * s0z  + E[i+1  + (jh+1)*jstride].r * s1z ) * s1rh;
+
+    e.th = ( E[i  +     j *jstride].th * s0z  + E[i+1  +     j *jstride].th * s1z ) * s0r +
+          ( E[i  + (j +1)*jstride].th * s0z  + E[i+1  + (j +1)*jstride].th * s1z ) * s1r;
+}
+
+/**
+ * @brief Interpolate the B field at the particle position (linear)
+ * 
+ * @note Same interpolation as interpolate_fld(), for the B field only
+ * 
+ * @param B         Pointer to position (0,0) of B field grid
+ * @param jstride   Grid y stride (must be signed)
+ * @param ix        Particle cell index
+ * @param x         Particle position inside cell
+ * @param b[out]    B field at particle position
+ */
+template< typename T >
+__device__ void interpolate_b( 
+    cyl3<T> const * const __restrict__ B, const int jstride,
+    const int2 ix, const float2 x, cyl3<T> & b )
+{
+    const int i = ix.x;
+    const int j = ix.y;
+
+    const auto z = x.x;
+    const auto r = x.y;
+
+    const auto s0z = 0.5f - z;
+    const auto s1z = 0.5f + z;
+
+    const auto s0r = 0.5f - r;
+    const auto s1r = 0.5f + r;
+
+    const int hz = z < 0;
+    const int hr = r < 0;
+
+    const int ih = i - hz;
+    const int jh = j - hr;
+
+    const auto s0zh = (1-hz) - z;
+    const auto s1zh = (  hz) + z;
+
+    const auto s0rh = (1-hr) - r;
+    const auto s1rh = (  hr) + r;
+
+    b.z = ( B[i  +     jh*jstride].z * s0z  + B[i+1  +     jh*jstride].z * s1z ) * s0rh +
+          ( B[i  + (jh+1)*jstride].z * s0z  + B[i+1  + (jh+1)*jstride].z * s1z ) * s1rh;
+
+    b.r = ( B[ih +      j*jstride].r * s0zh + B[ih+1 +      j*jstride].r * s1zh ) * s0r +
+          ( B[ih + (j +1)*jstride].r * s0zh + B[ih+1 + (j +1)*jstride].r * s1zh ) * s1r;
+
+    b.th = ( B[ih +     jh*jstride].th * s0zh + B[ih+1 +     jh*jstride].th * s1zh ) * s0rh +
+          ( B[ih + (jh+1)*jstride].th * s0zh + B[ih+1 + (jh+1)*jstride].th * s1zh ) * s1rh;
 }
 
 /**
@@ -437,10 +566,15 @@ inline void dep_current_seg_0(
     const auto wp20 = 0.5f*(S0z0 + S1z0);
     const auto wp21 = 0.5f*(S0z1 + S1z1);
 
-    const auto xif = t0.x + t1.x;
-    const auto yif = t0.y + t1.y;
-    const auto Δx  = t1.x - t0.x;
-    const auto Δy  = t1.y - t0.y;
+    // These must not be contracted into an fma: the caller computes t0 as a
+    // product (ri * cos θ, ri * sin θ), and fma( -ri, cos θ, t1.x ) returns the
+    // rounding error of that product instead of 0 for a particle that does not
+    // move transversely, depositing a spurious J_θ every time step.
+    // The _rn intrinsics are never merged into an fma.
+    const auto xif = __fadd_rn( t0.x, t1.x );
+    const auto yif = __fadd_rn( t0.y, t1.y );
+    const auto Δx  = __fsub_rn( t1.x, t0.x );
+    const auto Δy  = __fsub_rn( t1.y, t0.y );
 
     const auto jth = q * ( fma( - Δx , yif , Δy * xif ) ) / std::sqrt( fma( xif, xif, yif*yif) );
 
@@ -460,9 +594,30 @@ inline void dep_current_seg_0(
 }
 
 /**
+ * @brief Returns exp( -i m θ ) from the angular position (cos θ, sin θ)
+ * 
+ * @note Computed by repeated multiplication of (cos θ - i sin θ), which is
+ *       exact for m = 1 and accurate to O(m) roundoff for m > 1. The same
+ *       function must be used for the charge and the current deposits, so
+ *       that the current deposit is charge conserving for every mode.
+ * 
+ * @param m     Mode number (m >= 1)
+ * @param th    Angular position (cos θ, sin θ)
+ * @return      exp( -i m θ )
+ */
+__device__ 
+inline complex_t expmimt( const int m, const float2 th ) {
+    const complex_t e1{ th.x, -th.y };
+    complex_t em = e1;
+    for( int k = 1; k < m; k++ ) em *= e1;
+    return em;
+}
+
+/**
  * @brief Deposit (charge conserving) current for 1 segment inside a cell
  * 
  * @tparam m        Azymuthal mode (> 0)
+ * @param m         Mode number (m >= 1)
  * @param ix        Initial position (cell index)
  * @param x0        Initial position (z,r)
  * @param x1        Final position (z,r)
@@ -474,16 +629,14 @@ inline void dep_current_seg_0(
  * @param J         Current buffer
  * @param stride    j stride for current buffer
  */
-template< int m >
 __device__ 
 inline void dep_current_seg(
+    const int m,
     const int ir0, const int2 ix, const float2 x0, const float2 x1,
     const float2 t0, const float2 t1, 
     const float q,
     cyl3<complex_t> * __restrict__ J, const int stride )
 {
-    static_assert( m > 0, "only modes m > 0 are supported");
-
     // Initial and final grid positions
     // We rename the variables for clarity
     int i = ix.x;
@@ -504,24 +657,20 @@ inline void dep_current_seg(
     /// @brief Final θ
     const auto th1 = make_float2( t1.x * rcr1, t1.y * rcr1 );
 
-    const auto xif = t0.x + t1.x;
-    const auto yif = t0.y + t1.y;
+    // Not contracted, see dep_current_seg_0()
+    const auto xif = __fadd_rn( t0.x, t1.x );
+    const auto yif = __fadd_rn( t0.y, t1.y );
 
     const auto rrm2 = 1.0f / sqrt( fma( xif, xif, yif*yif ) );
     const auto thm = float2{ xif * rrm2, yif * rrm2 };
 
-    // Complex coefficients for initial, mid and final angular positions
-    
-/*
-    auto cm = expimt<m>( thm );
-    auto c0 = expimt<m>( th0 ) - cm;
-    auto c1 = expimt<m>( th1 ) - cm;
-*/
-
-    static_assert( m == 1, "only mode m = 1 is currently supported" );
-    auto cm = complex_t{ thm.x, -thm.y };
-    auto c0 = complex_t{ th0.x, -th0.y } - cm;
-    auto c1 = complex_t{ th1.x, -th1.y } - cm;
+    // Complex coefficients for initial, mid and final angular positions.
+    // Jz and Jr use the mid-point factor exp(-i m θm); Jθ carries the
+    // difference between the endpoint factors and exp(-i m θm), so that
+    // Δρ_m + ΔJz + ΔJr - Jθ = 0 holds exactly (charge conservation)
+    const auto cm = expmimt( m, thm );
+    const auto c0 = expmimt( m, th0 ) - cm;
+    const auto c1 = expmimt( m, th1 ) - cm;
 
 
     const auto S0z0 = 0.5f - z0;
@@ -613,10 +762,10 @@ inline void split2d_cyl(
     int2 & cross
 ) {
     /// @brief final (z,r) position, indexed to original cell
-    float2 x1 = x0 + delta;
+    float2 x1 = make_float2( __fadd_rn( x0.x, delta.x ), __fadd_rn( x0.y, delta.y ) );
 
     /// @brief final (x,y) transverse position
-    float2 t1 = t0 + tdelta;
+    float2 t1 = make_float2( __fadd_rn( t0.x, tdelta.x ), __fadd_rn( t0.y, tdelta.y ) );
 
     // Get cell (iz,ir) motion
     deltai = make_int2(
@@ -866,7 +1015,8 @@ void move(
         auto Δz = dt_dz * rg * pu.z;
         float2 delta = make_float2( Δz, Δr );
 
-        auto x1 = x0 + delta;
+        // Same rounding as split2d_cyl (no fma contraction)
+        auto x1 = make_float2( __fadd_rn( x0.x, delta.x ), __fadd_rn( x0.y, delta.y ) );
         // Check for cell crossings
         auto deltai = make_int2(
             ((x1.x >= 0.5f) - (x1.x < -0.5f)),
@@ -937,8 +1087,7 @@ void move_deposit_0(
     auto * _current_buffer_m0 = gpu::block::shared_mem< cyl3<float> >();
 
     // Zero local current buffer
-    for( auto i = gpu::block::thread_rank(); i < current_m0.tile_vol; i+= gpu::block::num_threads() ) 
-        _current_buffer_m0[i] = cyl3<float>{};
+    gpu::block::zero( _current_buffer_m0, current_m0.tile_vol );
 
     gpu::block::sync();
 
@@ -1022,8 +1171,8 @@ void move_deposit_0(
 
         // Modify cell position and store
         x[i] = make_float2( 
-            (x0.x + Δz ) - deltai.x,
-            (x0.y + Δr ) - deltai.y
+            __fadd_rn( x0.x, Δz ) - deltai.x,
+            __fadd_rn( x0.y, Δr ) - deltai.y
         );
 
         // Modify cell and store
@@ -1039,7 +1188,7 @@ void move_deposit_0(
 
     gpu::block::sync();
 
-    // Add current to global buffers
+    // Add current to global buffers using coallesced access
     float * dev_J0 = reinterpret_cast< float * > ( current_m0.tile_buffer(tile_id));
     float * shm_J0 = reinterpret_cast< float * > ( _current_buffer_m0 );
 
@@ -1103,22 +1252,20 @@ void move_deposit_1(
 
     /// @brief [shared] Local copy of current density
     gpu::block::shared_buffer shm;
-    auto * _current_buffer_m0 = shm.get< cyl3<float>  >( current_m0.tile_vol );
-    auto * _current_buffer_m1 = shm.get< cyl3< complex_t > >( current_m1.tile_vol );
+    auto * __restrict__ _current_buffer_m0 = shm.get< cyl3<float>  >( current_m0.tile_vol );
+    auto * __restrict__ _current_buffer_m1 = shm.get< cyl3< complex_t > >( current_m1.tile_vol );
 
     // Zero local current buffers
-    for( auto i = gpu::block::thread_rank(); i < current_m0.tile_vol; i+= gpu::block::num_threads() ) {
-        _current_buffer_m0[i] = cyl3<float>{};
-        _current_buffer_m1[i] = cyl3<complex_t>{};
-    }
+    gpu::block::zero( _current_buffer_m0, current_m0.tile_vol );
+    gpu::block::zero( _current_buffer_m1, current_m1.tile_vol );
 
     gpu::block::sync();
 
     // Move particles and deposit current
     const int end   = ( begin + set_size < tile_np ) ? begin + set_size : tile_np;
 
-    cyl3<float> * J0 = & _current_buffer_m0[ current_m0.inner_offset ];
-    cyl3<complex_t> * J1 = & _current_buffer_m1[ current_m1.inner_offset ];
+    cyl3<float> * __restrict__ J0 = & _current_buffer_m0[ current_m0.inner_offset ];
+    cyl3<complex_t> * __restrict__ J1 = & _current_buffer_m1[ current_m1.inner_offset ];
 
     const int jstride = current_m0.tile_ystride();
 
@@ -1191,22 +1338,23 @@ void move_deposit_1(
             v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
             cross
         );
-        
-        // Deposit current (mode 0)
-                                  dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
-        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
-        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
 
-        // Deposit current (mode 1)
-                                  dep_current_seg<1>( ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
-        if ( cross.x || cross.y ) dep_current_seg<1>( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
-        if ( cross.x && cross.y ) dep_current_seg<1>( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
+        dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        dep_current_seg( 1, ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
 
+        if ( cross.x || cross.y ) {
+            dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
+            dep_current_seg( 1, ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
+        }
+        if ( cross.x && cross.y ) {
+            dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
+            dep_current_seg( 1, ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
+        }
 
         // Correct cell position and store
         x[i] = make_float2( 
-            (x0.x + Δz ) - deltai.x,
-            (x0.y + Δr ) - deltai.y
+            __fadd_rn( x0.x, Δz ) - deltai.x,
+            __fadd_rn( x0.y, Δr ) - deltai.y
         );
 
         // Modify cell and store
@@ -1221,7 +1369,7 @@ void move_deposit_1(
 
     gpu::block::sync();
 
-    // Add current to global buffers
+    // Add current to global buffers using coallesced access
     float * dev_J0 = reinterpret_cast< float * > ( current_m0.tile_buffer(tile_id));
     float * shm_J0 = reinterpret_cast< float * > ( _current_buffer_m0 );
     float * dev_J1 = reinterpret_cast< float * > ( current_m1.tile_buffer(tile_id));
@@ -1253,12 +1401,15 @@ void move_deposit_1(
 }
 
 /**
- * @brief Kernel for depositing current (mode 1). Particle motion is not stored.
+ * @brief Deposit the current of a single mode m > 0 (particles are not moved)
+ * 
+ * @note Called once per mode, before move_deposit_0() moves the particles
  * 
  * @note This version allows the use of multiple blocks per tile. It must be
  *       launched with grid( ntiles.x, ntiles.y, blocks_per_tile )
  *       
  * 
+ * @param m                 Mode number (m >= 1)
  * @param part              Particle data
  * @param d_current         Electric current buffer
  * @param current_offset    Offset to cell 0,0 in electric current tile
@@ -1269,16 +1420,17 @@ void move_deposit_1(
  * @param d_nmove           (out) Number of particles pushed (for performance metrics)
  */
 __global__ __launch_bounds__(opt_move_block) 
-void deposit_1(
+void deposit_m(
+    const int m,
     cyl_part::particles_view const part,
-    grid::tiled_cyl3_view< complex_t > current_m1,
+    grid::tiled_cyl3_view< complex_t > current_m,
     float2 const dt_dx
 ) {
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
     const int tile_np   = part.tile_np[ tile_id ];
 
-   // Select subset of particles to move (if gridDim.z > 1)
+    // Select subset of particles to move (if gridDim.z > 1)
     // We are using multiple blocks per tile (blockIdx.z)
     const int set_size = roundup<gpu::warp_size>(( tile_np + gridDim.z - 1 ) / gridDim.z);
     const int begin = blockIdx.z * set_size;
@@ -1287,19 +1439,19 @@ void deposit_1(
     if ( begin >= tile_np ) return;
 
     /// @brief [shared] Local copy of current density
-    auto * _current_buffer_m1 = gpu::block::shared_mem< cyl3<complex_t> >();
+    auto * _current_buffer_m = gpu::block::shared_mem< cyl3<complex_t> >();
 
     // Zero local current buffers
-    gpu::block::zero( _current_buffer_m1, current_m1.tile_vol );
+    gpu::block::zero( _current_buffer_m, current_m.tile_vol );
 
     gpu::block::sync();
 
     // Move particles and deposit current
     const int end   = ( begin + set_size < tile_np ) ? begin + set_size : tile_np;
 
-    auto * J1 = & _current_buffer_m1[ current_m1.inner_offset ];
+    auto * J1 = & _current_buffer_m[ current_m.inner_offset ];
 
-    const int jstride = current_m1.tile_ystride();
+    const int jstride = current_m.tile_ystride();
 
     const int part_offset  = part.tile_offset[ tile_id ];
     auto * __restrict__ ix = &part.ix[ part_offset ];
@@ -1370,27 +1522,26 @@ void deposit_1(
             cross
         );
 
-        // Deposit current (mode 1)
-                                  dep_current_seg<1>( ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
-        if ( cross.x || cross.y ) dep_current_seg<1>( ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
-        if ( cross.x && cross.y ) dep_current_seg<1>( ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
+        // Deposit current (mode m)
+                                  dep_current_seg( m, ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
+        if ( cross.x || cross.y ) dep_current_seg( m, ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
+        if ( cross.x && cross.y ) dep_current_seg( m, ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
     }
 
     gpu::block::sync();
 
-
-    float * dev_J1 = reinterpret_cast< float * > ( current_m1.tile_buffer(tile_id));
-    float * shm_J1 = reinterpret_cast< float * > ( _current_buffer_m1 );
+    float * dev_Jm = reinterpret_cast< float * > ( current_m.tile_buffer(tile_id));
+    float * shm_Jm = reinterpret_cast< float * > ( _current_buffer_m );
 
     if ( gridDim.z > 1 ) {
         // When using multiple blocks per tile we must add the current
         // using atomic ops
-        for( auto i =  gpu::block::thread_rank(); i < 3 * 2 * current_m1.tile_vol; i+= gpu::block::num_threads() ) {
-            gpu::device::atomic_fetch_add( & dev_J1[ i ], shm_J1[ i ] );
+        for( auto i =  gpu::block::thread_rank(); i < 3 * 2 * current_m.tile_vol; i+= gpu::block::num_threads() ) {
+            gpu::device::atomic_fetch_add( & dev_Jm[ i ], shm_Jm[ i ] );
         }
     } else {
-        for( auto i =  gpu::block::thread_rank(); i < 3 * 2 * current_m1.tile_vol; i+= gpu::block::num_threads() ) {
-            dev_J1[ i ] += shm_J1[ i ]; 
+        for( auto i =  gpu::block::thread_rank(); i < 3 * 2 * current_m.tile_vol; i+= gpu::block::num_threads() ) {
+            dev_Jm[ i ] += shm_Jm[ i ]; 
         }
     }
 }
@@ -1409,7 +1560,7 @@ void deposit_1(
  * @param d_energy      (out) Total time-centered particle energy
  */
 template < species::pusher type >
-__global__ __launch_bounds__(opt_push_block)
+__global__ __launch_bounds__(opt_push_0_block)
 void push_0 ( 
     cyl_part::particles_view part,
     grid::tiled_cyl3_view<float> E_grid, grid::tiled_cyl3_view<float> B_grid, 
@@ -1451,7 +1602,6 @@ void push_0 (
     const int jstride = E_grid.tile_ystride();
 
     gpu::block::sync();
-
 
     // Push particles
     for( auto i = begin + gpu::block::thread_rank(); i < end; i+= gpu::block::num_threads() ) {
@@ -1510,7 +1660,7 @@ void push_0 (
  * @param d_energy      Total particle energy (if using OpenMP this must be a reduction variable)
  */
 template < species::pusher type >
-__global__ __launch_bounds__(opt_push_block)
+__global__ __launch_bounds__(opt_push_0_block)
 void  push_1 ( 
     cyl_part::particles_view part,
     grid::tiled_cyl3_view<float> E_grid_m0, grid::tiled_cyl3_view<float> B_grid_m0,
@@ -1611,6 +1761,215 @@ void  push_1 (
 
         // Particles have different weights (charge q ∝ r)
         energy += q[i] * ekin;
+    }
+
+    // Add up energy from all threads
+    energy = gpu::warp::reduce_add( energy );
+    if ( gpu::warp::thread_rank() == 0 ) { 
+        gpu::device::atomic_fetch_add( d_energy, energy );
+    }
+}
+
+/**
+ * @brief Field data of the modes m > 0, for the streamed push
+ * 
+ * Holds the start of the (complex) E and B field buffers of each mode; passed
+ * by value as a kernel parameter. All modes share the tile layout of mode 0.
+ */
+struct mode_fields {
+    cyl3<complex_t> const * E[ max_push_modes ];
+    cyl3<complex_t> const * B[ max_push_modes ];
+};
+
+/**
+ * @brief Advance particle velocities, any number of modes (streamed push)
+ * 
+ * Instead of keeping the fields of all modes in shared memory, the fields are
+ * streamed through a single shared buffer (one field, one mode at a time),
+ * while each thread keeps the field accumulated at its particles' positions
+ * in registers:
+ * 
+ *  for each batch of P * blockDim particles of the tile:
+ *      load the particle positions (registers)
+ *      for E, then B:
+ *          for m = 0 ... nmodes-1:
+ *              load the field of mode m into shared memory
+ *              accumulate Re( F_m exp(i m θ) ) at the particle positions
+ *      advance the particle momenta
+ * 
+ * The shared memory use (one complex field tile) does not depend on the number
+ * of modes. The field tiles are reloaded once per batch, so the number of
+ * particles per block (gridDim.z) is kept to whole batches.
+ * 
+ * @note Requires tile_vol * sizeof( cyl3<complex_t> ) bytes of dynamic shared
+ *       memory
+ * 
+ * @tparam type         Pusher type
+ * @tparam P            Particles per thread in each batch
+ * @param part          Particle data
+ * @param E_grid_m0     E field grid, mode 0
+ * @param B_grid_m0     B field grid, mode 0
+ * @param fm            E and B field buffers of the modes m > 0
+ * @param nmodes        Number of modes (including mode 0)
+ * @param alpha         Normalization parameter
+ * @param d_energy      Total particle energy
+ */
+template < species::pusher type, int P >
+__global__ __launch_bounds__(opt_push_n_block)
+void push_n ( 
+    cyl_part::particles_view part,
+    grid::tiled_cyl3_view<float> E_grid_m0, grid::tiled_cyl3_view<float> B_grid_m0,
+    const mode_fields fm, const int nmodes,
+    float const alpha, double * const __restrict__ d_energy )
+{
+    const uint2 tile_idx = { blockIdx.x, blockIdx.y };
+    const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
+    const int tile_np   = part.tile_np[ tile_id ];
+
+    /// @brief Particles per batch
+    const int nthreads = gpu::block::num_threads();
+    const int batch    = P * nthreads;
+
+    // Select subset of particles to push (if gridDim.z > 1), in whole batches
+    const int per_block = ( tile_np + gridDim.z - 1 ) / gridDim.z;
+    const int set_size  = ( ( per_block + batch - 1 ) / batch ) * batch;
+    const int begin = blockIdx.z * set_size;
+
+    // If the block does not have any particles to process return
+    if ( begin >= tile_np ) return;
+    const int end   = ( begin + set_size < tile_np ) ? begin + set_size : tile_np;
+
+    /// @brief [shared] field buffer (one field of one mode)
+    auto * __restrict__ fld_c = gpu::block::shared_mem< cyl3<complex_t> >();
+    auto * __restrict__ fld_r = reinterpret_cast< cyl3<float> * >( fld_c );
+
+    const auto tile_vol = E_grid_m0.tile_vol;
+    const auto inner    = E_grid_m0.inner_offset;
+    const int jstride   = E_grid_m0.tile_ystride();
+
+    const int part_offset  = part.tile_offset[ tile_id ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ th = &part.th[ part_offset ];
+    auto * __restrict__ q  = &part.q[ part_offset ];
+
+    double energy = 0;
+
+    for( int b0 = begin; b0 < end; b0 += batch ) {
+
+        // Load particle positions for this batch
+        int2   pix[P];
+        float2 px[P];
+        float2 pth[P];
+        bool   valid[P];
+        cyl3<float> e[P], b[P];
+
+        #pragma unroll
+        for( int p = 0; p < P; p++ ) {
+            const int i = b0 + p * nthreads + gpu::block::thread_rank();
+            valid[p] = ( i < end );
+            if ( valid[p] ) {
+                pix[p] = ix[i];
+                px[p]  = x[i];
+                pth[p] = th[i];
+            } else {
+                pix[p] = make_int2( 0, 0 );
+                px[p]  = make_float2( 0, 0 );
+                pth[p] = make_float2( 1, 0 );
+            }
+            e[p] = cyl3<float>{};
+            b[p] = cyl3<float>{};
+        }
+
+        // Accumulate E (f = 0), then B (f = 1), streaming the modes
+        for( int f = 0; f < 2; f++ ) {
+
+            // Mode 0
+            gpu::block::sync();
+            gpu::block::memcpy( fld_r,
+                ( f == 0 ) ? E_grid_m0.tile_buffer( tile_id ) : B_grid_m0.tile_buffer( tile_id ),
+                tile_vol );
+            gpu::block::sync();
+
+            #pragma unroll
+            for( int p = 0; p < P; p++ ) {
+                if ( valid[p] ) {
+                    cyl3<float> v;
+                    if ( f == 0 ) interpolate_e( &fld_r[ inner ], jstride, pix[p], px[p], v );
+                    else          interpolate_b( &fld_r[ inner ], jstride, pix[p], px[p], v );
+                    auto & acc = ( f == 0 ) ? e[p] : b[p];
+                    acc.z += v.z; acc.r += v.r; acc.th += v.th;
+                }
+            }
+
+            /// @brief exp( i m θ ) for each particle, updated as m increases
+            complex_t em[P];
+            #pragma unroll
+            for( int p = 0; p < P; p++ ) em[p] = complex_t{ 1, 0 };
+
+            // Modes m > 0
+            for( int m = 1; m < nmodes; m++ ) {
+                gpu::block::sync();
+                gpu::block::memcpy( fld_c,
+                    ( ( f == 0 ) ? fm.E[m] : fm.B[m] ) + tile_id * tile_vol,
+                    tile_vol );
+                gpu::block::sync();
+
+                #pragma unroll
+                for( int p = 0; p < P; p++ ) {
+                    // exp( i m θ ) = exp( i (m-1) θ ) * ( cos θ + i sin θ )
+                    em[p] *= complex_t{ pth[p].x, pth[p].y };
+                    if ( valid[p] ) {
+                        cyl3<complex_t> v;
+                        if ( f == 0 ) interpolate_e( &fld_c[ inner ], jstride, pix[p], px[p], v );
+                        else          interpolate_b( &fld_c[ inner ], jstride, pix[p], px[p], v );
+
+                        // Re( F_m exp( i m θ ) ), same form as push_1 for m = 1
+                        const float c = em[p].real();
+                        const float s = em[p].imag();
+                        auto & acc = ( f == 0 ) ? e[p] : b[p];
+                        acc.z  += fma( c, v.z.real(),  -s * v.z.imag()  );
+                        acc.r  += fma( c, v.r.real(),  -s * v.r.imag()  );
+                        acc.th += fma( c, v.th.real(), -s * v.th.imag() );
+                    }
+                }
+            }
+        }
+
+        // Advance momenta
+        #pragma unroll
+        for( int p = 0; p < P; p++ ) {
+            if ( valid[p] ) {
+                const int i = b0 + p * nthreads + gpu::block::thread_rank();
+
+                const auto cos_th = pth[p].x;
+                const auto sin_th = pth[p].y;
+
+                // Convert to cartesian components       
+                float3 cart_e = make_float3(
+                    fma( e[p].r, cos_th, - e[p].th * sin_th ),
+                    fma( e[p].r, sin_th, + e[p].th * cos_th ),
+                    e[p].z
+                );
+
+                float3 cart_b = make_float3(
+                    fma( b[p].r, cos_th, - b[p].th * sin_th ),
+                    fma( b[p].r, sin_th, + b[p].th * cos_th ),
+                    b[p].z
+                );
+
+                float3 pu = u[i];
+
+                /// @brief Particle kinetic energy (γ - 1), time centered
+                double ekin = 0;
+                if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, ekin );
+                if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, ekin );
+
+                // Particles have different weights (charge q ∝ r)
+                energy += q[i] * ekin;
+            }
+        }
     }
 
     // Add up energy from all threads
@@ -1748,7 +2107,7 @@ void species_bcr(
  * @param charge_offset     Offset to cell 0,0 in charge tile
  * @param ext_nx            External tile size (includes guard cells)
  */
-__global__
+__global__ __launch_bounds__(opt_charge_block)
 void dep_charge_0(
     cyl_part::particles_view const part,
     grid::tiled_view<float> charge_m0 )
@@ -1820,6 +2179,7 @@ void dep_charge_0(
 /**
  * @brief kernel for depositing mode m>0 charge
  * 
+ * @param m         Mode number (m >= 1)
  * @param d_charge  Charge density grid (will be zeroed by this kernel)
  * @param offset    Offset to position (0,0) of grid
  * @param ext_nx    External tile size (i.e. including guard cells)
@@ -1828,9 +2188,9 @@ void dep_charge_0(
  * @param d_x       Particle buffer (position)
  * @param q         Species charge per particle
  */
-template< int m >
-__global__ 
+__global__ __launch_bounds__(opt_charge_block)
 void dep_charge(
+    const int m,
     cyl_part::particles_view const part,
     grid::tiled_view<complex_t> charge_m )
 {
@@ -1874,9 +2234,8 @@ void dep_charge(
 
         const int idx = ix[i].y * jstride + ix[i].x;
 
-        static_assert( m == 1, "only mode m = 1 is currently supported" );
-        // auto qm = q[i] * expimt<m>( t[i] );
-        auto qm = q[i] * complex_t{ th[i].x, -th[i].y };
+        // Same angular factor as the current deposit (charge conservation)
+        auto qm = q[i] * expmimt( m, th[i] );
 
         gpu::block::atomic_add( & charge[ idx               ], s0r * s0z * qm );
         gpu::block::atomic_add( & charge[ idx + 1           ], s0r * s1z * qm );
@@ -1970,71 +2329,12 @@ void species::process_bc() {
     }
 }
 
-#if 0
-// I need to check which of these gives the best performance
-
-/**
- * @brief Moves particles, deposit current and shift particle cell indices
- * 
- * current will be accumulated on existing data
- *
- * @note If nmodes = 2, both modes will be accumulated in the same kernel
- * 
- * @param J         Electric current density
- * @param shift     Cell index shift applied after the move
- */
-void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
-{
-
-    ///@brief timestep to cell size ratio
-    const float2 dt_dx = make_float2(
-        dt / dx.x,
-        dt / dx.y
-    );
-
-    ///@brief Mode 0 current
-    auto & J0 = current.mode0();
-
-    auto ntiles = particles -> get_local_ntiles();
-
-    // If number of tiles is small use multiple blocks per tile
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
-    if ( tile_blocks < 1 ) tile_blocks = 1;
-    dim3 grid( ntiles.x, ntiles.y, tile_blocks );
-    auto block = opt_move_block;
-
-    size_t shm_size = J0.tile_vol * sizeof( cyl3<float> );
-
-    switch (nmodes) {
-    case 1: {
-        
-        gpu::block::set_shmem_size( kernel::move_deposit_0, shm_size );
-        kernel::move_deposit_0 <<< grid, block, shm_size >>> ( 
-            particles->view(), J0.view(), dt_dx, shift, d_nmove
-        );
-    } break;
-    case 2: {
-        auto & J1 = current.mode(1);
-        shm_size += J1.tile_vol * sizeof( cyl3<complex_t> );
-        gpu::block::set_shmem_size( kernel::move_deposit_1, shm_size );
-        kernel::move_deposit_1 <<< grid, block, shm_size >>> ( 
-            particles->view(), J0.view(), J1.view(), dt_dx, shift, d_nmove
-        );
-    } break;
-    default:
-        break;
-    }
-}
-
-#else
-
 /**
  * @brief Move particles (advance positions), deposit current and shift positions
  * 
- * @note For nmodes = 2, this version will:
- *        1. Deposit current for mode 1
+ * @note For nmodes > 1, this version will:
+ *        1. Deposit the current of each mode m > 0 (one kernel per mode)
  *        2. Move and deposit current for mode 0
- *      This version could easily be updated to an arbitrary number of modes 
  *
  * @param current   Electric current density
  * @param shift     Cell shift
@@ -2054,7 +2354,7 @@ void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
     auto ntiles = particles -> get_local_ntiles();
 
     // If number of tiles is small use multiple blocks per tile
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
+    int tile_blocks = opt_move_min_blocks / ( ntiles.x * ntiles.y );
     if ( tile_blocks < 1 ) tile_blocks = 1;
     dim3 grid( ntiles.x, ntiles.y, tile_blocks );
     auto block = opt_move_block;
@@ -2068,28 +2368,41 @@ void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
             dt_dx, shift, d_nmove
         );
     } break;
+
+    // Optimized verion for nmodes = 2
     case 2: {
-        // Deposit J1 current
         auto & J1 = current.mode(1);
-        size_t shm_size = J1.tile_vol * sizeof( cyl3<complex_t> );
-        gpu::block::set_shmem_size( kernel::deposit_1, shm_size );
-        kernel::deposit_1 <<< grid, block, shm_size >>> ( 
-            particles -> view(), J1.view(), dt_dx
+        size_t shm_size = 
+            J0.tile_vol * sizeof( cyl3<float> ) +
+            J1.tile_vol * sizeof( cyl3<complex_t> );
+        gpu::block::set_shmem_size( kernel::move_deposit_1, shm_size );
+        kernel::move_deposit_1 <<< grid, block, shm_size >>> ( 
+            particles->view(), J0.view(), J1.view(), 
+            dt_dx, shift, d_nmove
         );
+    } break;
+
+    default: {
+        // Deposit the current of modes m > 0, one mode per kernel launch
+        // (the shared memory buffer holds a single mode)
+        for( int m = 1; m < nmodes; m++ ) {
+            auto & Jm = current.mode(m);
+            size_t shm_size = Jm.tile_vol * sizeof( cyl3<complex_t> );
+            gpu::block::set_shmem_size( kernel::deposit_m, shm_size );
+            kernel::deposit_m <<< grid, block, shm_size >>> ( 
+                m, particles -> view(), Jm.view(), dt_dx
+            );
+        }
 
         // Deposit J0 current and move particles
-        shm_size = J0.tile_vol * sizeof( cyl3<float> );
+        size_t shm_size = J0.tile_vol * sizeof( cyl3<float> );
         gpu::block::set_shmem_size( kernel::move_deposit_0, shm_size );
         kernel::move_deposit_0 <<< grid, block, shm_size >>> ( 
             particles -> view(), J0.view(), dt_dx, shift, d_nmove
         );
     } break;
-    default:
-        break;
     }
 }
-
-#endif
 
 /**
  * @brief Moves particles (no current deposition)
@@ -2117,9 +2430,7 @@ void species::move( const int2 shift )
 }
 
 /**
- * @brief       Accelerates particles using a Boris pusher
- *
- * @note Only nmodes = 1, 2 is supported
+ * @brief       Accelerates particles using a Boris/Euler pusher
  * 
  * @param emf     EMF field
  */
@@ -2132,11 +2443,6 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
 
     auto ntiles = particles -> get_local_ntiles();
 
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
-    if ( tile_blocks < 1 ) tile_blocks = 1;
-    dim3 grid( ntiles.x, ntiles.y, tile_blocks );
-    dim3 block( opt_push_block );
-
     auto & E0 = E.mode0();
     auto & B0 = B.mode0();
     size_t shm_size = 2 * ( E0.tile_vol * sizeof(cyl3<float>) );
@@ -2147,13 +2453,24 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
 
         switch (nmodes) {
         case 1: {
+            int tile_blocks = opt_push_0_min_blocks / ( ntiles.x * ntiles.y );
+            if ( tile_blocks < 1 ) tile_blocks = 1;
+            dim3 grid( ntiles.x, ntiles.y, tile_blocks );
+            dim3 block( opt_push_0_block );
+
             gpu::block::set_shmem_size( kernel::push_0 <type>, shm_size );
             kernel::push_0 <type> <<< grid, block, shm_size >>> ( 
                 particles -> view(), E0.view(), B0.view(), alpha,
                 d_energy
             );
         } break;
+
         case 2: {
+            int tile_blocks = opt_push_0_min_blocks / ( ntiles.x * ntiles.y );
+            if ( tile_blocks < 1 ) tile_blocks = 1;
+            dim3 grid( ntiles.x, ntiles.y, tile_blocks );
+            dim3 block( opt_push_0_block );
+
             auto & E1 = E.mode(1);
             auto & B1 = B.mode(1);
 
@@ -2163,12 +2480,36 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
             gpu::block::set_shmem_size( kernel::push_1 <type>, shm_size );
             kernel::push_1 <type> <<< grid, block, shm_size >>> ( 
                 particles -> view(), E0.view(), B0.view(),
-                E1.view(), B1.view(), alpha, d_energy
+                E1.view(), B1.view(),alpha, d_energy
             );
         } break;
 
-        default:
-            break;
+
+        default: {
+            // Streamed push: fields go through a single shared memory buffer
+            // holding one (complex) field of one mode
+            kernel::mode_fields fm{};
+            for( int m = 1; m < nmodes; m++ ) {
+                fm.E[m] = E.mode(m).buffer();
+                fm.B[m] = B.mode(m).buffer();
+            }
+
+            constexpr int P = opt_push_n_ppt;
+            size_t const shm_n = E0.tile_vol * sizeof( cyl3<complex_t> );
+
+            // Use whole batches per block (see push_n), with enough blocks
+            // to fill the device
+            int tile_blocks_n = opt_push_n_min_blocks / ( ntiles.x * ntiles.y );
+            if ( tile_blocks_n < 1 ) tile_blocks_n = 1;
+            dim3 grid_n( ntiles.x, ntiles.y, tile_blocks_n );
+            dim3 block_n( opt_push_n_block );
+
+            gpu::block::set_shmem_size( kernel::push_n <type,P>, shm_n );
+            kernel::push_n <type,P> <<< grid_n, block_n, shm_n >>> ( 
+                particles -> view(), E0.view(), B0.view(),
+                fm, nmodes, alpha, d_energy
+            );
+        } break;
         }
     };
 
@@ -2188,13 +2529,13 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
  * 
  * @param charge0    Charge density grid
  */
-void species::deposit_charge0( grid::tiled<float> & charge0 ) const {
+void species::deposit_charge_0( grid::tiled<float> & charge0 ) const {
 
     auto ntiles = particles -> get_local_ntiles();
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
+    int tile_blocks = opt_charge_min_blocks / ( ntiles.x * ntiles.y );
     if ( tile_blocks < 1 ) tile_blocks = 1;
     dim3 grid( ntiles.x, ntiles.y, tile_blocks );
-    dim3 block( opt_push_block );
+    dim3 block( opt_charge_block );
 
     auto shm_size = charge0.tile_vol * sizeof(float);
 
@@ -2213,26 +2554,26 @@ void species::deposit_charge0( grid::tiled<float> & charge0 ) const {
 /**
  * @brief Deposit charge density high order modes
  * 
- * @param m         Cylindrical mode to deposit (1 to 4)
+ * @param m         Cylindrical mode to deposit (1 to nmodes-1)
  * @param charge    Charge density grid (complex)
  */
-void species::deposit_charge( const unsigned m, grid::tiled<complex_t> &charge ) const {
+void species::deposit_charge_m( const int m, grid::tiled<complex_t> &charge ) const {
 
-    if ( m != 1  ) {
-        mpi::fatal( "Only modes m = 1 is currently supported" );
+    if ( m < 1 || m >= nmodes ) {
+        mpi::fatal( "Invalid mode m = " + std::to_string(m) + ", must be in [1, nmodes[" );
     }
 
     auto ntiles = particles -> get_local_ntiles();
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
+    int tile_blocks = opt_charge_min_blocks / ( ntiles.x * ntiles.y );
     if ( tile_blocks < 1 ) tile_blocks = 1;
     dim3 grid( ntiles.x, ntiles.y, tile_blocks );
-    dim3 block( opt_push_block );
+    dim3 block( opt_charge_block );
 
     size_t shm_size = charge.tile_vol * sizeof( complex_t );
 
-    gpu::block::set_shmem_size( kernel::dep_charge<1>, shm_size );
-    kernel::dep_charge<1> <<< grid, block, shm_size >>> (
-        particles -> view(), charge.view()
+    gpu::block::set_shmem_size( kernel::dep_charge, shm_size );
+    kernel::dep_charge <<< grid, block, shm_size >>> (
+        m, particles -> view(), charge.view()
     );
 
     // High-order modes need an additional factor of 2, and fold across the
@@ -2299,7 +2640,7 @@ void species::save_charge( const unsigned m ) const {
         grid::tiled<float> charge( particles -> get_global_ntiles(), particles -> get_tile_dims(), gc, particles -> parallel );
 
         charge.zero();
-        deposit_charge0( charge );
+        deposit_charge_0( charge );
         charge.add_from_gc();
         charge.save( info, iter_info, path );
     } else {
@@ -2307,7 +2648,7 @@ void species::save_charge( const unsigned m ) const {
         grid::tiled<complex_t> charge( particles -> get_global_ntiles(), particles -> get_tile_dims(), gc, particles -> parallel );
 
         charge.zero();
-        deposit_charge( m, charge );
+        deposit_charge_m( m, charge );
         charge.add_from_gc();
         charge.save( info, iter_info, path );
     }
