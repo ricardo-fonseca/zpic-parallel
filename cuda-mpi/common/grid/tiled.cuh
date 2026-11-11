@@ -543,8 +543,7 @@ void x_shift_left( tiled_view<T> tiles, const unsigned shift )
 
     gpu::block::sync();
 
-    for( int idx = gpu::block::thread_rank(); idx < tile_vol; idx += gpu::block::num_threads() )
-        buffer[idx] = local[idx];
+    gpu::block::memcpy( buffer, local, tile_vol );
 }
 
 /**
@@ -573,8 +572,7 @@ void kernel3_x( tiled_view<T> tiles, S const a, S const b, S const c, int const 
     T * __restrict__ buffer = tiles.tile_buffer( tile_idx );
 
     // Copy data from tile buffer
-    for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        A[i] = buffer[i];
+    gpu::block::memcpy( A, buffer, tiles.tile_vol );
 
     // Synchronize 
     gpu::block::sync();
@@ -618,8 +616,7 @@ void kernel3_y( tiled_view<T> tiles, S const a, S const b, S const c, int const 
     T * __restrict__ buffer = tiles.tile_buffer( tile_idx );
 
     // Copy data from tile buffer
-    for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        A[i] = buffer[i];
+    gpu::block::memcpy( A, buffer, tiles.tile_vol );
 
     // Synchronize 
     gpu::block::sync();
@@ -671,8 +668,7 @@ void kernel3_xy( tiled_view<T> tiles, S const a, S const b, S const c, int const
     T * __restrict__ B = & shm[tiles.tile_vol];
 
     // Copy data from tile buffer
-    for( int i = gpu::block::thread_rank(); i < tiles.tile_vol; i += gpu::block::num_threads() )
-        A[i] = buffer[i];
+    gpu::block::memcpy( A, buffer, tiles.tile_vol );
 
     // Synchronize 
     gpu::block::sync();

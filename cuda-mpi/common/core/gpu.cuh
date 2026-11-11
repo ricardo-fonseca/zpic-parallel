@@ -564,69 +564,82 @@ namespace block {
 
         return v;
     }
-    
+
     /**
-     * @brief Block level memcpy
-     * 
-     * @tparam T 
-     * @param dst 
-     * @param src 
-     * @param n 
-     * @return __device__ 
-     */
+    * @brief Block level memcpy
+    *
+    * When both pointers are 16 byte aligned the data is copied with 16 byte
+    * (uint4) loads / stores, and any remainder byte by byte; otherwise element
+    * by element. The result is the same in both cases.
+    *
+    * @warning Must be called by all threads in the block
+    */
     template< class T >
     __device__
     inline void memcpy( T * __restrict__ dst, const T * __restrict__ src, size_t n ) {
-        for( size_t i = thread_rank(); i < n; i += num_threads() )
-            dst[i] = src[i];
-    }
+        static_assert( std::is_trivially_copyable_v<T>, "gpu::block::memcpy requires a trivially copyable type" );
 
-    /**
-     * @brief Block level memcpy of float3 values
-     * 
-     * @warning Must be called by all threads in block
-     * 
-     * @param dst   Destination address
-     * @param src   Source address
-     * @param n     Number of elements to copy
-     */
-    __device__ __inline__
-    void memcpy( float3 * __restrict__ dst, float3 const * __restrict__ src, const size_t n ) {
-        float *       __restrict__ _dst = reinterpret_cast<float *>( dst );
-        float const * __restrict__ _src = reinterpret_cast<float const *>( src );
+        const size_t nbytes = n * sizeof(T);
+        const auto align = reinterpret_cast<uintptr_t>( dst ) | reinterpret_cast<uintptr_t>( src );
 
-        for( size_t i = thread_rank(); i < 3*n; i += num_threads() )
-            _dst[i] = _src[i];
-    }
-    
-    /**
-     * @brief Simultaneous block level memcpy of 2 buffers of float3 values
-     * 
-     * @note  The 2 buffers must have the same size and don't overlap
-     * 
-     * @param dst1  Destination address 1
-     * @param src1  Source address 1
-     * @param dst2  Destination address 2
-     * @param src2  Source address 2
-     * @param n     Number of elments to copy
-     */
-    __device__ __inline__
-    void memcpy2( float3 * __restrict__ dst1, float3 const * __restrict__ src1,
-                  float3 * __restrict__ dst2, float3 const * __restrict__ src2,
-                  const size_t n ) {
-        float *       __restrict__ _dst1 = reinterpret_cast<float *>( dst1 );
-        float const * __restrict__ _src1 = reinterpret_cast<float const *>( src1 );
-        float *       __restrict__ _dst2 = reinterpret_cast<float *>( dst2 );
-        float const * __restrict__ _src2 = reinterpret_cast<float const *>( src2 );
+        if ( ( align & 15 ) == 0 ) {
+            // Bulk: 16 byte vector copies
+            auto * __restrict__       d16 = reinterpret_cast< uint4 * >( dst );
+            auto const * __restrict__ s16 = reinterpret_cast< uint4 const * >( src );
+            const size_t n16 = nbytes / 16;
+            for( size_t i = thread_rank(); i < n16; i += num_threads() )
+                d16[i] = s16[i];
 
-        for( size_t i = thread_rank(); i < 3*n; i += num_threads() ) {
-            _dst1[i] = _src1[i];
-            _dst2[i] = _src2[i];
+            // Remainder (< 16 bytes)
+            auto * __restrict__       d1 = reinterpret_cast< unsigned char * >( dst );
+            auto const * __restrict__ s1 = reinterpret_cast< unsigned char const * >( src );
+            for( size_t i = 16 * n16 + thread_rank(); i < nbytes; i += num_threads() )
+                d1[i] = s1[i];
+        } else {
+            for( size_t i = thread_rank(); i < n; i += num_threads() )
+                dst[i] = src[i];
         }
     }
 
     /**
-    * @brief Block level exclusive scan (add) (vector)
+    * @brief Block level zero
+    *
+    * When the pointer is 16 byte aligned the data is zeroed with 16 byte
+    * (uint4) stores, and any remainder byte by byte; otherwise element by
+    * element (T{}).
+    *
+    * @note The vector path sets all bits to 0, which is the value of T{} for
+    *       the arithmetic, complex and cyl3 types used in the code (+0.0 for
+    *       floating point), so both paths give the same result.
+    *
+    * @warning Must be called by all threads in the block
+    */
+    template< class T >
+    __device__
+    inline void zero( T * __restrict__ dst, size_t n ) {
+        static_assert( std::is_trivially_copyable_v<T>, "gpu::block::zero requires a trivially copyable type" );
+
+        const size_t nbytes = n * sizeof(T);
+
+        if ( ( reinterpret_cast<uintptr_t>( dst ) & 15 ) == 0 ) {
+            // Bulk: 16 byte vector stores
+            auto * __restrict__ d16 = reinterpret_cast< uint4 * >( dst );
+            const size_t n16 = nbytes / 16;
+            for( size_t i = thread_rank(); i < n16; i += num_threads() )
+                d16[i] = uint4{ 0, 0, 0, 0 };
+
+            // Remainder (< 16 bytes)
+            auto * __restrict__ d1 = reinterpret_cast< unsigned char * >( dst );
+            for( size_t i = 16 * n16 + thread_rank(); i < nbytes; i += num_threads() )
+                d1[i] = 0;
+        } else {
+            for( size_t i = thread_rank(); i < n; i += num_threads() )
+                dst[i] = T{};
+        }
+    }
+
+    /**
+    * @brief Block level exclusive scan (add) (inplace)
     *
     * @note All data is processed by a single block
     * 
@@ -688,7 +701,7 @@ namespace block {
     }
 
     /**
-    * @brief Block level exclusive scan (add) (vector)
+    * @brief Block level exclusive scan (add)
     *
     * @note All data is processed by a single block
     * 

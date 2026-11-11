@@ -19,11 +19,14 @@
 /// @brief Optimal block size for push kernel
 int constexpr opt_push_block = 1024;
 
+/// @brief Optimal minimum number of blocks for move kernel
+int constexpr opt_push_min_blocks = 2048;
+
 /// @brief Optimal block size for move kernel
 int constexpr opt_move_block = 256;
 
-/// @brief Optimal minimum number of blocks for move/push kernels
-int constexpr opt_min_blocks = 2048;
+/// @brief Optimal minimum number of blocks for move kernel
+int constexpr opt_move_min_blocks = 2048;
 
 
 /**
@@ -552,9 +555,7 @@ void __launch_bounds__(opt_move_block) move_deposit(
     extern __shared__ float3 _current_buffer[];
 
     // Zero local current buffer
-    for( int i = gpu::block::thread_rank(); i < current.tile_vol; i += gpu::block::num_threads() )
-        _current_buffer[i] = make_float3(0,0,0);
-
+    gpu::block::zero( _current_buffer, current.tile_vol );
     gpu::block::sync();
 
     // Move particles and deposit current
@@ -709,19 +710,21 @@ void __launch_bounds__(opt_move_block) move_deposit(
 
     gpu::block::sync();
 
-    // Add current and charge to global buffers
+    // Add current to global buffers using coallesced access
+    float * dev_J = reinterpret_cast< float * > ( current.tile_buffer(tile_id));
+    float * shm_J = reinterpret_cast< float * > ( _current_buffer );
+
     float3 * __restrict__ J_buffer = current.tile_buffer( tile_id );
     if ( gridDim.z > 1 ) {
-        // Multiple blocks deposit to the same buffers
-        for( auto i =  gpu::block::thread_rank(); i < current.tile_vol; i+= gpu::block::num_threads() ) {
-            gpu::device::atomic_fetch_add( & J_buffer[i].x, _current_buffer[i].x );
-            gpu::device::atomic_fetch_add( & J_buffer[i].y, _current_buffer[i].y );
-            gpu::device::atomic_fetch_add( & J_buffer[i].z, _current_buffer[i].z );
+        // When using multiple blocks per tile we must add the current using atomic ops
+        for( auto i =  gpu::block::thread_rank(); i < 3 * current.tile_vol; i+= gpu::block::num_threads() ) {
+            gpu::device::atomic_fetch_add( & dev_J[ i ], shm_J[ i ] );
         }
     } else {
         // only 1 block deposits to each buffer, no need for atomic ops
-        for( auto i =  gpu::block::thread_rank(); i < current.tile_vol; i+= gpu::block::num_threads() )
-            J_buffer[i] += _current_buffer[i];
+        for( auto i =  gpu::block::thread_rank(); i < 3 * current.tile_vol; i+= gpu::block::num_threads() ) {
+            dev_J[ i ] += shm_J[ i ]; 
+        }
     }
 
     if ( gpu::block::thread_rank() == 0 && blockIdx.z == 0 ) {
@@ -1039,7 +1042,7 @@ void species::move( grid::tiled_vec3<float> & J, const int2 shift )
     auto ntiles = particles -> get_local_ntiles();
 
     // If number of tiles is small use multiple blocks per tile
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
+    int tile_blocks = opt_move_min_blocks / ( ntiles.x * ntiles.y );
     if ( tile_blocks < 1 ) tile_blocks = 1;
     dim3 grid( ntiles.x, ntiles.y, tile_blocks );
 
@@ -1090,7 +1093,7 @@ void species::push( grid::tiled_vec3<float> const & E, grid::tiled_vec3<float> c
 
     auto ntiles = particles -> get_local_ntiles();
 
-    int tile_blocks = opt_min_blocks / ( ntiles.x * ntiles.y );
+    int tile_blocks = opt_push_min_blocks / ( ntiles.x * ntiles.y );
     if ( tile_blocks < 1 ) tile_blocks = 1;
     dim3 grid( ntiles.x, ntiles.y, tile_blocks );
     
