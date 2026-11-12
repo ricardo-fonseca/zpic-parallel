@@ -1,41 +1,88 @@
-#include "particles.hpp"
+/**
+ * @file particles_impl.cuh
+ * @brief Generic tiled particle buffer (common implementation)
+ * 
+ * @details This file is not meant to be compiled directly. Each particle type
+ *          creates a local source file (e.g. `cyl_part/particles.cu`) that
+ *          includes the local wrapper header, defines the namespace and then
+ *          includes this file:
+ * 
+ *              #include "particles.hpp"
+ *              #define PARTICLES_NAMESPACE cyl_part
+ *              #include "../common/particles_impl.cuh"
+ * 
+ *          The particle quantities are not needed here; all per-quantity
+ *          operations go through `particles_view` methods (`load()`,
+ *          `store()`, `pack()`, `unpack()`, `check_finite()`) generated in
+ *          `common/particles.hpp`.
+ * 
+ * @note    This file is only meant to be included (it uses the .cuh extension
+ *          so that build system `*.cu` globs do not pick it up), it will fail
+ *          with a #error if compiled on its own.
+ */
+
+#ifndef PARTICLES_NAMESPACE
+#error "PARTICLES_NAMESPACE must be defined before including common/particles_impl.cuh"
+#endif
 
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <cmath>
 #include <vector>
+#include <limits>
 
+// Everything (including kernels and helper functions) is defined inside the
+// particle namespace, so that several particle types can be linked together
+namespace PARTICLES_NAMESPACE {
 
 /**
  * Optimized parameters for NVIDIA A100
  */
-constexpr int opt_bnd_check_block        = 1024;
+constexpr int opt_bnd_check_block        = 512;
+constexpr int opt_bnd_check_min_blocks   = 2048;
+
 constexpr int opt_update_tile_info_block = 1024;
 constexpr int opt_copy_out_block         = 1024;
 constexpr int opt_copy_in_block          = 1024;
+constexpr int opt_copy_sorted_block      = 512;
 
 
 namespace kernel {
 
-__global__
 /**
  * @brief   Check which particles have left the tile and determine new number
  *          of particles per tile.
  * 
- * @warning This kernel expects that sort.new_np has been zeroed before being
- *          called.
+ * @details Supports multiple blocks per tile (`gridDim.z > 1`): each block
+ *          processes a (warp aligned) subset of the tile particles. All
+ *          per-tile results (`sort.npt`, `sort.nidx`, `sort.new_np`) are
+ *          accumulated using global atomics, so they must be zeroed before
+ *          calling this kernel (see `particle_sort::reset()`).
+ * 
+ *          Space in the `sort.idx[]` list is reserved using a warp-aggregated
+ *          reservation (ballot + popc), i.e., 1 global atomic per warp with
+ *          leaving particles. Indices from the same warp are stored
+ *          contiguously and in ascending order, which improves memory locality
+ *          of the `ix[ idx[i] ]` gather in `copy_out()`.
+ * 
+ * @warning This kernel expects that sort.new_np, sort.npt and sort.nidx have
+ *          been zeroed before being called.
  * 
  * @param part      (in) Particle data
  * @param sort      (out) Sort data (new number of particles per tile, indices
  *                  particles leaving the tile, etc.)
  * @param local_bnd     (in) Information on local node boundaries
  */
-void __launch_bounds__(opt_bnd_check_block) bnd_check( 
-    part::particles_view part, 
+__global__ __launch_bounds__(opt_bnd_check_block)
+void bnd_check( 
+    particles_view part, 
     part::particle_sort_view sort, 
     const part::bnd_type local_bnd)
 {
+    static_assert( opt_bnd_check_block % gpu::warp_size == 0,
+        "bnd_check block size must be a multiple of the warp size" );
+
     // ntiles needs to be set to signed because of the comparisons below
     const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
     const int2 lim = make_int2( part.tile_dims.x, part.tile_dims.y );
@@ -43,62 +90,91 @@ void __launch_bounds__(opt_bnd_check_block) bnd_check(
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
 
-    const auto offset  = part.tile_offset[ tile_id ];
-    const auto np      = part.tile_np[ tile_id ];
+    const int offset  = part.tile_offset[ tile_id ];
+    const int np      = part.tile_np[ tile_id ];
 
-    int2 * __restrict__ ix    = &part.ix[ offset ];
+    // Select subset of particles to check (if gridDim.z > 1)
+    // We are using multiple blocks per tile (blockIdx.z)
+    const int nblocks  = gridDim.z;
+    const int set_size = roundup<gpu::warp_size>( ( np + nblocks - 1 ) / nblocks );
+    const int begin    = blockIdx.z * set_size;
+
+    // If the block does not have any particles to process return
+    // (uniform across the block, so no issues with the syncs below)
+    if ( begin >= np ) return;
+
+    const int end      = ( begin + set_size < np ) ? begin + set_size : np;
+
+    int2 const * __restrict__ ix = &part.ix[ offset ];
 
     /// @brief Indices of particles leaving tile
     int  * __restrict__ idx   = &sort.idx[ offset ];
 
-    /// @brief [shared] Number of particles moving in each direction
+    /// @brief [shared] Number of particles moving in each direction (this block)
     __shared__ int _npt[9];
-    for( auto i = gpu::block::thread_rank(); i < 9; i+= gpu::block::num_threads() ) _npt[i] = 0;
-
-    /// @brief [shared] Number of particle leaving tile
-    __shared__ int _nout;
-    if ( gpu::block::thread_rank() == 0 ) _nout = 0;
+    for( int i = gpu::block::thread_rank(); i < 9; i+= gpu::block::num_threads() ) _npt[i] = 0;
 
     gpu::block::sync();
 
+    const int      lane        = gpu::warp::thread_rank();
+    const unsigned lanemask_lt = ( 1u << lane ) - 1;
+
     // Count particles according to their motion and store indices of particles leaving tile
-    for( int i = gpu::block::thread_rank(); i < np; i += gpu::block::num_threads() ) {
-        int2 ipos = ix[i];
-        int xcross = ( ipos.x >= lim.x ) - ( ipos.x < 0 );
-        int ycross = ( ipos.y >= lim.y ) - ( ipos.y < 0 );
-        
-        if ( xcross || ycross ) {
-            gpu::block::atomic_fetch_add( &_npt[ (ycross+1) * 3 + (xcross+1) ], 1 );
-            idx[ gpu::block::atomic_fetch_add( &_nout, 1 ) ] = i;
+    //
+    // Note: the loop bound is uniform across the block so that all warp lanes
+    // are always active for the gpu::warp::ballot / __shfl_sync calls
+    for( int i0 = begin; i0 < end; i0 += gpu::block::num_threads() ) {
+        const int i = i0 + gpu::block::thread_rank();
+
+        int xcross = 0, ycross = 0;
+        if ( i < end ) {
+            const int2 ipos = ix[i];
+            xcross = ( ipos.x >= lim.x ) - ( ipos.x < 0 );
+            ycross = ( ipos.y >= lim.y ) - ( ipos.y < 0 );
+        }
+        const bool out = xcross || ycross;
+
+        const unsigned mask = gpu::warp::ballot( out );
+        if ( mask ) {   // warp uniform
+            int base = 0;
+            if ( lane == 0 )
+                base = gpu::device::atomic_fetch_add( &sort.nidx[ tile_id ], __popc( mask ) );
+            const int l = __shfl_sync( gpu::full_mask, base, 0 ) + __popc( mask & lanemask_lt );
+
+            if ( out ) {
+                gpu::block::atomic_fetch_add( &_npt[ (ycross+1) * 3 + (xcross+1) ], 1 );
+                idx[ l ] = i;
+            }
         }
     }
     gpu::block::sync();
 
-    // Store number of particles staying / leaving the tile
-    if (gpu::block::thread_rank() == 0 ){
-        // Particles remaining on the tile
-        _npt[4] = np - _nout;
-        // Store number of particles leaving tile
-        sort.nidx[ tile_id ] = _nout;
+    // Number of particles staying in the tile (this block)
+    if ( gpu::block::thread_rank() == 0 ) {
+        int nout = 0;
+        for( int i = 0; i < 9; i++ ) nout += _npt[i];   // _npt[4] is still 0 here
+        _npt[4] = ( end - begin ) - nout;
     }
     gpu::block::sync();
 
     for( int i = gpu::block::thread_rank(); i < 9; i += gpu::block::num_threads() ) {
-        
-        // Store number of particles leaving tile in each direction
-        sort.npt[ 9*tile_id + i ] = _npt[i];
+        const int n = _npt[i];
+        if ( n > 0 ) {
+            // Add number of particles leaving tile in each direction
+            gpu::device::atomic_fetch_add( & sort.npt[ 9*tile_id + i ], n );
 
-        // Add number of particles to target neighboring node
+            // Add number of particles to target tile
 
-        // Find target node
-        int2 target = make_int2( 
-                tile_idx.x + i % 3 - 1,
-                tile_idx.y + i / 3 - 1
-            );
-        int target_tid = part::tid_coords( target, ntiles, local_bnd );
-        
-        if ( target_tid >= 0 ) {
-            gpu::device::atomic_fetch_add( & sort.new_np[ target_tid ], _npt[i] );
+            // Find target tile
+            int2 target = make_int2( 
+                    tile_idx.x + i % 3 - 1,
+                    tile_idx.y + i / 3 - 1
+                );
+            int target_tid = part::tid_coords( target, ntiles, local_bnd );
+            
+            if ( target_tid >= 0 ) {
+                gpu::device::atomic_fetch_add( & sort.new_np[ target_tid ], n );
+            }
         }
     }
 }
@@ -109,8 +185,12 @@ void __launch_bounds__(opt_bnd_check_block) bnd_check(
  * @brief   Check which particles have left the tile and determine new number
  *          of particles per tile.
  * 
- * @warning This kernel expects that sort.new_np has been zeroed before being
- *          called.
+ * @note    Launches multiple blocks per tile (`gridDim.z`) when the number of
+ *          local tiles is low, so that at least `opt_bnd_check_min_blocks`
+ *          blocks are launched.
+ * 
+ * @warning This kernel expects that sort.new_np, sort.npt and sort.nidx have
+ *          been zeroed before being called (`particle_sort::reset()`).
  * 
  * @param part          (in) Particle data
  * @param sort          (out) Sort data (new number of particles per tile, indices
@@ -118,9 +198,13 @@ void __launch_bounds__(opt_bnd_check_block) bnd_check(
  * @param local_bnd     (in) Information on local node boundaries
  */
 void bnd_check( 
-    part::particles_view data, part::particle_sort_view sort, const part::bnd_type local_bnd)
+    particles_view data, part::particle_sort_view sort, const part::bnd_type local_bnd)
 {
-    dim3 grid( data.local_ntiles.x, data.local_ntiles.y );
+    uint2 ntiles = data.local_ntiles;
+    int tile_blocks = opt_bnd_check_min_blocks / ( ntiles.x * ntiles.y );
+    if ( tile_blocks < 1 ) tile_blocks = 1;
+
+    dim3 grid( ntiles.x, ntiles.y, tile_blocks );
     auto block = opt_bnd_check_block;    
     kernel::bnd_check <<<grid,block>>> ( data, sort, local_bnd );
 }
@@ -132,7 +216,7 @@ void bnd_check(
  * @param sort      Temporary sort index 
  * @param recv      Receive message object 
  */
-void part::particles::irecv_msg( particle_sort &sort, particle_message &recv ) {
+void particles::irecv_msg( part::particle_sort &sort, part::particle_message &recv ) {
 
     /// @brief Total size (bytes) of data to be received
     uint32_t total_size = 0;
@@ -176,7 +260,7 @@ __global__
  * @param dev_np        (out) Total number of particles (including additional ones)
  */
 void __launch_bounds__(opt_update_tile_info_block) update_tile_info( 
-    part::particles_view tmp,
+    particles_view tmp,
     part::particle_sort_view sort,
     const int * __restrict__ recv_buffer,
     const int * __restrict__ extra,
@@ -256,7 +340,7 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
  * @return uint32_t     (out) Total number of particles (including additional ones)
  */
 uint32_t update_tile_info( 
-    part::particles_view tmp, 
+    particles_view tmp, 
     part::particle_sort & sort,
     gpu::device::var<uint32_t> & dev_np,
     const int * __restrict__ extra = nullptr ) {
@@ -299,8 +383,8 @@ __global__
  * @param periodic  Correct for periodic boundaries
  */
 void __launch_bounds__(opt_copy_out_block) copy_out( 
-    part::particles_view part, 
-    part::particles_view tmp,
+    particles_view part, 
+    particles_view tmp,
     const part::particle_sort_view sort,
     const part::bnd_type local_bnd )
 {
@@ -308,6 +392,8 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
     const int2 lim = make_int2( part.tile_dims.x, part.tile_dims.y );
 
     /// @brief [shared] offsets in target buffer
+    // Note: the _dir_offset variable holds the offset for each of the 9 target
+    // tiles in the global tmp buffer
     __shared__ int _dir_offset[9];
 
     /// @brief [shared] index of particle used to fill hole
@@ -320,20 +406,12 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
     int * __restrict__ npt    = &sort.npt[ 9*tile_id ];
 
     auto * __restrict__ ix  = &part.ix[ old_offset ];
-    auto * __restrict__ x   = &part.x[ old_offset ];
-    auto * __restrict__ u   = &part.u[ old_offset ];
 
     auto * __restrict__ idx = &sort.idx[ old_offset ];
     uint32_t const nidx     = sort.nidx[ tile_id ];
 
     int const new_offset = tmp.tile_offset[ tile_id ];
     int const new_np     = sort.new_np[ tile_id ];
-
-    // The _dir_offset variable holds the offset for each of the 9 target
-    // tiles so the tmp_* variables just point to the beggining of the buffers
-    auto * __restrict__ tmp_ix = tmp.ix;
-    auto * __restrict__ tmp_x  = tmp.x;
-    auto * __restrict__ tmp_u  = tmp.u;
 
     // Number of particles staying in tile
     const int n0 = npt[4];
@@ -393,12 +471,10 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
         
         int k = idx[i];
 
-        auto nix  = ix[k];
-        auto nx   = x[k];
-        auto nu   = u[k];
+        particle_t p = part.load( old_offset + k );
         
-        int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
-        int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
+        int xcross = ( p.ix.x >= lim.x ) - ( p.ix.x < 0 );
+        int ycross = ( p.ix.y >= lim.y ) - ( p.ix.y < 0 );
 
         const int dir = (ycross+1) * 3 + (xcross+1);
 
@@ -408,13 +484,11 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
             // _dir_offset[] includes the offset in the global tmp particle buffer
             int l = gpu::block::atomic_fetch_add( & _dir_offset[dir], 1 );
 
-            // Correct positions - nix is ok for new tile
-            nix.x -= xcross * lim.x;
-            nix.y -= ycross * lim.y;
+            // Correct positions - ix is ok for new tile
+            p.ix.x -= xcross * lim.x;
+            p.ix.y -= ycross * lim.y;
 
-            tmp_ix[ l ] = nix;
-            tmp_x[ l ] = nx;
-            tmp_u[ l ] = nu;
+            tmp.store( l, p );
         }
 
         // Fill hole if needed
@@ -427,9 +501,7 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
                           ( ix[c].y < 0 ) || ( ix[c].y >= lim.y );
             } while (invalid);
 
-            ix[ k ] = ix[ c ];
-            x [ k ] = x [ c ];
-            u [ k ] = u [ c ];
+            part.store( old_offset + k, part.load( old_offset + c ) );
         }
     }
 
@@ -444,9 +516,7 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
     if ( new_offset >= old_offset ) {
         // Copy from beggining of buffer
         for( int i = gpu::block::thread_rank(); i < nshift; i += gpu::block::num_threads() ) {
-            tmp_ix[ new_idx + i ] = ix[ i ];
-            tmp_x[ new_idx + i ]  = x [ i ];
-            tmp_u[ new_idx + i ]  = u [ i ];
+            tmp.store( new_idx + i, part.load( old_offset + i ) );
         }
 
     } else {
@@ -454,9 +524,7 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
         // Copy from end of buffer
         const int old_idx = n0 - nshift;
         for( int i = gpu::block::thread_rank(); i < nshift; i += gpu::block::num_threads() ) {
-            tmp_ix[ new_idx + i ] = ix[ old_idx + i ];
-            tmp_x[ new_idx + i ]  = x [ old_idx + i ];
-            tmp_u[ new_idx + i ]  = u [ old_idx + i ];
+            tmp.store( new_idx + i, part.load( old_offset + old_idx + i ) );
         }
     }
 
@@ -492,7 +560,7 @@ void __launch_bounds__(opt_copy_out_block) copy_out(
  * @param periodic  Correct for periodic boundaries
  */
 void copy_out( 
-    part::particles_view data, part::particles_view tmp, const part::particle_sort_view sort,
+    particles_view data, particles_view tmp, const part::particle_sort_view sort,
     const part::bnd_type local_bnd )
 {
     dim3 grid( tmp.local_ntiles.x, tmp.local_ntiles.y );
@@ -513,7 +581,7 @@ namespace kernel {
  * @param send_msg_np 
  */
 __global__
-void pack_msg( part::particles_view tmp, uint8_t * __restrict__ send_buffer, int * __restrict__ send_msg_np ) {
+void pack_msg( particles_view tmp, uint8_t * __restrict__ send_buffer, int * __restrict__ send_msg_np ) {
 
     ///@brief Number of particles per message (shared)
     __shared__ int msg_np[9];
@@ -550,7 +618,7 @@ void pack_msg( part::particles_view tmp, uint8_t * __restrict__ send_buffer, int
         for( int i = 0; i < dir; i++ ) dir_offset += msg_np[ i ];
 
         ///@brief send message buffer for this direction
-        uint8_t * msg_buffer = &send_buffer[ dir_offset * part::particles::particle_size() ];
+        uint8_t * msg_buffer = &send_buffer[ dir_offset * particles::particle_size() ];
 
         // Compute number of particles used by all previous tiles in the same direction
         // Might be possible to use a block::exscan
@@ -560,15 +628,10 @@ void pack_msg( part::particles_view tmp, uint8_t * __restrict__ send_buffer, int
         }
 
         // Compute offsets inside destination message
-        const part::particles::packed_offsets dst( msg_buffer_off, msg_np[ dir ] );
+        const packed_offsets dst( msg_buffer_off, msg_np[ dir ] );
 
-        // Due to alignment issues copying as int2/float2 may fail
-        gpu::block::memcpy( reinterpret_cast<int *>( &msg_buffer[ dst.ix ] ),   
-                            reinterpret_cast<int *>( &tmp.ix[ src_offset ]), 2*send_np);
-        gpu::block::memcpy( reinterpret_cast<float *>( &msg_buffer[ dst.x  ] ), 
-                            reinterpret_cast<float *>( &tmp.x[ src_offset ]), 2*send_np );
-        gpu::block::memcpy( reinterpret_cast<float *>( &msg_buffer[ dst.u  ] ), 
-                            reinterpret_cast<float *>( &tmp.u[ src_offset ]), 3*send_np );
+        // Copy all quantities (as 32 bit words, see particles_view::pack())
+        tmp.pack( msg_buffer, dst, src_offset, send_np );
     }
 
 }
@@ -582,7 +645,7 @@ void pack_msg( part::particles_view tmp, uint8_t * __restrict__ send_buffer, int
  * @param sort      Temporary sort index
  * @param send      Send message object
  */
-void part::particles::isend_msg( particles &tmp, particle_sort &sort, particle_message &send ) {
+void particles::isend_msg( particles &tmp, part::particle_sort &sort, part::particle_message &send ) {
 
     /// @brief Total number of particles being sent
     uint32_t send_np = 0;
@@ -627,8 +690,8 @@ __global__
  * @param tmp       Temporary particle data
  */
 void __launch_bounds__(opt_copy_in_block) copy_in(
-    part::particles_view data,
-    part::particles_view tmp
+    particles_view data,
+    particles_view tmp
 ) {
     const int2 ntiles = make_int2( data.local_ntiles.x, data.local_ntiles.y );
 
@@ -642,21 +705,12 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
     const int tmp_np           =  tmp.tile_np[ tile_id ];
 
     // Notice that we are already working with the new offset
-    auto * __restrict__ ix  = &data.ix[ new_offset ];
-    auto * __restrict__ x   = &data.x [ new_offset ];
-    auto * __restrict__ u   = &data.u [ new_offset ];
-
-    auto * __restrict__ tmp_ix = &tmp.ix[ new_offset ];
-    auto * __restrict__ tmp_x  = &tmp.x [ new_offset ];
-    auto * __restrict__ tmp_u  = &tmp.u [ new_offset ];
 
     if ( new_offset >= old_offset ) {
 
         // Add particles to the end of the buffer
         for( int i = gpu::block::thread_rank(); i < tmp_np; i += gpu::block::num_threads() ) {
-            ix[ old_np + i ] = tmp_ix[ i ];
-            x [ old_np + i ] = tmp_x[ i ];
-            u [ old_np + i ] = tmp_u[ i ];
+            data.store( new_offset + old_np + i, tmp.load( new_offset + i ) );
         }
 
     } else {
@@ -666,16 +720,12 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
         if ( np0 > tmp_np ) np0 = tmp_np;
         
         for( int i = gpu::block::thread_rank(); i < np0; i += gpu::block::num_threads() ) {
-            ix[ i ] = tmp_ix[ i ];
-            x [ i ] = tmp_x [ i ];
-            u [ i ] = tmp_u [ i ];
+            data.store( new_offset + i, tmp.load( new_offset + i ) );
         }
 
         // If any particles left, add particles to the end of the buffer
         for( int i = np0 + gpu::block::thread_rank(); i < tmp_np; i += gpu::block::num_threads() ) {
-            ix[ old_np + i ] = tmp_ix[ i ];
-            x [ old_np + i ] = tmp_x [ i ];
-            u [ old_np + i ] = tmp_u [ i ];
+            data.store( new_offset + old_np + i, tmp.load( new_offset + i ) );
         }
 
     }
@@ -700,7 +750,7 @@ void __launch_bounds__(opt_copy_in_block) copy_in(
  * @param data      Main particle data
  * @param tmp       Temporary particle data
  */
-void copy_in( part::particles_view data, part::particles_view tmp )
+void copy_in( particles_view data, particles_view tmp )
 {
     dim3 grid( data.local_ntiles.x, data.local_ntiles.y );
     auto block = opt_copy_in_block;
@@ -722,7 +772,7 @@ __global__
 * @param recv_msg_np,      Number of particles per message
 * @param recv_msg_tile_np  Number of particles per received tile
 */
-void unpack_msg( part::particles_view data, 
+void unpack_msg( particles_view data, 
     uint8_t * __restrict__ recv_buffer, 
     int * __restrict__ recv_msg_np,
     int * __restrict__ recv_msg_tile_np ) {
@@ -776,7 +826,7 @@ void unpack_msg( part::particles_view data,
         for( int i = 0; i < dir; i++ ) dir_offset += msg_np[ i ];
 
         ///@brief receive message buffer for this direction
-        uint8_t * msg_buffer = &recv_buffer[ dir_offset * part::particles::particle_size() ];
+        uint8_t * msg_buffer = &recv_buffer[ dir_offset * particles::particle_size() ];
 
         // Compute number of particles used by all previous tiles in the same direction
         // Might be possible to use a block::exscan
@@ -786,18 +836,10 @@ void unpack_msg( part::particles_view data,
         }
 
         // Compute offsets inside source message
-        const part::particles::packed_offsets src( msg_buffer_off, msg_np[ dir ] );
+        const packed_offsets src( msg_buffer_off, msg_np[ dir ] );
 
-        // Note that due to alignment issues copying as int2/float2/float3 may fail
-        gpu::block::memcpy( reinterpret_cast<int *>( &data.ix[ tgt_offset ]),
-                            reinterpret_cast<int *>( &msg_buffer[ src.ix ] ),   
-                            2*recv_np );
-        gpu::block::memcpy( reinterpret_cast<float *>( &data.x[ tgt_offset ]),
-                            reinterpret_cast<float *>( &msg_buffer[ src.x  ]), 
-                            2*recv_np );
-        gpu::block::memcpy( reinterpret_cast<float *>( &data.u[ tgt_offset ]),
-                            reinterpret_cast<float *>( &msg_buffer[ src.u  ]), 
-                             3*recv_np );
+        // Copy all quantities (as 32 bit words, see particles_view::unpack())
+        data.unpack( msg_buffer, src, tgt_offset, recv_np );
 
     }
 
@@ -811,7 +853,7 @@ void unpack_msg( part::particles_view data,
  * @param sort      Temporary sort index
  * @param recv      Receive message object
  */
-void part::particles::unpack_msg( particle_sort &sort, particle_message &recv ) {
+void particles::unpack_msg( part::particle_sort &sort, part::particle_message &recv ) {
     if ( recv.buffer != nullptr ) {
         // Unpack all data - multiple message tiles may write to the same local tile
         dim3 grid( part::msg_tiles( local_ntiles ) );
@@ -831,173 +873,179 @@ void part::particles::unpack_msg( particle_sort &sort, particle_message &recv ) 
 
 namespace kernel {
 
-__global__
 /**
- * @brief CUDA kernel for copying all particles to correct tiles in another buffer
+ * @brief CUDA kernel for copying all particles to their correct tiles in
+ *        another buffer, in a single pass
  *
- * @param part      Particle data
- * @param tmp       Temporary particle buffer (has new offsets)
- * @param sort      Sort data (indices of particles leaving the tile, etc.)
- * @param periodic  Correct for periodic boundaries
+ * @details One block per (local) tile. Every particle in the tile is read
+ *          once and written once to its final position in `tmp`:
+ *
+ *          - Space for each of the 9 possible destinations (including the
+ *            tile itself, dir = 4) is reserved up front in `tmp` with a
+ *            single global atomic per destination, using the counts from
+ *            `bnd_check()` (`sort.npt`).
+ *          - Particles staying in the tile (the vast majority) get their
+ *            position using a warp-aggregated reservation (ballot + popc),
+ *            so there is only 1 shared memory atomic per warp, and particles
+ *            from the same warp are stored contiguously and in their original
+ *            order, giving (nearly) fully coalesced writes.
+ *          - Particles leaving the tile (few) use a shared memory atomic per
+ *            particle. Their cell index is corrected for the new tile. 
+ *            Particles leaving the node are stored in the "edge" (message)
+ *            tiles of `tmp`, exactly as in `copy_out()`, so that `isend_msg()`
+ *            can pack them from `tmp`. Particles crossing a non-communicating,
+ *            non-periodic boundary are dropped.
+ *
+ *          Unlike the `copy_out()` kernel the source buffer is never
+ *          modified (no hole filling), and the `sort.idx` / `sort.nidx`
+ *          arrays are not used.
+ *
+ * @note    Requires a 1D block whose size is a multiple of the warp size.
+ *
+ * @param data      (in)  Particle data
+ * @param tmp       (out) Temporary particle buffer (has new offsets, and
+ *                  tile_np set to 0)
+ * @param sort      (in)  Sort data (number of particles moving in each
+ *                  direction)
+ * @param local_bnd (in)  Information on local node boundaries
  */
-void copy_sorted( 
-    part::particles_view data,
-    part::particles_view tmp,
+__global__
+void __launch_bounds__(opt_copy_sorted_block) copy_sorted( 
+    particles_view data,
+    particles_view tmp,
     const part::particle_sort_view sort,
-    const int2 periodic
-) {
-    const int2 ntiles = make_int2( data.local_ntiles.x, data.local_ntiles.y );
-    const int2 lim = make_int2( data.tile_dims.x, data.tile_dims.y );
+    const part::bnd_type local_bnd )
+{
+    static_assert( opt_copy_sorted_block % gpu::warp_size == 0, 
+        "copy_sorted block size must be a multiple of the warp size" );
+    
+    const int2 ntiles    = make_int2( data.local_ntiles.x, data.local_ntiles.y );
+    const int2 tile_dims = make_int2( data.tile_dims.x, data.tile_dims.y );
 
-    /// @brief [shared] offsets in target buffer
+    /// @brief [shared] offsets in target buffer
     __shared__ int _dir_offset[9];
 
-    /// @brief [shared] index of particle used to fill hole
-    __shared__ int _c;
-
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
-    const int tile_id = tile_idx.y * data.local_ntiles.x + tile_idx.x;
+    const int  tile_id  = tile_idx.y * ntiles.x + tile_idx.x;
 
+    const int offset = data.tile_offset[ tile_id ];
+    const int np     = data.tile_np[ tile_id ];
 
-    int const old_offset      = data.tile_offset[ tile_id ];
-    int * __restrict__ npt    = &sort.npt[ 9*tile_id ];
+    /// @brief Number of particles moving in each direction (npt[4] is staying)
+    const int * __restrict__ npt = &sort.npt[ 9*tile_id ];
 
-    auto * __restrict__ ix  = &data.ix[ old_offset ];
-    auto * __restrict__ x   = &data.x[ old_offset ];
-    auto * __restrict__ u   = &data.u[ old_offset ];
+    // Note: the _dir_offset variable holds the offset for each of the 9 target
+    // tiles in the global tmp buffer
 
-    int * __restrict__ idx    = &sort.idx[ old_offset ];
-    uint32_t const nidx       = sort.nidx[ tile_id ];
-
-    // The _dir_offset variables hold the offset for each of the 9 target
-    // tiles so the tmp_* variables just point to the beggining of the buffers
-    auto * __restrict__ tmp_ix = tmp.ix;
-    auto * __restrict__ tmp_x  = tmp.x;
-    auto * __restrict__ tmp_u  = tmp.u;
-
-    // Find offsets on new buffer
+    // Reserve space on new buffer for all 9 directions (including dir = 4)
     for( int i = gpu::block::thread_rank(); i < 9; i += gpu::block::num_threads() ) {
+        const int n = npt[i];
+        int off = -1;
+        if ( n > 0 ) {
+            const int2 target = make_int2( 
+                tile_idx.x + i % 3 - 1,
+                tile_idx.y + i / 3 - 1
+            );
+            const int target_tid = part::tid_coords( target, ntiles, local_bnd );
+
+            // If valid target tile reserve space on tmp. array, otherwise
+            // offset is left as invalid (-1) and particles will be dropped
+            if ( target_tid >= 0 ) {
+                off = tmp.tile_offset[ target_tid ] + 
+                      gpu::device::atomic_fetch_add( & tmp.tile_np[ target_tid ], n );
+            }
+        }
+        _dir_offset[i] = off;
+    }
+
+    gpu::block::sync();
+
+    const int      lane        = gpu::warp::thread_rank();
+    // mask with all lanes < current lane set to 1
+    const unsigned lanemask_lt = ( 1u << lane ) - 1;
+
+    // Note: the loop bound is uniform across the block so that all warp
+    // lanes are always active for the gpu::warp::ballot / __shfl_sync calls
+    for( int i0 = 0; i0 < np; i0 += gpu::block::num_threads() ) {
+        const int i = i0 + gpu::block::thread_rank();
+        const bool valid = ( i < np );
+
+        particle_t p;
+        int xcross = 0, ycross = 0;
         
-        // Find target node
-        int target_tx = tile_idx.x + i % 3 - 1;
-        int target_ty = tile_idx.y + i / 3 - 1;
-
-        bool valid = true;
-
-        // Correct for periodic boundaries
-        if ( periodic.x ) {
-            if ( target_tx < 0 )         target_tx += ntiles.x; 
-            if ( target_tx >= ntiles.x ) target_tx -= ntiles.x;
-        } else {
-            valid &= ( target_tx >= 0 ) && ( target_tx < ntiles.x ); 
-        }
-
-        if ( periodic.y ) {
-            if ( target_ty < 0 )         target_ty += ntiles.y;
-            if ( target_ty >= ntiles.y ) target_ty -= ntiles.y;
-        } else {
-            valid &= ( target_ty >= 0 ) && ( target_ty < ntiles.y ); 
-        }
-
         if ( valid ) {
-            // If valid neighbour tile reserve space on tmp. array
-            int target_tid = target_ty * ntiles.x + target_tx;
-
-            _dir_offset[i] = tmp.tile_offset[ target_tid ] + 
-                gpu::device::atomic_fetch_add( & tmp.tile_np[ target_tid ], npt[ i ] );
-        
-        } else {
-            // Otherwise mark offset as invalid
-            _dir_offset[i] = -1;
-        }
-    }
-
-    // Particles remaining on tile
-    const int n0 = npt[4];
-
-    // First candidate to fill holes
-    _c = n0;
-
-    gpu::block::sync();
-
-    // Copy particles moving away from tile and fill holes
-    for( int i = gpu::block::thread_rank(); i < nidx; i += gpu::block::num_threads() ) {
-        
-        int k = idx[i];
-
-        auto nix = ix[k];
-        auto nx  = x[k];
-        auto nu  = u[k];
-        
-        int xcross = ( nix.x >= lim.x ) - ( nix.x < 0 );
-        int ycross = ( nix.y >= lim.y ) - ( nix.y < 0 );
-
-        const int dir = (ycross+1) * 3 + (xcross+1);
-
-        // Check if particle crossed into a valid neighbor
-        if ( _dir_offset[dir] >= 0 ) {        
-
-            // _dir_offset[] includes the offset in the global tmp particle buffer
-            int l = gpu::block::atomic_fetch_add( & _dir_offset[dir], 1 );
-
-            nix.x -= xcross * lim.x;
-            nix.y -= ycross * lim.y;
-
-            tmp_ix[ l ] = nix;
-            tmp_x[ l ]  = nx;
-            tmp_u[ l ]  = nu;
+            p = data.load( offset + i );
+            xcross = ( p.ix.x >= tile_dims.x ) - ( p.ix.x < 0 );
+            ycross = ( p.ix.y >= tile_dims.y ) - ( p.ix.y < 0 );
         }
 
-        // Fill hole if needed
-        if ( k < n0 ) {
-            int c, invalid;
+        const bool stay = valid && ( xcross == 0 ) && ( ycross == 0 );
 
-            do {
-                c = gpu::block::atomic_fetch_add( &_c, 1 );
-                invalid = ( ix[c].x < 0 ) || ( ix[c].x >= lim.x ) || 
-                          ( ix[c].y < 0 ) || ( ix[c].y >= lim.y );
-            } while (invalid);
+        // Particles staying in tile - warp aggregated reservation
+        const unsigned mask = gpu::warp::ballot( stay );
+        if ( mask ) {   // warp uniform - all lanes will be active
+            // lane 0 reserves space on tile by doing an atomic add on dir_offset[4]
+            // __popc( mask ) will count the number of bits set to 1 in mask
+            int base = 0;
+            if ( lane == 0 ) 
+                base = gpu::block::atomic_fetch_add( &_dir_offset[4], __popc( mask ) );
 
-            ix[ k ] = ix[ c ];
-            x [ k ] = x [ c ];
-            u [ k ] = u [ c ];
+            // Broadcast result from lane 0 to all lanes and add local offset
+            // __popc( mask & lanemask_lt ) will count the number of bits set to 1
+            // in the lanes < current lane
+            const int l = __shfl_sync( gpu::full_mask, base, 0 ) + __popc( mask & lanemask_lt );
+
+            // Copy the particle
+            if ( stay ) tmp.store( l, p );
         }
-    }
 
-    gpu::block::sync();
+        // Particles leaving the tile
+        if ( valid && ! stay ) {
+            const int dir = ( ycross + 1 ) * 3 + ( xcross + 1 );
 
-    // Copy particles staying in tile
-    const int start = _dir_offset[4];
+            // Check if particle crossed into a valid neighbor
+            if ( _dir_offset[dir] >= 0 ) {
 
-    for( int i = gpu::block::thread_rank(); i < n0; i += gpu::block::num_threads() ) {
-        tmp_ix[ start + i ] = ix[i];
-        tmp_x [ start + i ] = x[i];
-        tmp_u [ start + i ] = u[i];
+                // _dir_offset[] includes the offset in the global tmp particle buffer
+                const int l = gpu::block::atomic_fetch_add( & _dir_offset[dir], 1 );
+
+                // Correct positions - ix is ok for new tile
+                p.ix.x -= xcross * tile_dims.x;
+                p.ix.y -= ycross * tile_dims.y;
+
+                tmp.store( l, p );
+            }
+        }
     }
 }
 
 } // namespace kernel
 
 /**
- * @brief Copies copy all particles to correct tiles in another buffer
+ * @brief Copies all particles to correct tiles in another buffer
  * 
  * @note Requires that new buffer (`tmp`) already has the correct offset
- *       values, and number of particles set to 0.
+ *       values, and number of particles set to 0, i.e., that
+ *       `update_tile_info()` has been called on `tmp`.
+ * 
+ * @note After this call `tmp.tile_np` holds, for local tiles, the number of
+ *       particles from this node (incoming MPI particles are added later by
+ *       `unpack_msg()`), and, for edge tiles, the number of particles to be
+ *       sent to other nodes.
  * 
  * @param data      Particle data
  * @param tmp       Temporary particle buffer (has new offsets)
- * @param sort      Sort data (indices of particles leaving the tile, etc.)
- * @param periodic  Correct for periodic boundaries
+ * @param sort      Sort data (number of particles moving in each direction)
+ * @param local_bnd Information on local node boundaries
  */
 void copy_sorted( 
-    part::particles_view data, part::particles_view tmp, const part::particle_sort_view sort,
+    particles_view data, particles_view tmp, const part::particle_sort_view sort,
     const part::bnd_type local_bnd )
 {
-    mpi::fatal( "copy_sorted() is not implemented yet, aborting...\n" );
+    dim3 grid( data.local_ntiles.x, data.local_ntiles.y );
+    dim3 block( opt_copy_sorted_block );
 
-    // dim3 grid( part.ntiles.x, part.ntiles.y );
-    // dim3 block( 1024 );
-    // kernel::copy_sorted <<< grid, block >>> ( part, tmp, sort, ... );
+    kernel::copy_sorted <<< grid, block >>> ( data, tmp, sort, local_bnd );
 }
 
 
@@ -1114,7 +1162,7 @@ void tile_np_min(
  * 
  * @return uint32_t 
  */
-uint32_t part::particles::local_np() {
+uint32_t particles::local_np() {
 
     dev_tmp_uint32.set(0);
 
@@ -1131,7 +1179,7 @@ uint32_t part::particles::local_np() {
  * 
  * @return uint32_t 
  */
-uint32_t part::particles::tile_np_max() {
+uint32_t particles::tile_np_max() {
 
     dev_tmp_uint32.set( 0 );
 
@@ -1148,7 +1196,7 @@ uint32_t part::particles::tile_np_max() {
  * 
  * @return uint32_t 
  */
-uint32_t part::particles::tile_np_min() {
+uint32_t particles::tile_np_min() {
 
     dev_tmp_uint32.set( std::numeric_limits<uint32_t>::max() );
 
@@ -1162,273 +1210,6 @@ uint32_t part::particles::tile_np_min() {
 
 
 
-namespace kernel {
-
-/**
- * @brief Gather particle data
- * 
- * @tparam quant    Quantiy to gather
- * @param src       Particle data
- * @param d_data    Output data
- */
-template < part::quantity quant >
-__global__
-void gather( 
-    part::particles_view src,
-    float * const __restrict__ d_data )
-{
-    const uint2 tile_idx = { blockIdx.x, blockIdx.y };
-    const int   tile_id  = tile_idx.y * src.local_ntiles.x + tile_idx.x;
-    
-    // Offset and number of particles on particle buffer
-    const auto  offset = src.tile_offset[ tile_id ];
-    const auto  np     = src.tile_np[ tile_id ];
-
-    // Global spatial offsets of local tile
-    const int offx = (src.local_tile_start.x + tile_idx.x) * src.tile_dims.x;
-    const int offy = (src.local_tile_start.y + tile_idx.y) * src.tile_dims.y;
-
-    auto const * __restrict__ const ix = & src.ix[ offset ];
-    auto const * __restrict__ const x  = & src.x [ offset ];
-    auto const * __restrict__ const u  = & src.u [ offset ];
-
-    for( int idx = gpu::block::thread_rank(); idx < np; idx += gpu::block::num_threads() ) {
-        float val;
-        if constexpr( quant == part::quantity::x  ) val = ( offx + ix[idx].x ) + (0.5f + x[idx].x);
-        if constexpr( quant == part::quantity::y  ) val = ( offy + ix[idx].y ) + (0.5f + x[idx].y);
-        if constexpr( quant == part::quantity::ux ) val = u[idx].x;
-        if constexpr( quant == part::quantity::uy ) val = u[idx].y;
-        if constexpr( quant == part::quantity::uz ) val = u[idx].z;
-        d_data[ offset + idx ] = val;
-    }
-}
-
-} // namespace kernel
-
-/**
- * @brief Gather data from a specific particle quantity in a device buffer
- * 
- * @param quant         Quantity to gather
- * @param d_data        Output data buffer, assumed to have size >= np
- */
-void part::particles::gather( part::quantity quant, float * const d_data )
-{
-    const dim3 grid( local_ntiles.x, local_ntiles.y );
-    const dim3 block( 1024 );
-
-    // Gather data on device
-    switch (quant) {
-    case part::quantity ::x : 
-        kernel::gather<part::quantity ::x> <<<grid,block>>> ( view(), d_data );
-        break;
-    case part::quantity ::y:
-        kernel::gather<part::quantity ::y> <<<grid,block>>> ( view(), d_data );
-        break;
-    case part::quantity ::ux:
-        kernel::gather<part::quantity ::ux> <<<grid,block>>> ( view(), d_data );
-        break;
-    case part::quantity ::uy:
-        kernel::gather<part::quantity ::uy> <<<grid,block>>> ( view(), d_data );
-        break;
-    case part::quantity ::uz:
-        kernel::gather<part::quantity ::uz> <<<grid,block>>> ( view(), d_data );
-        break;
-    }
-}
-
-namespace kernel {
-
-/**
- * @brief Gather particle data, scaling values
- * 
- * @note Data (val) will be returned as `scale.x * val + scale.y`
- *
- * @tparam quant    Quantiy to gather
- * @param src       Particle data
- * @param scale     Scale factor
- * @param d_data    Output data
- */
-template < part::quantity quant >
-__global__
-void gather( 
-    part::particles_view src,
-    const float2 scale,
-    float * const __restrict__ d_data
-) {
-    const uint2 tile_idx = { blockIdx.x, blockIdx.y };
-    const int   tile_id  = tile_idx.y * src.local_ntiles.x + tile_idx.x;
-
-    // Spatial offsets of local tile
-    const int offx = (src.local_tile_start.x + tile_idx.x) * src.tile_dims.x;
-    const int offy = (src.local_tile_start.y + tile_idx.y) * src.tile_dims.y;
-
-    // Offset and number of particles on particle buffer
-    const auto  offset = src.tile_offset[ tile_id ];
-    const auto  np     = src.tile_np[ tile_id ];
-
-    auto const * __restrict__ const ix = & src.ix[ offset ];
-    auto const * __restrict__ const x  = & src.x [ offset ];
-    auto const * __restrict__ const u  = & src.u [ offset ];
-
-    for( int idx = gpu::block::thread_rank(); idx < np; idx += gpu::block::num_threads() ) {
-        float val;
-        if constexpr( quant == part::quantity::x  ) val = (offx + ix[idx].x) + (0.5f + x[idx].x);
-        if constexpr( quant == part::quantity::y  ) val = (offy + ix[idx].y) + (0.5f + x[idx].y);
-        if constexpr( quant == part::quantity::ux ) val = u[idx].x;
-        if constexpr( quant == part::quantity::uy ) val = u[idx].y;
-        if constexpr( quant == part::quantity::uz ) val = u[idx].z;
-        d_data[ offset + idx ] = fma( scale.x, val, scale.y );
-    }
-}
-
-} // namespace kernel
-
-
-/**
- * @brief Gather data from a specific particle quantity in a device buffer, scaling values
- * 
- * @warning This expects the particle buffer to be compact, it will fail if 
- *          called with a non-compact buffer.
- *
- * @param quant     Quantity to gather
- * @param d_data    Output data buffer, assumed to have size >= np
- * @param scale     Scale factor for data
- */
-void part::particles::gather( part::quantity quant, const float2 scale, float * const __restrict__ d_data )
-{
-    const dim3 grid( local_ntiles.x, local_ntiles.y );
-    const dim3 block( 1024 );
-
-    // Gather data on device
-    switch (quant) {
-    case part::quantity::x : 
-        kernel::gather<part::quantity::x>  <<<grid,block>>> ( view(), scale, d_data );
-        break; 
-    case part::quantity::y: 
-        kernel::gather<part::quantity::y> <<<grid,block>>> ( view(), scale, d_data );
-        break; 
-    case part::quantity::ux: 
-        kernel::gather<part::quantity::ux> <<<grid,block>>> ( view(), scale, d_data );
-        break; 
-    case part::quantity::uy: 
-        kernel::gather<part::quantity::uy> <<<grid,block>>> ( view(), scale, d_data );
-        break; 
-    case part::quantity::uz: 
-        kernel::gather<part::quantity::uz> <<<grid,block>>> ( view(), scale, d_data );
-        break;
-    }
-}
-
-
-/**
- * @brief Save particle data to disk
- * 
- * @warning This expects the particle buffer to be compact, it will fail if 
- *          called with a non-compact buffer.
- *
- * @param quants    Quantities to save
- * @param metadata  Particle metadata (name, labels, units, etc.). Information is used to
- *                  set file name
- * @param iter      Iteration metadata
- * @param path      Path where to save the file
- */
-void part::particles::save( const part::quantity quants[], zdf::part_info &metadata, zdf::iteration &iter, std::string path ) {
-
-    // Get total number of particles to save
-    uint64_t local = local_np();
-    uint64_t global = 0;
-
-    parallel.allreduce( &local, &global, 1, mpi::sum );
-
-    // Update metadata entry
-    metadata.np = global;
-
-    if ( global > 0 ) {
-        // Create a communicator including only the nodes with local particles
-        int color = ( local > 0 ) ? 1 : MPI_UNDEFINED;
-        MPI_Comm comm;
-        MPI_Comm_split( parallel.get_comm(), color, 0, & comm );
-
-        // Only nodes with particles are involved in this section
-        if ( local > 0 ) {
-
-            // Get rank in new communicator
-            int rank;
-            MPI_Comm_rank( comm, & rank );
-
-            // Open file
-            zdf::par_file part_file;
-            zdf::open_part_file( part_file, metadata, iter, path+"/"+metadata.name, comm );
-
-            // create the datasets
-            std::vector< zdf::dataset > dsets( metadata.nquants );
-
-            for( uint32_t i = 0; i < metadata.nquants; i++ ) {
-                dsets[i].name      = metadata.quants[i];
-                dsets[i].data_type = zdf::data_type<float>();
-                dsets[i].ndims     = 1;
-                dsets[i].data      = nullptr;
-                dsets[i].count[0]  = global; 
-
-                if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
-                    mpi::fatal( "particles::save() - Unable to create chunked dataset " + 
-                        std::string(dsets[i].name) );
-                }
-            }
-
-            // Allocate buffer for gathering particle data
-            float *d_data = gpu::device::malloc<float>( local );
-            float *h_data = gpu::host::malloc<float>( local );
-
-            // Get offsets - this avoids recalculating offsets for each quantity
-            uint64_t file_off;
-            MPI_Exscan( &local, &file_off, 1, MPI_UINT64_T, MPI_SUM, comm );
-            if ( rank == 0 ) file_off = 0;
-
-            // Local data chunk
-            zdf::chunk chunk;
-            chunk.count[0] = local;
-            chunk.start[0] = file_off;
-            chunk.stride[0] = 1;
-            chunk.data = h_data;
-
-            // Write the data
-            for ( uint32_t i = 0; i < metadata.nquants; i ++) {
-                gather( quants[i], d_data );
-                gpu::device::memcpy_tohost( h_data, d_data, local );
-                zdf::write_cdset( part_file, dsets[i], chunk, file_off );
-            }
-
-            // Free temporary data
-            gpu::device::free( d_data );
-            gpu::host::free( h_data );
-
-            // close the datasets
-            for( uint32_t i = 0; i < metadata.nquants; i++ ) 
-                zdf::end_cdset( part_file, dsets[i] );
-
-            // Close the file
-            zdf::close_file( part_file );
-    
-            MPI_Comm_free(&comm);
-        }
-
-    } else {
-        // No particles - root node creates an empty file
-        if ( parallel.root() ) {
-            zdf::file part_file;
-            zdf::open_part_file( part_file, metadata, iter, path+"/"+metadata.name );
-
-            for ( uint32_t i = 0; i < metadata.nquants; i ++) {
-                zdf::add_quant_part_file( part_file, metadata.quants[i],  nullptr, 0 );
-            }
-
-            zdf::close_file( part_file );
-        }
-    }
-}
-
-
 /**
  * @brief Moves particles to the correct tiles
  * 
@@ -1440,7 +1221,7 @@ void part::particles::save( const part::quantity quants[], zdf::part_info &metad
  * @param extra     Additional space to add to each tile. Leaves  room for
  *                  particles to be injected later.
  */
-void part::particles::tile_sort( particles & tmp, particle_sort & sort, const int * __restrict__ extra ) {
+void particles::tile_sort( particles & tmp, part::particle_sort & sort, const int * __restrict__ extra ) {
 
     // Reset sort data
     sort.reset();
@@ -1460,21 +1241,37 @@ void part::particles::tile_sort( particles & tmp, particle_sort & sort, const in
     auto total_np = update_tile_info ( tmp.view(), sort, dev_tmp_uint32, extra );
 
     if ( total_np > max_part ) { 
-        std::ostringstream msg;
-        msg << "particles::tile_sort() - particle buffer requires growing,"
-                  << "max_part: " << max_part << ", total_np: " << total_np
-                  << ", not implemented yet.";
-        mpi::fatal(msg.str());
+
+        // Grow tmp particle buffer (tile_offset / tile_np are preserved)
+        tmp.grow_buffer( total_np );
+
+        // Copy all particles to correct tiles in tmp buffer. Particles
+        // leaving the node are placed in the edge tiles of tmp
+        copy_sorted( view(), tmp.view(), sort.view(), local_bnd );
+
+        // Pack particle data and start sending (from tmp edge tiles)
+        isend_msg( tmp, sort, send );
+
+        // Swap buffers, *this now holds the sorted data and new tile info
+        swap_buffers( *this, tmp );
+
+        // Grow tmp particle buffer for future use (old data is discarded)
+        tmp.grow_buffer( max_part );
+
+        // sort.idx is indexed by particle buffer position, so it must also
+        // be able to hold max_part values for the next bnd_check()
+        sort.check_buffer( max_part );
+
+    } else {
+        // Copy outgoing particles (and particles needing shifting) to staging area
+        copy_out ( view(), tmp.view(), sort.view(), local_bnd );
+
+        // Pack particle data and start sending
+        isend_msg( tmp, sort, send );
+
+        // Copy local particles from staging area into final positions in partile buffer
+        copy_in ( view(), tmp.view() );
     }
-
-    // Copy outgoing particles (and particles needing shifting) to staging area
-    copy_out ( view(), tmp.view(), sort.view(), local_bnd );
-
-    // Pack particle data and start sending
-    isend_msg( tmp, sort, send );
-
-    // Copy local particles from staging area into final positions in partile buffer
-    copy_in ( view(), tmp.view() );
 
     // Wait for receive messages to complete
     recv.wait();
@@ -1500,7 +1297,7 @@ __global__
  * @param part      Particle data
  * @param shift     Cell shift
  */
-void cell_shift( part::particles_view part, int2 const shift ) {
+void cell_shift( particles_view part, int2 const shift ) {
 
     const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
@@ -1532,7 +1329,7 @@ void cell_shift( part::particles_view part, int2 const shift ) {
  * 
  * @param shift     Cell shift in both directions
  */
-void part::particles::cell_shift( int2 const shift ) {
+void particles::cell_shift( int2 const shift ) {
 
     dim3 grid( local_ntiles.x, local_ntiles.y );
     dim3 block( 1024 );
@@ -1542,26 +1339,30 @@ void part::particles::cell_shift( int2 const shift ) {
 
 
 
-/**
- * @brief Maximum allowed value for u
- * 
- */
-//#define __ULIM std::numeric_limits<float>::max()
-#define __ULIM __FLT_MAX__
-
 namespace kernel {
 
+/**
+ * @brief CUDA kernel for validating particle data
+ * 
+ * @details Checks that:
+ *          1. Cell indices are inside the tile (+/- over)
+ *          2. If a quantity named `x` exists, its .x / .y components (position
+ *             inside the cell) are in [-0.5, 0.5)
+ *          3. All floating point values of all quantities are finite
+ * 
+ * @param data      Particle data
+ * @param over      Amount of extra cells indices beyond limit allowed
+ * @param rank      MPI rank (for error messages)
+ * @param out       (out) Set to 1 if any errors are found
+ */
 __global__
-void validate( part::particles_view data, const int over, const int rank, uint32_t * out ) {
+void validate( particles_view data, const int over, const int rank, uint32_t * out ) {
     const int2 tile_idx = make_int2( blockIdx.x, blockIdx.y );
     const int2 ntiles = make_int2( data.local_ntiles.x, data.local_ntiles.y );
     const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
 
     int const offset = data.tile_offset[ tile_id ];
     int const np     = data.tile_np[ tile_id ];
-    auto * const __restrict__ ix = &data.ix[ offset ];
-    auto * const __restrict__ x  = &data.x[ offset ];
-    auto * const __restrict__ u  = &data.u[ offset ];
 
     __shared__ int _err; _err = 0;
     gpu::block::sync();
@@ -1572,38 +1373,34 @@ void validate( part::particles_view data, const int over, const int rank, uint32
     for( int i = gpu::block::thread_rank(); i < np; i += gpu::block::num_threads() ) {
         int err = 0;
 
-        if ( (ix[i].x < lb.x) || (ix[i].x >= ub.x )) {
-            printf("[%d] [%d,%d] Invalid ix[%d].x position (%d), range = [%d,%d[\n", rank, tile_idx.x, tile_idx.y, i, ix[i].x, lb.x, ub.x );
-            err = 1;
-        }
-        if ( x[i].x < -0.5f || x[i].x >= 0.5f ) {
-            printf("[%d] [%d,%d] Invalid x[%d].x position (%f), range = [-0.5,0.5[\n", rank, tile_idx.x, tile_idx.y, i, x[i].x );
+        particle_t const p = data.load( offset + i );
+
+        if ( (p.ix.x < lb.x) || (p.ix.x >= ub.x )) {
+            printf("[%d] [%d,%d] Invalid ix[%d].x position (%d), range = [%d,%d[\n", rank, tile_idx.x, tile_idx.y, i, p.ix.x, lb.x, ub.x );
             err = 1;
         }
 
-        if ( (ix[i].y < lb.y) || (ix[i].y >= ub.y )) {
-            printf("[%d] [%d,%d] Invalid ix[%d].y position (%d), range = [%d,%d[\n", rank, tile_idx.x, tile_idx.y, i, ix[i].y, lb.y, ub.y );
-            err = 1;
-        }
-        if ( x[i].y < -0.5f || x[i].y >= 0.5f ) {
-            printf("[%d] [%d,%d] Invalid x[%d].y position (%f), range = [-0.5,0.5[\n", rank, tile_idx.x, tile_idx.y, i, x[i].y );
+        if ( (p.ix.y < lb.y) || (p.ix.y >= ub.y )) {
+            printf("[%d] [%d,%d] Invalid ix[%d].y position (%d), range = [%d,%d[\n", rank, tile_idx.x, tile_idx.y, i, p.ix.y, lb.y, ub.y );
             err = 1;
         }
 
-        if ( isnan(u[i].x) || isinf(u[i].x) || fabsf(u[i].x) >= __ULIM ) {
-            printf("[%d] [%d,%d] Invalid u[%d].x gen. velocity (%f)\n", rank, tile_idx.x, tile_idx.y, i, u[i].x );
-            err = 1;
+        // Position inside cell (if available)
+        if constexpr ( particle_detail::has_x< particle_t >::value ) {
+            if ( p.x.x < -0.5 || p.x.x >= 0.5 ) {
+                printf("[%d] [%d,%d] Invalid x[%d].x position (%f), range = [-0.5,0.5[\n", rank, tile_idx.x, tile_idx.y, i, double( p.x.x ) );
+                err = 1;
+            }
+        }
+        if constexpr ( particle_detail::has_y< particle_t >::value ) {
+            if ( p.x.y < -0.5 || p.x.y >= 0.5 ) {
+                printf("[%d] [%d,%d] Invalid x[%d].y position (%f), range = [-0.5,0.5[\n", rank, tile_idx.x, tile_idx.y, i, double( p.x.y ) );
+                err = 1;
+            }
         }
 
-        if ( isnan(u[i].y) || isinf(u[i].y) || fabsf(u[i].y) >= __ULIM ) {
-            printf("[%d] [%d,%d] Invalid u[%d].y gen. velocity (%f)\n", rank, tile_idx.x, tile_idx.y, i, u[i].y );
-            err = 1;
-        }
-
-        if ( isnan(u[i].z) || isinf(u[i].z) || fabsf(u[i].z) >= __ULIM ) {
-            printf("[%d] [%d,%d] Invalid u[%d].z gen. velocity (%f)\n", rank, tile_idx.x, tile_idx.y, i, u[i].z );
-            err = 1;
-        }
+        // All floating point values must be finite
+        if ( data.check_finite( offset + i, rank, tile_idx ) ) err = 1;
 
         if ( err ) _err = 1;
 
@@ -1626,8 +1423,9 @@ void validate( part::particles_view data, const int over, const int rank, uint32
  *      1. Bad tile np values (< 0)
  *      2. Inconsistent tile offset values (the buffer should be packed)
  *      3. Invalid cell data (out of tile bounds)
- *      4. Invalid position data (out of [-0.5,0.5[)
- *      5. Invalid momenta (nan, inf or above __ULIM macro value)
+ *      4. Invalid position data (out of [-0.5,0.5[), if a quantity named
+ *         `x` is available
+ *      5. Invalid floating point values (nan, inf) in any quantity
  * 
  * If there are any errors found the routine will exit the code.
  * 
@@ -1635,7 +1433,7 @@ void validate( part::particles_view data, const int over, const int rank, uint32
  * @param over      Amount of extra cells indices beyond limit allowed. Used
  *                  when checking the buffer before tile_sort()
  */
-void part::particles::validate( std::string msg, int const over ) {
+void particles::validate( std::string msg, int const over ) {
 
     if ( msg.empty() ) {
         mpi::cout << "validating particle set...";
@@ -1695,4 +1493,6 @@ void part::particles::validate( std::string msg, int const over ) {
     }
 }
 
-#undef __ULIM
+} // namespace PARTICLES_NAMESPACE
+
+#undef PARTICLES_NAMESPACE

@@ -32,14 +32,17 @@ LDFLAGS  += -forward-unknown-to-host-compiler $(shell mpic++ --showme:link)
 # --------------------------------------------------------------------------- #
 
 # Generate code for compute 8.0 architectue
-CXXFLAGS += --gpu-architecture=compute_80
-CFLAGS += --gpu-architecture=compute_80
+CXXFLAGS += -arch=sm_80
+CFLAGS += -arch=sm_80
 
 # c11 compliance and full warnings
 CFLAGS += -Xcompiler -Wall -Xcompiler -std=c11
 
-# c++17 compliance and full warnings (except for VLA extension)
+# c++20 compliance and full warnings
 CXXFLAGS += -Xcompiler -Wall -std=c++20 -Wno-unknown-pragmas -Wsign-compare
+
+# Check on register spills and local memory usage
+# CXXFLAGS += -Xptxas --warn-on-spills,--warn-on-local-memory-usage
 
 # Debug
 # CXXFLAGS += -Xcompiler "-fno-omit-frame-pointer -g -Og"
@@ -71,6 +74,8 @@ SOURCE = emf.cu laser.cu current.cu udist.cu density.cu species.cu
 
 # cathode.cu
 
+SOURCE += part/particles.cu
+
 SOURCE += main.cu
 
 TARGET = zpic
@@ -85,6 +90,7 @@ DEPDIR := .deps
 #   common/ -> $(OBJDIR)/common/part/particles.o
 #   zdf/    -> $(OBJDIR)/zdf/zdf.o
 OBJS := $(patsubst %,$(OBJDIR)/%.o,$(basename $(SOURCE))) \
+        $(patsubst %,$(OBJDIR)/part/%.o,$(basename $(SOURCE/part))) \
         $(patsubst %,$(OBJDIR)/common/%.o,$(basename $(COMMON_SRC))) \
         $(patsubst %,$(OBJDIR)/zdf/%.o,$(basename $(ZDF_SRC)))
 

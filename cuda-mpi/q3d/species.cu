@@ -129,7 +129,7 @@ void species::initialize( const int nmodes_, float2 const box_, uint2 const glob
     int2 const periodic = global_periodic();
     particles = new cyl_part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
     tmp = new cyl_part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
-    sort = new cyl_part::particle_sort( local_ntiles, max_part, parallel, periodic );
+    sort = new part::particle_sort( local_ntiles, max_part, parallel, periodic );
     np_inj = gpu::device::malloc<int>( local_ntiles.x * local_ntiles.y );
 
     // Initialize energy diagnostic
@@ -2654,6 +2654,109 @@ void species::save_charge( const unsigned m ) const {
     }
 }
 
+
+namespace kernel {
+
+/**
+ * @brief Gather particle data, scaling values
+ * 
+ * @note Data (val) will be returned as `scale.x * val + scale.y`
+ *
+ * @tparam quant    Quantiy to gather
+ * @param src       Particle data
+ * @param scale     Scale factor
+ * @param d_data    Output data
+ */
+template < cyl_part::quantity quant >
+__global__
+void gather( 
+    cyl_part::particles_view src,
+    const float2 scale,
+    float * const __restrict__ d_data
+) {
+    const uint2 tile_idx = { blockIdx.x, blockIdx.y };
+    const int   tile_id  = tile_idx.y * src.local_ntiles.x + tile_idx.x;
+
+    // Spatial offsets of local tile
+    const int offz = (src.local_tile_start.x + tile_idx.x) * src.tile_dims.x;
+    const int offr = (src.local_tile_start.y + tile_idx.y) * src.tile_dims.y;
+
+    // Offset and number of particles on particle buffer
+    const auto  offset = src.tile_offset[ tile_id ];
+    const auto  np     = src.tile_np[ tile_id ];
+
+    int2   const * __restrict__ const ix = & src.ix[ offset ];
+    float2 const * __restrict__ const x  = & src.x [ offset ];
+    float3 const * __restrict__ const u  = & src.u [ offset ];
+    float  const * __restrict__ const q  = & src.q [ offset ];
+    float2 const * __restrict__ const th = & src.th[ offset ];
+
+    for( int idx = gpu::block::thread_rank(); idx < np; idx += gpu::block::num_threads() ) {
+        float val;
+        if constexpr( quant == cyl_part::quantity::z  ) val = ( offz + ix[idx].x ) + (0.5f + x[idx].x);
+        if constexpr( quant == cyl_part::quantity::r  ) val = ( offr + ix[idx].y ) + ( x[idx].y);
+        if constexpr( quant == cyl_part::quantity::q      ) val = q[idx];
+        if constexpr( quant == cyl_part::quantity::cos_th ) val = th[idx].x;
+        if constexpr( quant == cyl_part::quantity::sin_th ) val = th[idx].y;
+        if constexpr( quant == cyl_part::quantity::ux ) val = u[idx].x;
+        if constexpr( quant == cyl_part::quantity::uy ) val = u[idx].y;
+        if constexpr( quant == cyl_part::quantity::uz ) val = u[idx].z;
+        d_data[ offset + idx ] = fma( scale.x, val, scale.y );
+    }
+}
+
+} // namespace kernel
+
+
+/**
+ * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+ * 
+ * @warning This expects the particle buffer to be compact, it will fail if 
+ *          called with a non-compact buffer.
+ *
+ * @param quant     Quantity to gather
+ * @param d_data    Output data buffer, assumed to have size >= np
+ * @param scale     Scale factor for data
+ */
+void species::gather( cyl_part::quantity quant, float * const __restrict__ d_data,
+   const float2 scale ) const
+{
+    auto ntiles = particles -> get_local_ntiles();
+    const dim3 grid( ntiles.x, ntiles.y );
+    const dim3 block( 1024 );
+
+    auto view = particles -> view();
+
+    // Gather data on device
+    switch (quant) {
+    case cyl_part::quantity ::z : 
+        kernel::gather<cyl_part::quantity ::z> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::r:
+        kernel::gather<cyl_part::quantity ::r> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::q:
+        kernel::gather<cyl_part::quantity ::q> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::sin_th:
+        kernel::gather<cyl_part::quantity ::sin_th> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::cos_th:
+        kernel::gather<cyl_part::quantity ::cos_th> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::ux:
+        kernel::gather<cyl_part::quantity ::ux> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::uy:
+        kernel::gather<cyl_part::quantity ::uy> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    case cyl_part::quantity ::uz:
+        kernel::gather<cyl_part::quantity ::uz> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    }
+}
+
+
 /**
  * @brief save particle data to file
  * 
@@ -2770,18 +2873,18 @@ void species::save() const {
             // z and r quantities are scaled before saving to file
             // z positions include the moving window motion (lab frame, as the grid diagnostics)
             scale = make_float2( dx.x, mov_window.motion() );
-            particles -> gather( cyl_part::quantity::z, scale, d_data );
+            gather( cyl_part::quantity::z, d_data, scale );
             gpu::device::memcpy_tohost( h_data, d_data, local );
             zdf::write_cdset( part_file, dsets[0], chunk, file_off );
 
             scale = make_float2( dx.y, 0 );
-            particles -> gather( cyl_part::quantity::r, scale, d_data );
+            gather( cyl_part::quantity::r, d_data, scale );
             gpu::device::memcpy_tohost( h_data, d_data, local );
             zdf::write_cdset( part_file, dsets[1], chunk, file_off );
 
             // Remaining quantities are saved "as is"
             for( uint32_t i = 2; i < info.nquants; i++ ) {
-                particles -> gather( quants[i], d_data );
+                gather( quants[i], d_data );
                 gpu::device::memcpy_tohost( h_data, d_data, local );
                 zdf::write_cdset( part_file, dsets[i], chunk, file_off );
             }

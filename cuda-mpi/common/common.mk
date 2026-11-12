@@ -17,7 +17,7 @@
 COMMON_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
 # Shared compiled sources (headers are tracked by automatic dependencies)
-COMMON_SRC := part/particles.cu part/sort.cu
+COMMON_SRC := part/sort.cu
 
 # Headers are included with their subdirectory prefix, e.g.
 #   #include "grid/grid.cuh"

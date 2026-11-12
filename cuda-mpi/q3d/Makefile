@@ -38,12 +38,14 @@ CFLAGS += -arch=sm_80
 # c11 compliance and full warnings
 CFLAGS += -Xcompiler -Wall -Xcompiler -std=c11
 
-# c++17 compliance and full warnings (except for VLA extension)
+# c++20 compliance and full warnings
 CXXFLAGS += -Xcompiler -Wall -std=c++20 -Wno-unknown-pragmas -Wsign-compare
+
+# Check on register spills and local memory usage
+CXXFLAGS += -Xptxas --warn-on-spills,--warn-on-local-memory-usage
 
 # Debug
 # CXXFLAGS += -Xcompiler "-fno-omit-frame-pointer -g -Og"
-# CXXFLAGS += -Xptxas -v
 
 # --------------------------------------------------------------------------- #
 # Shared code locations
@@ -72,7 +74,7 @@ SOURCE = emf.cu laser.cu current.cu udist.cu density.cu species.cu
 
 # cathode.cu
 
-SOURCE += cyl_part/particles.cu cyl_part/sort.cu
+SOURCE += cyl_part/particles.cu
 
 SOURCE += main.cu
 
@@ -88,6 +90,7 @@ DEPDIR := .deps
 #   zdf/    -> $(OBJDIR)/zdf/zdf.o
 OBJS := $(patsubst %,$(OBJDIR)/%.o,$(basename $(SOURCE))) \
         $(patsubst %,$(OBJDIR)/cyl_part/%.o,$(basename $(SOURCE/cyl_part))) \
+        $(patsubst %,$(OBJDIR)/common/%.o,$(basename $(COMMON_SRC))) \
         $(patsubst %,$(OBJDIR)/zdf/%.o,$(basename $(ZDF_SRC)))
 
 # Set automatic dependency generation

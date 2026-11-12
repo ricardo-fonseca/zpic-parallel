@@ -196,6 +196,20 @@ namespace warp {
     }
 
     /**
+     * @brief Warp level ballot
+     *
+     * @details Returns a mask with bit `i` set if `pred` is true for lane `i`
+     *
+     * @warning All threads in the warp must participate
+     *
+     * @param pred              Predicate
+     * @return unsigned int     Ballot mask
+     */
+    __device__ __forceinline__ unsigned int ballot( bool const pred ) {
+        return __ballot_sync( gpu::full_mask, pred );
+    }
+
+    /**
      * @brief Warp level reduce add
      *
      * @warning All threads in the warp must participate

@@ -210,26 +210,34 @@ inline void inject_uniform(
     double const dpcx = 1.0 / ppc.x;
     double const dpcy = 1.0 / ppc.y;
 
-    for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-        for( unsigned i0 = 0; i0 < ppc.x; i0++ ) {
-            float2 const pos = cell_pos( i0, i1, dpcx, dpcy );
-            int const ppc_idx = i1 * ppc.x + i0;
+    // Total number of particles to inject in tile
+    int const total = r.vol * np_cell;
 
-            // Each thread takes 1 cell
-            for( int idx = gpu::block::thread_rank(); idx < r.vol; idx += gpu::block::num_threads() ) {
-                int const part_idx = np + r.vol * ppc_idx + idx;
-                ix[ part_idx ] = range_cell( r, idx );
-                x[ part_idx ]  = pos;
-                u[ part_idx ]  = make_float3( 0, 0, 0 );
-            }
-        }
+    // All particles are processed in a single flat loop, so that all threads
+    // are kept busy even when the injection range is small (e.g. a single
+    // cell column when a moving window advances).
+    //
+    // The flat index is n = ppc_idx * r.vol + cell_idx, i.e. the
+    // particle-in-cell index is the slowest, so that contiguous particles are
+    // in different cells (same ordering as the original nested loop version)
+    for( int n = gpu::block::thread_rank(); n < total; n += gpu::block::num_threads() ) {
+        int const ppc_idx  = n / r.vol;
+        int const cell_idx = n - ppc_idx * r.vol;
+
+        unsigned const i1 = ppc_idx / ppc.x;
+        unsigned const i0 = ppc_idx - i1 * ppc.x;
+
+        int const part_idx = np + n;
+        ix[ part_idx ] = range_cell( r, cell_idx );
+        x[ part_idx ]  = cell_pos( i0, i1, dpcx, dpcy );
+        u[ part_idx ]  = make_float3( 0, 0, 0 );
     }
 
     // All threads have read tile_np[ tile_id ] before it is updated
     gpu::block::sync();
 
     if ( gpu::block::thread_rank() == 0 ) {
-        part.tile_np[ tile_id ] = np + r.vol * np_cell;
+        part.tile_np[ tile_id ] = np + total;
     }
 }
 
@@ -368,7 +376,26 @@ struct sphere_mask {
 };
 
 /**
- * @brief 
+ * @brief Kernel for injecting particles using a mask profile
+ * 
+ * @details All candidate particles in the tile (cells in range x particles per
+ *          cell) are processed in a single flat loop, so that all threads are
+ *          kept busy even when the injection range is small (e.g. a single
+ *          cell column when a moving window advances).
+ * 
+ *          The flat candidate index is `n = ppc_idx * r.vol + cell_idx`, i.e.
+ *          the particle-in-cell index is the slowest, which reproduces the
+ *          particle ordering of the original (nested loop) version.
+ * 
+ *          Particle positions in the buffer are deterministic: each injected
+ *          particle is stored at the position given by the number of injected
+ *          candidates with a lower flat index. This is computed using a
+ *          ballot-based block scan: each warp counts its injected particles
+ *          with a ballot, warp totals are exchanged through shared memory,
+ *          and each warp combines them with 2 warp reductions. Warp totals
+ *          are double-buffered, so only 1 block sync per iteration is required.
+ * 
+ * @note    Requires a 1D block with a whole number of warps.
  * 
  * @tparam mask_t       Mask type
  * @param mask          Injection mask
@@ -392,66 +419,94 @@ void inject_mask(
     tile_range r;
     if ( ! clip_range( range, tile_idx, tile_dims, r ) ) return;
 
-    int const thread_rank = gpu::block::thread_rank();
-    int const num_threads = gpu::block::num_threads();
+    // Total number of candidate particles in tile
+    int const np_cell = ppc.x * ppc.y;
+    int const total   = r.vol * np_cell;
 
-    // Store number of particles before injection
-    __shared__ int np_tile;
-    if ( thread_rank == 0 ) np_tile = part.tile_np[ tile_id ];
-    gpu::block::sync();
+    // Block-uniform early exit (e.g. ppc = 0)
+    if ( total == 0 ) return;
 
+    // Number of particles before injection (kept in a register by every thread,
+    // all threads update it identically)
+    int np = part.tile_np[ tile_id ];
 
     int const offset =  part.tile_offset[ tile_id ];
     int2   * __restrict__ ix = &part.ix[ offset ];
     float2 * __restrict__ x  = &part.x[ offset ];
     float3 * __restrict__ u  = &part.u[ offset ];
 
-    double dpcx = 1.0 / ppc.x;
-    double dpcy = 1.0 / ppc.y;
+    double const dpcx = 1.0 / ppc.x;
+    double const dpcy = 1.0 / ppc.y;
 
     // Position in global tile array
     int2 const shift = tile_shift( part, tile_idx );
 
+    int const thread_rank = gpu::block::thread_rank();
+    int const num_threads = gpu::block::num_threads();
+
+    int const      lane        = gpu::warp::thread_rank();
+    int const      warp_id     = gpu::warp::group_rank();
+    int const      nwarps      = gpu::block::num_warps();
+    unsigned const lanemask_lt = ( 1u << lane ) - 1;
+
+    /// @brief [shared] Number of injected particles per warp (double buffered)
+    __shared__ int _warp_np[ 2 ][ gpu::max_warps ];
+
     // Ensure uniform trip count for all threads
-    int const niter = ( r.vol + num_threads - 1 ) / num_threads;
+    int const niter = ( total + num_threads - 1 ) / num_threads;
 
-    for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-        for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-            float2 const pos = cell_pos( i0, i1, dpcx, dpcy );
+    for( int it = 0; it < niter; it++ ) {
+        int const n = it * num_threads + thread_rank;
 
-            for( int it = 0; it < niter; it++ ) {
-                int const idx = it * num_threads + thread_rank;
+        int2   cell = make_int2( 0, 0 );
+        float2 pos  = make_float2( 0, 0 );
+        int    inj  = 0;
 
-                int2 cell = make_int2( 0, 0 );
-                int inj = 0;
+        if ( n < total ) {
+            // Particle-in-cell index (slowest) and cell index (fastest)
+            int const ppc_idx  = n / r.vol;
+            int const cell_idx = n - ppc_idx * r.vol;
 
-                if ( idx < r.vol ) {
-                    cell = range_cell( r, idx );
-                    inj = mask( shift, cell, pos );
-                }
+            unsigned const i1 = ppc_idx / ppc.x;
+            unsigned const i0 = ppc_idx - i1 * ppc.x;
 
-                // All threads must have read np_tile before it is updated
-                int base = np_tile;
-
-                // Called by every thread in the block (implicit sync)
-                int const off = gpu::block::exscan_add( inj );
-
-                if ( inj ) {
-                    const int k = base + off;
-                    ix[ k ] = cell;
-                    x[ k ]  = pos;
-                    u[ k ]  = make_float3(0,0,0);
-                }
-
-                // The last thread's exclusive scan + own value is the block total
-                if ( thread_rank == num_threads - 1 ) np_tile += off + inj;
-                gpu::block::sync();
-            }
+            pos  = cell_pos( i0, i1, dpcx, dpcy );
+            cell = range_cell( r, cell_idx );
+            inj  = mask( shift, cell, pos );
         }
+
+        // Number of injected particles in this warp
+        unsigned const ballot = gpu::warp::ballot( inj );
+
+        // Exchange warp totals. Double buffering makes this safe with a single
+        // sync: a warp can only write this buffer again 2 iterations later,
+        // after the next iteration's sync, i.e., after all warps are done
+        // reading it
+        int * const warp_np = _warp_np[ it & 1 ];
+        if ( lane == 0 ) warp_np[ warp_id ] = __popc( ballot );
+        gpu::block::sync();
+
+        // Lane l holds the total of warp l
+        int const v = ( lane < nwarps ) ? warp_np[ lane ] : 0;
+
+        // Injected particles in previous warps, and in the whole block
+        int const prev = gpu::warp::reduce_add( ( lane < warp_id ) ? v : 0 );
+        int const sum  = gpu::warp::reduce_add( v );
+
+        if ( inj ) {
+            int const k = np + prev + __popc( ballot & lanemask_lt );
+            ix[ k ] = cell;
+            x[ k ]  = pos;
+            u[ k ]  = make_float3(0,0,0);
+        }
+
+        np += sum;
     }
 
+    // All threads read tile_np[ tile_id ] before the first sync in the loop
+    // (niter >= 1), so it is safe to update it here without an additional sync
     if ( thread_rank == 0 ) 
-        part.tile_np[ tile_id ] = np_tile;
+        part.tile_np[ tile_id ] = np;
 }
 
 /**

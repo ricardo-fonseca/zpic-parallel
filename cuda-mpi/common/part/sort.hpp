@@ -84,6 +84,15 @@ class particle_sort {
     private:
 
     /**
+     * @brief Size of the per-tile counters buffer (new_np, nidx and npt)
+     * 
+     * @return int  Number of int elements
+     */
+    inline int counters_size() const {
+        return part::all_tiles( ntiles ) + 10 * part::local_tiles( ntiles );
+    }
+
+    /**
      * @brief Message tag for incoming messages
      * 
      * @param dir   Communication direction (0-8)
@@ -128,14 +137,18 @@ class particle_sort {
         // Number of edge tiles for messaging
         int msg_tiles = part::msg_tiles(ntiles);
 
-         // Include send buffer for number of particles leaving node
-        new_np = gpu::device::malloc<int>( local_tiles + msg_tiles );
+        // Single buffer for all per-tile counters, so they can be zeroed
+        // together in reset():
+        //   [ new_np (local + msg tiles) | nidx (local tiles) | npt (9 * local tiles) ]
+        // new_np must come first, its msg tiles section is used as the
+        // send buffer (number of particles leaving node)
+        new_np = gpu::device::malloc<int>( counters_size() );
         
         // Number of particles leaving each local tile
-        nidx   = gpu::device::malloc<int>( local_tiles );
+        nidx   = &new_np[ local_tiles + msg_tiles ];
 
         // Particle can move in 9 different directions
-        npt = gpu::device::malloc<int>( 9 * local_tiles );
+        npt    = &nidx[ local_tiles ];
 
         // Send buffer
         send.buffer = &new_np[ local_tiles ];
@@ -179,8 +192,7 @@ class particle_sort {
 
         gpu::device::free( recv.buffer );
 
-        gpu::device::free( npt );
-        gpu::device::free( nidx );
+        // new_np, nidx and npt share the same buffer
         gpu::device::free( new_np );
         gpu::device::free( idx );
     }
@@ -217,10 +229,13 @@ class particle_sort {
     /**
      * @brief Sets np values to 0
      * 
+     * @note `bnd_check()` accumulates `new_np`, `npt` and `nidx` using global
+     *       atomics (it may use multiple blocks per tile), so all must be
+     *       zeroed before it is called. They share a single buffer, so this
+     *       is done with a single memset.
      */
     void reset() {
-        // Reset local data and outgoing data buffer
-        gpu::device::zero( new_np, part::all_tiles( ntiles ) );
+        gpu::device::zero( new_np, counters_size() );
     }
 
     /**

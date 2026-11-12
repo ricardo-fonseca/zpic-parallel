@@ -614,6 +614,8 @@ void test_lwfa() {
     sim.set_moving_window();
     sim.current.set_filter( filter::compensated( filter::axis::z, 4 ) );
 
+#if 1
+    // Enable diagnostic output
     auto diag = [& sim, & electrons ]( ) {
         sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
         sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
@@ -634,8 +636,10 @@ void test_lwfa() {
         electrons.save_charge( 0 );
         electrons.save_charge( 1 );
     };
-
-    // auto diag = [](){};
+#else
+    // No diagnostic output
+    auto diag = [](){};
+#endif
 
     if ( mpi::root() )
         std::cout << "Starting simulation, dt = " << dt << '\n';

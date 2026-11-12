@@ -848,15 +848,16 @@ void test_weibel( )
     }
 
     // Parallel partition, must be 1 along x
+    // uint2 partition = make_uint2( 1, 1 );
     uint2 partition = make_uint2( 1, 4 );
 
     // Create simulation box
     uint2 ntiles{16, 16};
-    uint2 nx{32, 32};                                                                                                                                                                     
-    float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+    uint2 tile_dims{32, 32};                                                                                                                                                                     
+    float2 box = {tile_dims.x * ntiles.x * 0.1f, tile_dims.y * ntiles.y * 0.1f};
     float dt = 0.07;
                                         
-    zpic::simulation sim( ntiles, nx, box, dt, partition );
+    zpic::simulation sim( ntiles, tile_dims, box, dt, partition );
                             
     uint2 ppc{4, 4};
 
@@ -867,7 +868,7 @@ void test_weibel( )
             float3{ 0, 0, 0.6 }
         )
     );
-    electrons.push_type = species::pusher::euler;
+    // electrons.push_type = species::pusher::euler;
 
     sim.add_species( electrons );
 
@@ -882,6 +883,7 @@ void test_weibel( )
 
     sim.add_species( positrons );
 
+#if 0
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
         sim.emf.save(emf::quantity::b, fcomp::x);
@@ -898,6 +900,10 @@ void test_weibel( )
 
         sim.energy_info();
     };
+#else
+    // Disable diagnostic output
+    auto diag = [] () {};
+#endif
 
     // Run simulation    
     int const imax = 500;

@@ -17,13 +17,13 @@
  */
 
 /// @brief Optimal block size for push kernel
-int constexpr opt_push_block = 1024;
+int constexpr opt_push_block = 512;
 
 /// @brief Optimal minimum number of blocks for move kernel
-int constexpr opt_push_min_blocks = 2048;
+int constexpr opt_push_min_blocks = 1024;
 
 /// @brief Optimal block size for move kernel
-int constexpr opt_move_block = 256;
+int constexpr opt_move_block = 512;
 
 /// @brief Optimal minimum number of blocks for move kernel
 int constexpr opt_move_min_blocks = 2048;
@@ -77,10 +77,7 @@ void interpolate_fld(
     const float s0y = 0.5f - x.y;
     const float s1y = 0.5f + x.y;
 
-
     // Interpolate E field
-
-
     e.x = ( E[i +    j *ystride].x * s0x + E[i+1 +    j *ystride].x * s1x ) * s0y +
           ( E[i + (j+1)*ystride].x * s0x + E[i+1 + (j+1)*ystride].x * s1x ) * s1y;
 
@@ -125,7 +122,7 @@ void interpolate_fld(
  * @return float3   Final particle momentum
  */
 __device__
-float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, double & energy )
+inline float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, double & energy )
 {
 
     // First half of acceleration
@@ -361,8 +358,8 @@ inline void dep_charge( float * const __restrict__ rho, const int ystride, int2 
  * @param q                 Particle charge
  * @param d_nmove           Pointer to total number of particles moved
  */
-__global__
-void __launch_bounds__(opt_move_block) move_deposit(
+__global__ __launch_bounds__(opt_move_block)
+void move_deposit(
     part::particles_view const part,
     grid::tiled_view<float3> current,
     grid::tiled_view<float> charge,
@@ -494,8 +491,8 @@ void __launch_bounds__(opt_move_block) move_deposit(
  * @param d_energy      Total particle energy (if using OpenMP this must be a reduction variable)
  */
 template < species::pusher type >
-__global__
-void __launch_bounds__(opt_push_block) push ( 
+__global__ __launch_bounds__(opt_push_block)
+void push ( 
     part::particles_view const part,
     grid::tiled_view<float3> const E_grid, grid::tiled_view<float3> const B_grid,
     float const alpha, double * __restrict__ d_energy )
@@ -1052,6 +1049,94 @@ void species::deposit_charge( grid::tiled<float> &charge ) const {
     );
 }
 
+namespace kernel {
+
+/**
+ * @brief Gather particle data, scaling values
+ * 
+ * @note Data (val) will be returned as `scale.x * val + scale.y`
+ *
+ * @tparam quant    Quantiy to gather
+ * @param src       Particle data
+ * @param scale     Scale factor
+ * @param d_data    Output data
+ */
+template < part::quantity quant >
+__global__
+void gather( 
+    part::particles_view src,
+    const float2 scale,
+    float * const __restrict__ d_data
+) {
+    const uint2 tile_idx = { blockIdx.x, blockIdx.y };
+    const int   tile_id  = tile_idx.y * src.local_ntiles.x + tile_idx.x;
+
+    // Spatial offsets of local tile
+    const int offx = (src.local_tile_start.x + tile_idx.x) * src.tile_dims.x;
+    const int offy = (src.local_tile_start.y + tile_idx.y) * src.tile_dims.y;
+
+    // Offset and number of particles on particle buffer
+    const auto  offset = src.tile_offset[ tile_id ];
+    const auto  np     = src.tile_np[ tile_id ];
+
+    auto const * __restrict__ const ix = & src.ix[ offset ];
+    auto const * __restrict__ const x  = & src.x [ offset ];
+    auto const * __restrict__ const u  = & src.u [ offset ];
+
+    for( int idx = gpu::block::thread_rank(); idx < np; idx += gpu::block::num_threads() ) {
+        float val;
+        if constexpr( quant == part::quantity::x  ) val = (offx + ix[idx].x) + (0.5f + x[idx].x);
+        if constexpr( quant == part::quantity::y  ) val = (offy + ix[idx].y) + (0.5f + x[idx].y);
+        if constexpr( quant == part::quantity::ux ) val = u[idx].x;
+        if constexpr( quant == part::quantity::uy ) val = u[idx].y;
+        if constexpr( quant == part::quantity::uz ) val = u[idx].z;
+        d_data[ offset + idx ] = fma( scale.x, val, scale.y );
+    }
+}
+
+} // namespace kernel
+
+
+/**
+ * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+ * 
+ * @warning This expects the particle buffer to be compact, it will fail if 
+ *          called with a non-compact buffer.
+ *
+ * @param quant     Quantity to gather
+ * @param d_data    Output data buffer, assumed to have size >= np
+ * @param scale     Scale factor for data
+ */
+void species::gather( part::quantity quant, float * const __restrict__ d_data, 
+    const float2 scale ) const
+{
+    auto ntiles = particles -> get_local_ntiles();
+    const dim3 grid( ntiles.x, ntiles.y );
+    const dim3 block( 1024 );
+
+    auto view = particles -> view();
+
+    // Gather data on device
+    switch (quant) {
+    case part::quantity::x : 
+        kernel::gather<part::quantity::x>  <<<grid,block>>> ( view, scale, d_data );
+        break; 
+    case part::quantity::y: 
+        kernel::gather<part::quantity::y> <<<grid,block>>> ( view, scale, d_data );
+        break; 
+    case part::quantity::ux: 
+        kernel::gather<part::quantity::ux> <<<grid,block>>> ( view, scale, d_data );
+        break; 
+    case part::quantity::uy: 
+        kernel::gather<part::quantity::uy> <<<grid,block>>> ( view, scale, d_data );
+        break; 
+    case part::quantity::uz: 
+        kernel::gather<part::quantity::uz> <<<grid,block>>> ( view, scale, d_data );
+        break;
+    }
+}
+
+
 /**
  * @brief Save particle data to file
  * 
@@ -1160,18 +1245,18 @@ void species::save() const {
             
             // x and y quantities are scaled before saving to file
             scale = make_float2( dx.x, dx.x/2 );
-            particles -> gather( part::quantity::x, scale, d_data );
+            gather( part::quantity::x, d_data, scale );
             gpu::device::memcpy_tohost( h_data, d_data, local );
             zdf::write_cdset( part_file, dsets[0], chunk, file_off );
 
             scale = make_float2( dx.y, dx.y/2 );
-            particles -> gather( part::quantity::y, scale, d_data );
+            gather( part::quantity::y, d_data, scale );
             gpu::device::memcpy_tohost( h_data, d_data, local );
             zdf::write_cdset( part_file, dsets[1], chunk, file_off );
 
             // Remaining quantities are saved "as is"
             for( uint32_t i = 2; i < info.nquants; i++ ) {
-                particles -> gather( quants[i], d_data );
+                gather( quants[i], d_data );
                 gpu::device::memcpy_tohost( h_data, d_data, local );
                 zdf::write_cdset( part_file, dsets[i], chunk, file_off );
             }

@@ -756,8 +756,9 @@ void test_lwfa()
     sim.set_moving_window();
     // sim.current.set_filter(Filter::Compensated(coord::x, 4));
 
+#if 1
     // Diagnostics
-    auto save = [ & sim, & electrons ]( ) {
+    auto diag = [ & sim, & electrons ]( ) {
         sim.emf.save( emf::quantity::e, fcomp::x );
         sim.emf.save( emf::quantity::e, fcomp::y );
         sim.emf.save( emf::quantity::e, fcomp::z );
@@ -768,22 +769,24 @@ void test_lwfa()
 
         electrons.save_charge();
     };
-
+#else
+    auto diag = [](){};
+#endif
 
     auto t0 = timer::clock("test");
 
     t0.start();
 
     // Run simulation dumping diagnostics at every 100 timesteps
-    while ( sim.get_t() <= box.x * 1.5 ) {
+    while ( sim.get_t() <= box.x * 3 ) {
         if ( sim.get_iter() % 100 == 0 ) {
             if ( sim.parallel.root() ) std::cout << "i = " << sim.get_iter() << '\n';
-            save();
+            diag();
         }
         sim.advance_mov_window();
     }
 
-    save();
+    diag();
 
     t0.stop();
 

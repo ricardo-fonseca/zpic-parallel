@@ -14,6 +14,15 @@
 #include "density.hpp"
 #include "udist.hpp"
 
+namespace part {
+
+/**
+ * @brief Particle quantity identifiers (for gather)
+ * 
+ */
+enum class quantity { x, y, ux, uy, uz };
+}
+
 namespace phasespace {
     enum class quantity { x = 0, y, ux, uy, uz };
 
@@ -719,6 +728,19 @@ public:
     uint64_t global_np( bool all = false ) {
         return particles -> global_np( all );
     }
+
+    /**
+    * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+    * 
+    * @warning This expects the particle buffer to be compact, it will fail if 
+    *          called with a non-compact buffer.
+    *
+    * @param quant     Quantity to gather
+    * @param d_data    Output data buffer, assumed to have size >= np
+    * @param scale     Scale factor for data
+    */
+    void gather( part::quantity quant, float * const __restrict__ d_data,
+        const float2 scale = make_float2( 1, 0 ) ) const;
 
     /**
      * @brief Save particle data to file
