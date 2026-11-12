@@ -401,9 +401,12 @@ public:
     /**
      * @brief Sets the boundary condition type
      * 
+     * @note Virtual so that derived classes (e.g. cathode) can restrict the
+     *       allowed boundary conditions
+     * 
      * @param new_bc 
      */
-    void set_bc( species::bc_type new_bc ) {
+    virtual void set_bc( species::bc_type new_bc ) {
 
         // Store new values
         global_bc = new_bc;

@@ -800,6 +800,179 @@ void test_lwfa()
 
 }
 
+#include "cathode.hpp"
+
+void test_cathode_inj( ) {
+
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    // Parallel partition, non-periodic along x
+    // 2 nodes along x so that one of the x ranks injects from each wall, and
+    // 2 along y to check injection on all ranks along the wall
+    uint2 partition = make_uint2( 2, 2 );
+    int2  periodic  = make_int2( 0, 1 );
+    mpi::cart2d parallel( partition, periodic );
+
+    uint2 ntiles{ 8, 4 };
+    uint2 nx{ 32, 32 };
+    float2 box{ 25.6, 12.8 };
+
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    double const dx = box.x / ( ntiles.x * nx.x );
+
+    uint2 ppc{ 8, 2 };
+
+    // Lower wall cathode, starting inside a time step. The y/z temperature
+    // moves particles across tiles / nodes along y but never back to the wall
+    cathode lower( "cathode-lower", -1.0f, ppc, edge::lower, 2.0f );
+    lower.start = 1.234;
+    lower.uth   = make_float3( 0, 0.05, 0.05 );
+
+    // Upper wall cathode, preloaded (start < 0), stopping inside a time step
+    cathode upper( "cathode-upper", -1.0f, ppc, edge::upper, 1.0f );
+    upper.start = -3.0;
+    upper.end   = 7.3;
+
+    lower.initialize( box, ntiles, nx, dt, 0, parallel );
+    upper.initialize( box, ntiles, nx, dt, 1, parallel );
+
+    current current( ntiles, nx, box, dt, parallel );
+
+    // Number of particle rows along y (global)
+    uint64_t const rows = static_cast<uint64_t>( ntiles.y ) * nx.y * ppc.y;
+
+    // Expected number of particles injected by time t (no particles lost)
+    auto n_injected = [&]( cathode const & c, double const t ) -> uint64_t {
+        double const vel  = c.ufl / std::sqrt( 1.0 + static_cast<double>( c.ufl ) * c.ufl );
+        double const t_on = std::max( c.start, 0.0 );
+        double const D    = vel * ( std::min( t, c.end ) - t_on ) / dx;
+        uint64_t const n  = ( D > 0 ) ? static_cast<uint64_t>( std::floor( D * ppc.x + 0.5 ) ) : 0;
+        return n * rows;
+    };
+
+    // Particles loaded at initialization (only the upper cathode has start < 0)
+    uint64_t const np0_lower = lower.global_np();
+    uint64_t const np0_upper = upper.global_np();
+
+    if ( mpi::root() ) {
+        std::cout << "Initial particles: lower = " << np0_lower
+                  << ", upper = " << np0_upper << '\n';
+    }
+
+    auto diag = [&]( ) {
+        lower.save_charge();
+        upper.save_charge();
+        lower.save();
+        current.save( fcomp::x );
+    };
+
+    // Stop before any beam front reaches the opposite wall
+    int const niter = 0.8 * box.x / dt;
+    int nfail = 0;
+
+    for( int i = 0; i < niter; i++ ) {
+        current.zero();
+
+        if ( i % 50 == 0 ) diag();
+
+        lower.advance( current );
+        upper.advance( current );
+        current.advance();
+
+        // Particles have been advanced to t = (i+1) dt
+        double const t = ( i + 1 ) * dt;
+
+        uint64_t const np_lower = lower.global_np();
+        uint64_t const np_upper = upper.global_np();
+
+        if ( mpi::root() ) {
+            uint64_t const exp_lower = np0_lower + n_injected( lower, t );
+            uint64_t const exp_upper = np0_upper + n_injected( upper, t );
+
+            if ( np_lower != exp_lower || np_upper != exp_upper ) {
+                nfail++;
+                std::cout << "(*error*) i = " << i 
+                          << ", lower: " << np_lower << " (expected " << exp_lower << ")"
+                          << ", upper: " << np_upper << " (expected " << exp_upper << ")\n";
+            }
+        }
+    }
+
+    diag();
+
+    parallel.barrier();
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        if ( nfail == 0 ) {
+            std::cout << __func__ << "() PASSED (" << niter << " iterations)\n";
+        } else {
+            std::cout << __func__ << "() FAILED on " << nfail << " of " << niter << " iterations\n";
+        }
+        std::cout << ansi::reset;
+    }
+}
+
+void test_cathode_emf( bool const inj_current = true ) {
+
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << "Running " << __func__ << "( inj_current = " << inj_current << " )...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    uint2 partition = make_uint2( 2, 2 );
+    int2  periodic  = make_int2( 0, 1 );
+
+    uint2 ntiles{ 8, 4 };
+    uint2 nx{ 32, 32 };
+    float2 box{ 25.6, 12.8 };
+
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+
+    zpic::simulation sim( ntiles, nx, box, dt, partition, periodic );
+
+    // Cold, low density beam: deceleration by its own space charge is ~1%
+    // of ufl over the run, so the constant velocity solution holds
+    uint2 ppc{ 8, 2 };
+    float const ufl = 2.0f;
+    cathode beam( "beam", -1.0f, ppc, edge::lower, ufl );
+    beam.n0 = 1.e-4;
+    beam.inj_current = inj_current;
+
+    sim.add_species( beam );
+
+    auto diag = [&]( ) {
+        sim.emf.save( emf::quantity::e, fcomp::x );
+        sim.current.save( fcomp::x );
+        beam.save_charge();
+    };
+
+    if ( mpi::root() ) {
+        double const vel = ufl / std::sqrt( 1.0 + ufl * ufl );
+        std::cout << "(*info*) Expected E_x(x,t) = " << beam.n0 << " * ( "
+                  << vel << " t - x ) for x < " << vel << " t, 0 otherwise\n";
+    }
+
+    while( sim.get_t() < 0.8 * box.x ) {
+        if ( sim.get_iter() % 50 == 0 ) diag();
+        sim.advance();
+    }
+
+    diag();
+
+    sim.parallel.barrier();
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        std::cout << __func__ << "() complete!\n";
+        std::cout << ansi::reset;
+    }
+}
+
+
 #if 0
 
 void test_weibel( std::string param ) {
@@ -1309,8 +1482,9 @@ int main( int argc, char *argv[] ) {
 
     // test_mov_window_emf();
     // test_mov_window_inj();
-    test_lwfa();
+    // test_lwfa();
 
+    test_cathode_inj();
 
     // test_warm( );
     /*

@@ -1,662 +1,537 @@
 #include "cathode.hpp"
-#include "util/random.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+#include "core/gpu.cuh"
+#include "util/math.hpp"
+#include "util/random.cuh"
+#include "util/hash.hpp"
 
 /**
- * ## cathode algorithm
+ * ## Cathode algorithm
  * 
  * To minimize differences from a free streaming species with the same (fluid)
- * velocity, this implementation of the cathode stores `ppc.x` longitudinal
- * positions:
- * 1. These positions are initialized as if injecting a uniform density profile
- * 2. At each time-step they are advanced as if they are a free-streaming 
- *    particle species, i.e., positions are moved by v * dt / dx
- * 4. The complete set of positions is copied onto device memory; all positions
- *    >= 0.5 (for a lower edge cathode) correspond to particles that must be
- *    injected.
- * 5. Reference positions are then trimmed 
+ * velocity, the cathode is modeled as a uniform stream of particles located
+ * behind the injection wall, `ppc.x` particles per cell, moving with velocity
+ * `vel` into the box:
  * 
- * While this represents an overhead compared to the previous algorithm, it
- * ensures a much steadier flow of particles. Currently, the only limitation of
- * this implementation is that the algorithm requires a shared memory array of
- * `ppc.x` floats.
+ * 1. Stream particle k (k = 0, 1, 2, ...) sits at distance (k + 0.5)/ppc.x
+ *    cells behind the wall when injection is turned on (at t_on = max(start,0))
+ * 2. At time t the stream has moved D(t) = vel * (t - t_on) / dx cells, so
+ *    the number of particles that have crossed the wall is
+ *    N(t) = floor( D(t) * ppc.x + 0.5 )
+ * 3. Particle k is at distance D(t) - (k + 0.5)/ppc.x from the wall, inside
+ *    the box.
+ * 
+ * At each time step the new particles are those with N(t_n) <= k < N(t_{n+1});
+ * each of these is replicated `ppc.y` times along y in every cell next to the
+ * wall. This is the same particle stream the previous version tracked
+ * explicitly (`ppc.x` reference positions advanced every step), but it is
+ * computed on the host from the iteration number alone: there is no device
+ * array, no shared memory / reduction, and no accumulation of round-off in the
+ * reference positions over long runs.
+ * 
+ * Injection end times that fall inside a time step are handled exactly:
+ * only particles that crossed the wall before `end` are injected.
+ * 
+ * In parallel runs all ranks keep the (identical) injection counter, but only
+ * ranks on the injection wall launch the injection kernels.
+ * 
+ * ## Current of injected particles
+ * 
+ * New particles have spent part of the time step inside the box, travelling
+ * from the wall to their injection position. If `inj_current` is set (default)
+ * the current of this segment is deposited using the same charge conserving
+ * scheme as species::move(), so the continuity equation also holds for
+ * injected particles. Otherwise the particles appear with no current, which
+ * leads to a spurious (static) E_x field building up near the wall.
+ * 
+ * Injected particles are not pushed in the step they are injected in.
  */
-
 
 /**
- * @brief Construct a new cathode:: cathode object
+ * @brief Construct a new cathode object
  * 
- * @param name      cathode name
+ * @param name      Cathode name
  * @param m_q       Mass over charge ratio
  * @param ppc       Number of particles per cell
- * @param ufl       Fluid velocity
+ * @param wall      Wall to inject particles from (edge::lower or edge::upper)
+ * @param ufl       Fluid generalized velocity (sign is ignored)
  */
-cathode::cathode( std::string const name, float const m_q, uint2 const ppc, edge::pos wall, float ufl ):
-    Species( name, m_q, ppc ), ufl( sycl::fabs(ufl) ), wall( wall )
+cathode::cathode( std::string const name, float const m_q, uint2 const ppc,
+    edge::pos const wall, float const ufl ) :
+    species( name, m_q, ppc ), vel( 0 ), inj_count( 0 ),
+    ufl( std::fabs( ufl ) ), wall( wall )
 { 
-    if ( ufl == 0 ) {
-        std::cerr << "(*error*) cathodes cannot have ufl = 0, aborting...\n";
-        exit(1);
+    if ( this -> ufl == 0 ) {
+        mpi::fatal( "cathodes cannot have ufl = 0" );
     }
 
     // Default values
     start = 0;
-    end   = __FLT_MAX__;
-    uth   = float3( 0 );
+    end   = std::numeric_limits<double>::max();
+    uth   = make_float3( 0, 0, 0 );
     n0    = 1.0;
+    inj_current = true;
 }
 
 /**
- * @brief Initialize data structures and inject particles
+ * @brief Initialize data structures and inject initial particles (if start < 0)
  * 
- * @param box_      Simulation global box size
- * @param ntiles    Number of tiles
- * @param nx        Grid size per tile
- * @param dt_       Time step
- * @param id_       Species unique id
+ * @param box_              Global simulation box size
+ * @param global_ntiles     Global number of tiles
+ * @param tile_dims         Individual tile grid size
+ * @param dt_               Time step
+ * @param id_               Species unique identifier
+ * @param parallel          Parallel configuration
  */
-void cathode::initialize( float2 const box_, uint2 const ntiles, uint2 const nx,
-    float const dt_, int const id_, sycl::queue & queue_ ) {
+void cathode::initialize( float2 const box_, uint2 const global_ntiles, uint2 const tile_dims,
+    double const dt_, int const id_, mpi::cart2d & parallel ) {
 
-    // cathode velocity (always > 0)
-    vel = (ufl / sqrtf( ops::fma( ufl , ufl , 1.0f ) ));
-
-    // Initialize position of cathode particles in the cell outside the box
-    d_inj_pos = device::malloc<float>( ppc.x, queue_ );
-
-    double dpcx = 1.0  / ppc.x;
-    for( unsigned i = 0; i < ppc.x; i ++ ) {
-        d_inj_pos[i] = dpcx * ( i + 0.5 ) - 0.5;
+    // species::initialize() would turn open x boundaries into periodic ones
+    if ( parallel.periodic.x ) {
+        mpi::fatal( "cathodes require a non-periodic x parallel partition" );
     }
 
-    // Set initial density, if any
-    // This allows injecting an initial density / temperature distribution if required
-    if ( start < 0 ) {
-        float x0 = 0, x1 = 0, u = 0;
+    // Injection wall must be open (set_bc() also checks this)
+    validate_wall_bc( get_bc() );
 
-        switch (wall)
-        {
-        case edge::lower:
-            x0 = 0;
-            x1 = -vel * start;
-            u = ufl;
-            break;
-        
-        case edge::upper:
-            x0 = box.x + vel * start;
-            x1 = box.x;
-            u = -ufl;
-            break;
+    // Cathode velocity (always > 0)
+    vel = ufl / std::sqrt( 1.0 + static_cast<double>( ufl ) * ufl );
+
+    // If start < 0, load the particles injected between start and min(end,0)
+    double const t_stop = std::min( end, 0.0 );
+
+    if ( start < t_stop ) {
+        // Distance from wall of particles injected at t_stop and start
+        float const d_near = vel * ( - t_stop );
+        float const d_far  = vel * ( - start );
+
+        float x0, x1, u;
+        if ( wall == edge::lower ) {
+            x0 = d_near;
+            x1 = d_far;
+            u  = ufl;
+        } else {
+            x0 = box_.x - d_far;
+            x1 = box_.x - d_near;
+            u  = -ufl;
         }
-        Species::set_density( Density::Slab( coord::x, n0, x0, x1 ) );
-        Species::set_udist( UDistribution::Thermal( uth, float3( u ) ) );
+
+        species::set_density( density::slab( coord::x, n0, x0, x1 ) );
+        species::set_udist( udist::thermal( uth, make_float3( u, 0, 0 ) ) );
     } else {
-        Species::set_density( Density::None( n0 ) );
-        // No need to set udist because no particles will be injected
+        // No initial particles, but n0 sets the charge normalization
+        species::set_density( density::none( n0 ) );
     }
 
     // Complete species initialization (will inject initial particles, if any)
-    Species::initialize( box_, ntiles, nx, dt_, id_, queue_ );
-}
+    species::initialize( box_, global_ntiles, tile_dims, dt_, id_, parallel );
 
-/**
- * @brief Destroy the cathode
- * 
- */
-cathode::~cathode() {
-    device::free( d_inj_pos, * queue );
-}
-
-/**
- * @brief Inject particles inside the simulation box
- * 
- * This will only happen if iter == 0 and start < 0
- * This also sets the velocity of the injected particles
- */
-void cathode::inject() {
-    
-    if ( iter == 0 && start < 0 ) {
-
-        uint2 g_nx = particles -> gnx;
-        bnd<unsigned int> range;
-        range.x = { .lower = 0, .upper = g_nx.x - 1 };
-        range.y = { .lower = 0, .upper = g_nx.y - 1 };
-
-        Species::inject( range );
+    // dx is only known after species::initialize()
+    if ( vel * dt / dx.x >= 1.0 ) {
+        mpi::fatal( "cathode flow moves 1 cell or more per time step, reduce dt" );
     }
+
+    // Reset injection counter
+    inj_count = 0;
 }
-
-/**
- * @brief Inject particles inside the specified range
- *
- * This will only happen if iter == 0 and start < 0
- * 
- * @param range     Cell range in which to inject
- */
-void cathode::inject( bnd<unsigned int> range ) {
-
-    if ( iter == 0 && start < 0 ) {
-        Species::inject( range );
-    }
-}
-
-/**
- * @brief Get number of particles to inject in the specified range
- * 
- * This will only happen if iter == 0 and start < 0, otherwise the
- * output array will just be set to 0
- * 
- * @param range 
- * @param np 
- */
-void cathode::np_inject( bnd<unsigned int> range, int * np ) {
-    
-    if ( iter == 0 && start < 0 ) {
-        Species::np_inject( range, np );
-    } else {
-        device::zero( np, particles -> ntiles.x * particles -> ntiles.y, *queue );
-    }
-}
-
 
 namespace kernel {
 
+/// @brief Random number tag for cathode injection
+constexpr uint32_t cathode_rnd_tag = "cathode rnd tag"_hash;
+
 /**
- * @brief Kernel for injecting cathode particles from lower wall
+ * @brief Sets number of particles to inject per tile
  * 
- * @param tile_idx      Tile index
- * @param d_inj_pos     Pointer to injection position
- * @param ufl           cathode flow generalized velocity
- * @param uth           Temperature for injected particles
- * @param seed          RNG seed
- * @param ppc           Number of particles per cell
- * @param tiles         Particle tile information
- * @param data          Particle data
+ * @param np_inj        (out) Number of particles to inject per tile
+ * @param ntiles        Local number of tiles
+ * @param wall_tile_x   x index of the tiles at the injection wall
+ * @param np_tile       Number of particles to inject in each wall tile
  */
-void inject_cathode_lower( 
-    sycl::nd_item<1> it, 
-    float * __restrict__ const d_inj_pos, float const ufl,
-    float3 uth, uint2 seed,  uint2 const ppc,
-    ParticleData const part,
-    int * __restrict__ inj_pos, int * __restrict__ inj_np_local )
+__global__
+void cathode_np_inject(
+    int * __restrict__ const np_inj, uint2 const ntiles,
+    unsigned int const wall_tile_x, int const np_tile )
 {
-    const auto ntiles  = part.ntiles;
-    const auto nx      = part.nx;
+    unsigned int const tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( tid < ntiles.x * ntiles.y ) {
+        np_inj[ tid ] = ( tid % ntiles.x == wall_tile_x ) ? np_tile : 0;
+    }
+}
 
-    const uint2 tile_idx( 0, it.get_local_id(0) );
-    const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
+/**
+ * @brief Injects new cathode particles
+ * 
+ * @note Launch with grid( local_ntiles.y ), one block per tile at the
+ *       injection wall
+ * 
+ * @note Contiguous particles are placed in different cells (same ordering as
+ *       density::uniform), to minimize collisions when depositing current
+ * 
+ * @tparam wall     Injection wall
+ * @param part      Particle data
+ * @param ppc       Number of particles per cell
+ * @param n_new     Number of new stream particles (per ppc.y and per cell)
+ * @param d0        Distance from the wall (in cells) of the first new particle
+ * @param ufl       Cathode flow generalized velocity (> 0)
+ * @param uth       Temperature of injected particles
+ * @param rnd_key   PRNG key
+ * @param iter      Iteration number (used in the PRNG counter)
+ */
+template< edge::pos wall >
+__global__
+void cathode_inject(
+    part::particles_view const part,
+    uint2 const ppc, int const n_new, float const d0,
+    float const ufl, float3 const uth, uint2 const rnd_key, uint32_t const iter )
+{
+    const uint2 ntiles     = part.local_ntiles;
+    const int   tile_idx_x = ( wall == edge::lower ) ? 0 : ntiles.x - 1;
+    const int   tile_idx_y = blockIdx.x;
+    const int   tid        = tile_idx_y * ntiles.x + tile_idx_x;
 
-    // Initialize random state variables
-    uint2 state;
-    double norm;
-    zrandom::rand_init( it.get_global_linear_id(), seed, state, norm );
+    // Number of particles before injection
+    const int np     = part.tile_np[ tid ];
+    const int offset = part.tile_offset[ tid ];
 
-    const int offset =  part.offset[ tile_id ];
     int2   * __restrict__ const ix = &part.ix[ offset ];
-    float2 * __restrict__ const x  = &part.x[ offset ];
-    float3 * __restrict__ const u  = &part.u[ offset ];
+    float2 * __restrict__ const x  = &part.x [ offset ];
+    float3 * __restrict__ const u  = &part.u [ offset ];
 
-    int np = part.np[ tile_id ];
+    // Global tile id, used in the PRNG counter
+    const int global_tile_id = 
+        ( part.local_tile_start.y + tile_idx_y ) * part.global_ntiles.x +
+        ( part.local_tile_start.x + tile_idx_x );
 
-    // Advance injection positions and count number of particles to inject
+    const int   ny      = part.tile_dims.y;
+    const int   total   = ny * ppc.y * n_new;
+    const int   cell_x  = ( wall == edge::lower ) ? 0 : part.tile_dims.x - 1;
+    const float ux      = ( wall == edge::lower ) ? ufl : -ufl;
+    const float dpcx    = 1.0f / ppc.x;
+    const float dpcy    = 1.0f / ppc.y;
 
-    *inj_np_local = 0;
-    it.barrier();
+    // Flat index n = ppc_idx * ny + cy, i.e. the cell is the fastest index
+    for( int n = gpu::block::thread_rank(); n < total; n += gpu::block::num_threads() ) {
+        const int ppc_idx = n / ny;
+        const int cy      = n - ppc_idx * ny;
+        const int i1      = ppc_idx / n_new;
+        const int j       = ppc_idx - i1 * n_new;
 
-    int inj_np = 0;
-    for( auto idx = it.get_local_id(0); idx < ppc.x; idx += it.get_local_range(0) ) {
-        inj_pos[idx] = d_inj_pos[idx];
-        if ( inj_pos[idx] >= 0.5f ) inj_np++;
+        // Distance from wall, in [0, vel * dt / dx)
+        const float d = d0 - j * dpcx;
+
+        float px = ( wall == edge::lower ) ? d - 0.5f : 0.5f - d;
+        px = fminf( fmaxf( px, -0.5f ), nextafterf( 0.5f, 0.f ) );
+
+        // Counter is unique per particle, tile and iteration
+        const uint4  rnd_ctr = make_uint4( n, global_tile_id, iter, cathode_rnd_tag );
+        const float4 norm    = zrandom::rand_norm4_f( rnd_ctr, rnd_key );
+
+        ix[ np + n ] = make_int2( cell_x, cy );
+        x [ np + n ] = make_float2( px, dpcy * ( i1 + 0.5f ) - 0.5f );
+        u [ np + n ] = make_float3(
+            ux + uth.x * norm.x,
+                 uth.y * norm.y,
+                 uth.z * norm.z
+        );
     }
 
-    auto sg = it.get_sub_group();
-    inj_np = device::subgroup::reduce_add( sg, inj_np );
-    if ( sg.get_local_id() == 0 ) {
-        device::local::atomicAdd( inj_np_local, inj_np );
+    // All threads have read tile_np[ tid ] before it is updated
+    gpu::block::sync();
+
+    if ( gpu::block::thread_rank() == 0 )
+        part.tile_np[ tid ] = np + total;
+}
+
+/**
+ * @brief Deposits the current of a straight segment inside a single cell
+ * 
+ * @note Same scheme as kernel::dep_current_seg() in species.cu, but adding
+ *       directly to global memory (device atomics)
+ * 
+ * @param ix        Particle cell
+ * @param x0        Initial particle position
+ * @param x1        Final particle position
+ * @param qnx       Normalization values for in plane current deposition
+ * @param qvz       Out of plane current, q vz / 3 (times the fraction of
+ *                  the time step spent on this segment)
+ * @param J         Current density grid (tile buffer, at cell [0,0])
+ * @param stride    Current density grid y stride
+ */
+__device__
+inline void cathode_dep_seg(
+    const int2 ix, const float2 x0, const float2 x1,
+    const float2 qnx, const float qvz,
+    float3 * __restrict__ J, const int stride )
+{
+    const float S0x0 = 0.5f - x0.x;
+    const float S0x1 = 0.5f + x0.x;
+
+    const float S1x0 = 0.5f - x1.x;
+    const float S1x1 = 0.5f + x1.x;
+
+    const float S0y0 = 0.5f - x0.y;
+    const float S0y1 = 0.5f + x0.y;
+
+    const float S1y0 = 0.5f - x1.y;
+    const float S1y1 = 0.5f + x1.y;
+
+    const float wl1 = qnx.x * (x1.x - x0.x);
+    const float wl2 = qnx.y * (x1.y - x0.y);
+
+    const float wp10 = 0.5f*(S0y0 + S1y0);
+    const float wp11 = 0.5f*(S0y1 + S1y1);
+
+    const float wp20 = 0.5f*(S0x0 + S1x0);
+    const float wp21 = 0.5f*(S0x1 + S1x1);
+
+    float * __restrict__ const Js = (float *) (&J[ix.x + stride * ix.y]);
+    int const stride3 = 3 * stride;
+
+    gpu::device::atomic_fetch_add( &Js[       0 + 0 + 0 ], wl1 * wp10 );
+    gpu::device::atomic_fetch_add( &Js[       0 + 0 + 1 ], wl2 * wp20 );
+    gpu::device::atomic_fetch_add( &Js[       0 + 0 + 2 ], qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 + S1x0 * S0y0)/2.0f ));
+
+    gpu::device::atomic_fetch_add( &Js[       0 + 3 + 1 ], wl2 * wp21 );
+    gpu::device::atomic_fetch_add( &Js[       0 + 3 + 2 ], qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 + S1x1 * S0y0)/2.0f ));
+
+    gpu::device::atomic_fetch_add( &Js[ stride3 + 0 + 0 ], wl1 * wp11 );
+    gpu::device::atomic_fetch_add( &Js[ stride3 + 0 + 2 ], qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 + S1x0 * S0y1)/2.0f ));
+    gpu::device::atomic_fetch_add( &Js[ stride3 + 3 + 2 ], qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 + S1x1 * S0y1)/2.0f ));
+}
+
+/**
+ * @brief Deposits the current of newly injected cathode particles
+ * 
+ * Each new particle is assumed to have entered the box through the wall
+ * (at the same y position) during this time step, and moved along x to its
+ * injection position.
+ * 
+ * @note Launch with grid( local_ntiles.y ) after cathode_inject(); the new
+ *       particles are the last `np_tile` particles in each wall tile
+ * 
+ * @tparam wall     Injection wall
+ * @param part      Particle data
+ * @param current   Electric current density
+ * @param np_tile   Number of particles injected in each wall tile
+ * @param q         Particle charge
+ * @param qnx       Normalization values for in plane current deposition
+ * @param rmotion   1 / (cells moved by the cathode flow in 1 time step)
+ */
+template< edge::pos wall >
+__global__
+void cathode_deposit(
+    part::particles_view const part,
+    grid::tiled_view<float3> current,
+    int const np_tile, float const q, float2 const qnx, float const rmotion )
+{
+    const uint2 ntiles     = part.local_ntiles;
+    const int   tile_idx_x = ( wall == edge::lower ) ? 0 : ntiles.x - 1;
+    const int   tile_idx_y = blockIdx.x;
+    const int   tid        = tile_idx_y * ntiles.x + tile_idx_x;
+
+    const int np     = part.tile_np[ tid ];
+    const int offset = part.tile_offset[ tid ];
+
+    int2   const * __restrict__ const ix = &part.ix[ offset ];
+    float2 const * __restrict__ const x  = &part.x [ offset ];
+    float3 const * __restrict__ const u  = &part.u [ offset ];
+
+    float3 * __restrict__ const J = current.tile_buffer( tid ) + current.inner_offset;
+    const int ystride = current.tile_ystride();
+
+    for( int i = np - np_tile + gpu::block::thread_rank(); i < np; i += gpu::block::num_threads() ) {
+        const float2 x1 = x[i];
+        const float3 pu = u[i];
+
+        // Entry point on the wall
+        const float2 x0 = make_float2( ( wall == edge::lower ) ? -0.5f : 0.5f, x1.y );
+
+        // Distance travelled inside the box (cells) and fraction of the time
+        // step spent inside the box (at the cathode flow velocity)
+        const float d    = ( wall == edge::lower ) ? x1.x + 0.5f : 0.5f - x1.x;
+        const float frac = d * rmotion;
+
+        const float rg  = rsqrtf( fmaf( pu.z, pu.z, fmaf( pu.y, pu.y, fmaf( pu.x, pu.x, 1.0f ) ) ) );
+        const float qvz = q * pu.z * rg * ( 1.0f / 3.0f ) * frac;
+
+        cathode_dep_seg( ix[i], x0, x1, qnx, qvz, J, ystride );
+    }
+}
+
+} // namespace kernel
+
+/**
+ * @brief Total number of stream particles that have crossed the wall
+ *        up to time t
+ * 
+ * @param t             Simulation time
+ * @return uint64_t     Number of particles (per ppc.y and per cell along y)
+ */
+uint64_t cathode::n_crossed( double const t ) const {
+    double const t_on = std::max( start, 0.0 );
+    double const D = vel * ( std::min( t, end ) - t_on ) / dx.x;
+    return ( D > 0 ) ? static_cast<uint64_t>( std::floor( D * ppc.x + 0.5 ) ) : 0;
+}
+
+/**
+ * @brief Sort particles over tiles, injecting new cathode particles
+ *        if required
+ * 
+ * @note Calls particles -> tile_sort() exactly once on every rank
+ * 
+ * @param J     Current density to deposit the current of the injected
+ *              particles to. Use nullptr to skip deposition.
+ */
+void cathode::sort_inject( grid::tiled_vec3<float> * const J ) {
+
+    // Particles are being advanced to t = (iter+1) * dt
+    double const t1 = ( iter + 1 ) * dt;
+
+    uint64_t const n_total = n_crossed( t1 );
+    int const n_new = n_total - inj_count;
+
+    // Distance from the wall of the first new particle (computed in double
+    // precision, D grows with time)
+    float d0 = 0;
+    if ( n_new > 0 ) {
+        double const D = vel * ( t1 - std::max( start, 0.0 ) ) / dx.x;
+        d0 = D - ( inj_count + 0.5 ) / ppc.x;
     }
 
-    it.barrier();
+    // Counter is updated on all ranks
+    inj_count = n_total;
 
-    inj_np = *inj_np_local;
+    if ( n_new > 0 && particles -> parallel.on_edge( coord::x, wall ) ) {
 
-    // Inject particles
-    double dpcy = 1.0 / ppc.y;
+        auto const ntiles    = particles -> get_local_ntiles();
+        auto const tile_dims = particles -> get_tile_dims();
 
-    // 1 thread per cell
-    for( auto idx = it.get_local_id(0); idx < nx.y; idx += it.get_local_range(0) ) {
-        int2 cell( 0, idx );
+        // Number of particles to inject per tile
+        unsigned int const wall_tile_x = ( wall == edge::lower ) ? 0 : ntiles.x - 1;
+        int const np_tile = tile_dims.y * ppc.y * n_new;
+        int const nt = ntiles.x * ntiles.y;
 
-        int part_idx = np + idx * ( inj_np * ppc.y );
+        kernel::cathode_np_inject <<< ( nt + 255 ) / 256, 256 >>> (
+            np_inj, ntiles, wall_tile_x, np_tile
+        );
 
-        for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-            for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                if ( inj_pos[i0] >= 0.5f ) {
-                    float2 pos(
-                        inj_pos[i0] - 1.0f,
-                        dpcy * ( i1 + 0.5 ) - 0.5
-                    );
-                    ix[ part_idx ] = cell;
-                    x[ part_idx ] = pos;
-                    u[ part_idx ] = float3( 
-                        ufl + uth.x * zrandom::rand_norm( state, norm ),
-                              uth.y * zrandom::rand_norm( state, norm ),
-                              uth.z * zrandom::rand_norm( state, norm )
-                    );
-                    part_idx++;
-                }
+        // Sort particles according to tile, leaving room for new particles
+        // (grows the particle buffers if required)
+        particles -> tile_sort( *tmp, *sort, np_inj );
+
+        // Inject new particles
+        uint2 const rnd_key = make_uint2( 12345 + id, 67890 );
+        dim3 const grid( ntiles.y );
+        unsigned int nthreads = roundup<gpu::warp_size>( np_tile );
+        if ( nthreads > 256 ) nthreads = 256;
+        dim3 const block( nthreads );
+
+        switch( wall ) {
+        case edge::lower:
+            kernel::cathode_inject< edge::lower > <<< grid, block >>> (
+                particles -> view(), ppc, n_new, d0, ufl, uth, rnd_key, iter
+            );
+            break;
+        case edge::upper:
+            kernel::cathode_inject< edge::upper > <<< grid, block >>> (
+                particles -> view(), ppc, n_new, d0, ufl, uth, rnd_key, iter
+            );
+            break;
+        }
+
+        // Deposit current of injected particles
+        if ( J != nullptr && inj_current ) {
+            float2 const qnx = make_float2(
+                q * dx.x / dt,
+                q * dx.y / dt
+            );
+            float const rmotion = dx.x / ( vel * dt );
+
+            switch( wall ) {
+            case edge::lower:
+                kernel::cathode_deposit< edge::lower > <<< grid, block >>> (
+                    particles -> view(), J -> view(), np_tile, q, qnx, rmotion
+                );
+                break;
+            case edge::upper:
+                kernel::cathode_deposit< edge::upper > <<< grid, block >>> (
+                    particles -> view(), J -> view(), np_tile, q, qnx, rmotion
+                );
+                break;
             }
         }
+
+    } else {
+        // Nothing to inject on this rank, just sort particles over tiles
+        particles -> tile_sort( *tmp, *sort );
     }
-
-    // Update global number of particles in tile
-    if ( it.get_local_id(0) == 0 )
-        part.np[ tile_id ] += nx.y * inj_np * ppc.y;
-}
-
-
-/**
- * @brief Kernel for injecting cathode particles from upper wall
- * 
- * @param tile_idx      Tile index
- * @param d_inj_pos     Pointer to injection position
- * @param ufl           cathode flow generalized velocity
- * @param uth           Temperature for injected particles
- * @param seed          RNG seed
- * @param ppc           Number of particles per cell
- * @param tiles         Particle tile information
- * @param data          Particle data
- */
-void inject_cathode_upper( 
-    sycl::nd_item<1> it, 
-    float * const d_inj_pos, float const ufl,
-    float3 uth, uint2 seed,  uint2 const ppc,
-    ParticleData const part,
-    int * __restrict__ inj_pos, int * __restrict__ inj_np_local )
-{
-    const auto ntiles  = part.ntiles;
-    const auto nx      = part.nx;
-
-    const uint2 tile_idx( ntiles.x-1, it.get_local_id(0) );
-    const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
-
-    // Initialize random state variables
-    uint2 state;
-    double norm;
-    zrandom::rand_init( it.get_global_linear_id(), seed, state, norm );
-
-    const int offset =  part.offset[ tile_id ];
-    int2   * __restrict__ const ix = &part.ix[ offset ];
-    float2 * __restrict__ const x  = &part.x[ offset ];
-    float3 * __restrict__ const u  = &part.u[ offset ];
-
-    int np = part.np[ tile_id ];
-
-    // Advance injection positions and count number of particles to inject
-
-    *inj_np_local = 0;
-    it.barrier();
-
-    int inj_np = 0;
-    for( auto idx = it.get_local_id(0); idx < ppc.x; idx += it.get_local_range(0) ) {
-        inj_pos[idx] = d_inj_pos[idx];
-        if ( inj_pos[idx] < -0.5f ) inj_np ++;
-    }
-
-    auto sg = it.get_sub_group();
-    inj_np = device::subgroup::reduce_add( sg, inj_np );
-    if ( sg.get_local_id() == 0 ) {
-        device::local::atomicAdd( inj_np_local, inj_np );
-    }
-
-    it.barrier();
-
-    inj_np = *inj_np_local;
-
-    // Inject particles
-    double dpcy = 1.0 / ppc.y;
-
-    // 1 thread per cell
-    for( auto idx = it.get_local_id(0); idx < nx.y; idx += it.get_local_range(0) ) {
-        int2 const cell( nx.x-1, idx );
-
-        int part_idx = np + idx * ( inj_np * ppc.y );
-
-        for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-            for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                if ( inj_pos[i0] < -0.5f ) {
-                    float2 const pos = float2(
-                        inj_pos[i0] + 1.0f,
-                        dpcy * ( i1 + 0.5 ) - 0.5
-                    );
-                    ix[ part_idx ] = cell;
-                    x[ part_idx ] = pos;
-                    u[ part_idx ] = float3( 
-                        -ufl + uth.x * zrandom::rand_norm( state, norm ),
-                               uth.y * zrandom::rand_norm( state, norm ),
-                               uth.z * zrandom::rand_norm( state, norm )
-                    );
-                    part_idx++;
-                }
-            }
-        }
-    }
-
-    // Update global number of particles in tile
-    if ( it.get_local_id(0) == 0 )
-        part.np[ tile_id ] += nx.y * inj_np * ppc.y;
 }
 
 /**
- * @brief Kernel for counting particles to inject from lower wall
+ * @brief Free stream particles 1 timestep and inject new particles
  * 
- * @param tile_idx      Tile index
- * @param d_inj_pos     Injection positions
- * @param ppc           Number of particles per cell
- * @param tiles         Tile information
- * @param np            (out) Number of particles per tile to inject
  */
-void np_inject_cathode_lower( 
-    sycl::nd_item<1> it,
-    float * __restrict__ const d_inj_pos,
-    uint2 const ppc,
-    ParticleData const part,
-    int * __restrict__ inj_pos, int * __restrict__ inj_np_local,
-    int * __restrict__ np )
-{
-    const auto ntiles  = part.ntiles;
+void cathode::advance() {
 
-    const uint2 tile_idx( 0, it.get_local_id(0) );
-    const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
+    // Advance positions
+    move();
 
-    *inj_np_local = 0;
-    it.barrier();
+    // Process physical boundary conditions
+    process_bc();
 
-    // Number of particles to inject per cell
-    int inj_np = 0;
-    for( auto idx = it.get_local_id(0); idx < ppc.x; idx += it.get_local_range(0) ) {
-        inj_pos[idx] = d_inj_pos[idx];
-        if ( inj_pos[idx] >= 0.5f ) inj_np++;
-    }
+    // Sort particles according to tile and inject new particles (no current)
+    sort_inject( nullptr );
 
-    auto sg = it.get_sub_group();
-    inj_np = device::subgroup::reduce_add( sg, inj_np );
-    if ( sg.get_local_id() == 0 ) {
-        device::local::atomicAdd( inj_np_local, inj_np );
-    }
-
-    it.barrier();
-
-    // Get total number of particle to inject
-    if ( it.get_local_id(0) == 0 )
-        np[ tile_id ] = *inj_np_local * ppc.y * part.nx.y;
+    // Increase internal iteration number
+    iter++;
 }
 
 /**
- * @brief Kernel for counting particles to inject from upper wall
+ * @brief Advance positions 1 timestep (no momentum update), deposit current
+ *        and inject new particles
  * 
- * @param tile_idx      Tile index
- * @param d_inj_pos     Injection positions
- * @param ppc           Number of particles per cell
- * @param tiles         Tile information
- * @param np            (out) Number of particles per tile to inject
+ * @param current   Electric current density
  */
-void np_inject_cathode_upper( 
-    sycl::nd_item<1> it,
-    float * __restrict__ const d_inj_pos,
-    uint2 const ppc,
-    ParticleData const part,
-    int * __restrict__ inj_pos, int * __restrict__ inj_np_local,
-    int * __restrict__ np )
-{
-    const auto ntiles  = part.ntiles;
+void cathode::advance( current & current ) {
 
-    const uint2 tile_idx( ntiles.x - 1, it.get_local_id(0) );
-    const int tile_id = tile_idx.y * ntiles.x + tile_idx.x;
+    // Advance positions and deposit current
+    move( * current.J );
 
-    *inj_np_local = 0;
-    it.barrier();
+    // Process physical boundary conditions
+    process_bc();
 
-    // Number of particles to inject per cell
-    int inj_np = 0;
-    for( auto idx = it.get_local_id(0); idx < ppc.x; idx += it.get_local_range(0) ) {
-        inj_pos[idx] = d_inj_pos[idx];
-        if ( inj_pos[idx] < -0.5f ) inj_np ++;
-    }
+    // Sort particles according to tile and inject new particles
+    sort_inject( current.J );
 
-    auto sg = it.get_sub_group();
-    inj_np = device::subgroup::reduce_add( sg, inj_np );
-    if ( sg.get_local_id() == 0 ) {
-        device::local::atomicAdd( inj_np_local, inj_np );
-    }
-
-    it.barrier();
-
-    // Get total number of particle to inject
-    if ( it.get_local_id(0) == 0 )
-        np[ tile_id ] = *inj_np_local * ppc.y * part.nx.y;
-}
-
+    // Increase internal iteration number
+    iter++;
 }
 
 /**
- * @brief Count how many particles will be injected into each tile
+ * @brief Advance particles 1 iteration, deposit current and inject new
+ *        particles
  * 
- * The routine also updates d_inj_pos (position of injection particles)
- * 
+ * @param emf       EM fields
+ * @param current   Electric current density
  */
-void cathode::cathode_np_inject( int * np )
-{
-
-    // Injection will be zero on most tiles
-    // We could also change the kernel so that they run on all tiles and do it there
-    device::zero( np, particles -> ntiles.y * particles -> ntiles.x, *queue );
-
-    const ParticleData part = *particles;
-    const auto d_inj_pos = this -> d_inj_pos;
-    const auto ppc = this -> ppc;
-
-    switch (wall)
-    {
-    case edge::lower:
-        queue->submit([&](sycl::handler &h) {
-            auto inj_pos      = sycl::local_accessor< int, 1 > ( ppc.x, h );
-            auto inj_np_local = sycl::local_accessor< int, 1 > ( 1, h );
-            sycl::range<1> local{ 8 };
-            sycl::range<1> global{ particles -> ntiles.y };
-            h.parallel_for( 
-                sycl::nd_range{ global * local, local },
-                [=](sycl::nd_item<1> it) {
-
-                np_inject_cathode_lower( it, d_inj_pos, ppc, part, &inj_pos[0], &inj_np_local[0], np );
-            });
-        });
-        break;
-    
-    case edge::upper:
-        queue->submit([&](sycl::handler &h) {
-            auto inj_pos      = sycl::local_accessor< int, 1 > ( ppc.x, h );
-            auto inj_np_local = sycl::local_accessor< int, 1 > ( 1, h );
-            sycl::range<1> local{ 8 };
-            sycl::range<1> global{ particles -> ntiles.y };
-            h.parallel_for( 
-                sycl::nd_range{ global * local, local },
-                [=](sycl::nd_item<1> it) {
-
-                np_inject_cathode_upper( it, d_inj_pos, ppc, part, &inj_pos[0], &inj_np_local[0], np );
-            });
-        });
-        break;
-    }
-    queue->wait();
-
-}
-
-/**
- * @brief Inject new cathode particles
- * 
- */
-void cathode::cathode_inject( )
-{
-    uint2 rnd_seed = {12345 + (unsigned int) iter, 67890 + (unsigned int ) id };
-
-    const ParticleData part = *particles;
-    const auto d_inj_pos = this -> d_inj_pos;
-    const auto ufl = this -> ufl;
-    const auto uth = this -> uth;
-    const auto ppc = this -> ppc;
-
-    switch (wall)
-    {
-    case edge::lower:
-
-        queue->submit([&](sycl::handler &h) {
-            auto inj_pos      = sycl::local_accessor< int, 1 > ( ppc.x, h );
-            auto inj_np_local = sycl::local_accessor< int, 1 > ( 1, h );
-            sycl::range<1> local{ 8 };
-            sycl::range<1> global{ particles -> ntiles.y };
-            h.parallel_for( 
-                sycl::nd_range{ global * local, local },
-                [=](sycl::nd_item<1> it) {
-                
-                inject_cathode_lower ( it, d_inj_pos, ufl, uth, rnd_seed, ppc, part, &inj_pos[0], &inj_np_local[0] );
-            }); 
-        });
-        break;
-    
-    case edge::upper:
-        queue->submit([&](sycl::handler &h) {
-            auto inj_pos      = sycl::local_accessor< int, 1 > ( ppc.x, h );
-            auto inj_np_local = sycl::local_accessor< int, 1 > ( 1, h );
-            sycl::range<1> local{ 8 };
-            sycl::range<1> global{ particles -> ntiles.y };
-            h.parallel_for( 
-                sycl::nd_range{ global * local, local },
-                [=](sycl::nd_item<1> it) {
-                
-                inject_cathode_upper ( it, d_inj_pos, ufl, uth, rnd_seed, ppc, part, &inj_pos[0], &inj_np_local[0] );
-            }); 
-        });
-        break;
-    }
-    queue->wait();
-}
-
-
-/**
- * @brief Updates injection position of cathode particles
- * 
- */
-void cathode::update_inj_pos() {
-    float motion = vel * dt / dx.x;
-
-    const auto d_inj_pos = this -> d_inj_pos;
-
-    // Update d_inj_pos
-    switch (wall)
-    {
-    case edge::lower:
-        queue->submit([&](sycl::handler &h) {
-            h.parallel_for( sycl::range{ppc.x}, [=](sycl::id<1> idx) {
-                float x = d_inj_pos[idx];
-                if ( x >= 0.5f ) x -= 1.0f;
-                d_inj_pos[idx] = x + motion;
-            });
-        });
-        break;
-    
-    case edge::upper:
-        queue->submit([&](sycl::handler &h) {
-            h.parallel_for( sycl::range{ppc.x}, [=](sycl::id<1> idx) {
-                float x = d_inj_pos[idx];
-                if ( x < -0.5f ) x += 1.0f;
-                d_inj_pos[idx] = x - motion;
-            });
-        });
-        break;
-    }
-
-    queue->wait();
-}
-
-/**
- * @brief Advance cathode species.
- * 
- * Advances existing particles and injects new particles if needed.
- * 
- * @param emf 
- * @param current 
- */
-void cathode::advance( EMF const &emf, Current &current ) 
-{
+void cathode::advance( emf const & emf, current & current ) {
 
     // Advance momenta
-    push( emf.E, emf.B );
+    push( * emf.E, * emf.B );
 
     // Advance positions and deposit current
-    move( current.J );
+    move( * current.J );
 
     // Process physical boundary conditions
     process_bc();
 
-    double t = ( iter - 1 ) * dt;
-    if (( t >= start ) && ( t < end ) ) { 
-
-        // Update injection positions of cathode particles
-        update_inj_pos();
-
-        // Count how many particles are being injected
-        cathode_np_inject( np_inj );
-
-        // Sort particles according to tile, leaving room for new particles to be injected
-        particles -> tile_sort( *tmp, *sort, np_inj );
-
-        // Inject new cathode particles
-        cathode_inject() ;
-
-    } else {
-        // cathode is not active, just sort particles normally
-        particles -> tile_sort( *tmp, *sort );
-    } 
+    // Sort particles according to tile and inject new particles
+    sort_inject( current.J );
 
     // Increase internal iteration number
     iter++;
 }
-
-/**
- * @brief Free stream cathode species.
- * 
- * Free streams existing particles and injects new particles if needed.
- * 
- * @param current 
- */
-void cathode::advance( Current &current ) 
-{
-    // Advance positions and deposit current
-    move( current.J );
-
-    // Process physical boundary conditions
-    process_bc();
-
-    double t = ( iter - 1 ) * dt;
-    if (( t >= start ) && ( t < end ) ) { 
-
-        // Update injection positions of cathode particles
-        update_inj_pos();
-
-        // Count how many particles are being injected
-        cathode_np_inject( np_inj );
-
-        // Sort particles according to tile, leaving room for new particles to be injected
-        particles -> tile_sort( *tmp, *sort, np_inj );
-
-        // Inject new cathode particles
-        cathode_inject() ;
-
-    } else {
-        // Just sort particles over tiles
-        particles -> tile_sort( *tmp, *sort );
-    } 
-
-    // Increase internal iteration number
-    iter++;
-}
-
