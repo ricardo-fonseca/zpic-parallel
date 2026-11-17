@@ -62,10 +62,28 @@ public:
      * 
      * @note Reflecting boundaries must be used together with emf / current
      *       pec or pmc walls (the current fold assumes particle reflection),
-     *       and open boundaries with emf / current `none` boundaries. This is
-     *       not checked here, the simulation class must ensure it.
+     *       and open boundaries with emf / current `none` boundaries or
+     *       emf pec / current pec_absorbing walls.
      */
-    struct bc { enum type { open = 0, comm, periodic, reflecting }; };
+    struct bc {
+        enum type { open = 0, comm, periodic, reflecting };
+
+        /**
+         * @brief Name of boundary condition type
+         * 
+         * @param t                 Boundary condition type
+         * @return std::string      Name of boundary condition type
+         */
+        static std::string name( const type t ) {
+            switch( t ) {
+                case open:       return "open";
+                case comm:       return "comm";
+                case periodic:   return "periodic";
+                case reflecting: return "reflecting";
+            }
+            return "-";
+        }
+    };
     using bc_type = bounds_2d<bc::type>;
 
 protected:

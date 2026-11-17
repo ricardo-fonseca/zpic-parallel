@@ -27,6 +27,22 @@ class emf {
      */
     struct bc { 
         enum type { none = 0, periodic, pec, pmc };
+
+        /**
+         * @brief Name of boundary condition type
+         * 
+         * @param t                 Boundary condition type
+         * @return std::string      Name of boundary condition type
+         */
+        static std::string name( const type t ) {
+            switch( t ) {
+                case none:      return "none";
+                case periodic:  return "periodic";
+                case pec:       return "pec";
+                case pmc:       return "pmc";
+            }
+            return "-";
+        }
     };
     using bc_type = bounds_2d<bc::type>;
 

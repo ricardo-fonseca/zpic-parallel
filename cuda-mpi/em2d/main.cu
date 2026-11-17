@@ -916,11 +916,37 @@ void test_cathode_inj( ) {
     }
 }
 
-void test_cathode_emf( bool const inj_current = true ) {
+/**
+ * @brief Cathode beam in a 1D geometry (uniform along y), compared with the
+ *        exact E_x solution
+ * 
+ * A cold, low density beam is injected from `wall`. With no y dependence
+ * there are no transverse fields, so E_x only evolves through Ampere's law,
+ * dE_x/dt = -J_x, giving (d = distance from the injection wall):
+ * 
+ *      E_x(d,t) = ± n0 max( 0, vel t - d )     (+ lower wall, - upper wall)
+ * 
+ * i.e. a linear ramp from the wall to the beam front. This must hold all the
+ * way to the wall for both open (none) and conducting (pec_absorbing)
+ * cathode walls, as long as the current of the injected particles is
+ * deposited (inj_current = true).
+ * 
+ * @param wall          Injection wall
+ * @param wall_bc       Current boundary at the injection wall, none or
+ *                      pec_absorbing (the emf boundary is set to match)
+ * @param inj_current   Deposit the current of injected particles
+ * @param save          Save E_x, J_x and charge diagnostics
+ * @return float        Maximum E_x error normalized to the E_x value at
+ *                      the wall (same value on all ranks)
+ */
+float test_cathode_emf( edge::pos const wall, current::bc::type const wall_bc,
+    bool const inj_current = true, bool const save = false ) {
 
     if ( mpi::root() ) {
         std::cout << ansi::bold;
-        std::cout << "Running " << __func__ << "( inj_current = " << inj_current << " )...";
+        std::cout << "Running " << __func__ << "( wall = " << edge::name( wall )
+                  << ", bc = " << current::bc::name( wall_bc )
+                  << ", inj_current = " << inj_current << " )...";
         std::cout << ansi::reset << std::endl;
     }
 
@@ -935,11 +961,34 @@ void test_cathode_emf( bool const inj_current = true ) {
 
     zpic::simulation sim( ntiles, nx, box, dt, partition, periodic );
 
+    // Set the boundary conditions at the injection wall
+    {
+        auto ebc = sim.emf.get_bc();
+        auto jbc = sim.current.get_bc();
+
+        auto & ew = ( wall == edge::lower ) ? ebc.x.lower : ebc.x.upper;
+        auto & jw = ( wall == edge::lower ) ? jbc.x.lower : jbc.x.upper;
+
+        switch( wall_bc ) {
+        case current::bc::none:
+            ew = emf::bc::none; break;
+        case current::bc::pec_absorbing:
+            ew = emf::bc::pec; break;
+        default:
+            mpi::fatal( "test_cathode_emf() - invalid cathode wall boundary " + 
+                current::bc::name( wall_bc ) );
+        }
+        jw = wall_bc;
+
+        sim.emf.set_bc( ebc );
+        sim.current.set_bc( jbc );
+    }
+
     // Cold, low density beam: deceleration by its own space charge is ~1%
     // of ufl over the run, so the constant velocity solution holds
     uint2 ppc{ 8, 2 };
     float const ufl = 2.0f;
-    cathode beam( "beam", -1.0f, ppc, edge::lower, ufl );
+    cathode beam( "beam", -1.0f, ppc, wall, ufl );
     beam.n0 = 1.e-4;
     beam.inj_current = inj_current;
 
@@ -951,23 +1000,102 @@ void test_cathode_emf( bool const inj_current = true ) {
         beam.save_charge();
     };
 
-    if ( mpi::root() ) {
-        double const vel = ufl / std::sqrt( 1.0 + ufl * ufl );
-        std::cout << "(*info*) Expected E_x(x,t) = " << beam.n0 << " * ( "
-                  << vel << " t - x ) for x < " << vel << " t, 0 otherwise\n";
-    }
-
-    while( sim.get_t() < 0.8 * box.x ) {
-        if ( sim.get_iter() % 50 == 0 ) diag();
+    // Stop before the beam front reaches the opposite wall
+    double const tmax = 0.8 * box.x;
+    while( sim.get_t() < tmax ) {
+        if ( save && sim.get_iter() % 50 == 0 ) diag();
         sim.advance();
     }
+    if ( save ) diag();
 
-    diag();
+    // Compare E_x with the exact solution
+    double const t     = sim.get_t();
+    double const vel   = ufl / std::sqrt( 1.0 + static_cast<double>( ufl ) * ufl );
+    double const dx    = box.x / ( ntiles.x * nx.x );
+    double const front = vel * t;               // beam front distance from wall
+    double const e0    = beam.n0 * front;       // |E_x| at the wall
+    double const sign  = ( wall == edge::lower ) ? 1.0 : -1.0;
 
-    sim.parallel.barrier();
+    auto & E = * sim.emf.E;
+    uint2 const ldims = E.get_local_dims();
+    int const gx0 = E.get_local_tile_start().x * E.tile_dims.x;
+    size_t const size = static_cast<size_t>( ldims.x ) * ldims.y;
+
+    float * d_ex = gpu::device::malloc<float>( size );
+    float * h_ex = gpu::host::malloc<float>( size );
+    E.gather( fcomp::x, d_ex );
+    gpu::device::memcpy_tohost( h_ex, d_ex, size );
+
+    // [0] - all cells, [1] - cells within 2 dx of the wall
+    float local_err[2] = { 0, 0 };
+    for( unsigned j = 0; j < ldims.y; j++ ) {
+        for( unsigned i = 0; i < ldims.x; i++ ) {
+            // E_x is defined at (i+1/2) dx
+            double const x = ( gx0 + i + 0.5 ) * dx;
+            double const d = ( wall == edge::lower ) ? x : box.x - x;
+
+            // Skip cells near the beam front (discrete front)
+            if ( std::abs( d - front ) < 2 * dx ) continue;
+
+            double const exact = sign * beam.n0 * std::max( 0.0, front - d );
+            float const err = std::abs( h_ex[ i + j * ldims.x ] - exact ) / e0;
+
+            local_err[0] = std::max( local_err[0], err );
+            if ( d < 2 * dx ) local_err[1] = std::max( local_err[1], err );
+        }
+    }
+
+    gpu::host::free( h_ex );
+    gpu::device::free( d_ex );
+
+    float err[2];
+    sim.parallel.allreduce( local_err, err, 2, mpi::max );
+
+    if ( mpi::root() ) {
+        std::cout << "(*info*) t = " << t << ", E_x at wall = " << sign * e0
+                  << ", max. relative error = " << err[0]
+                  << " (near wall: " << err[1] << ")\n";
+    }
+
+    return err[0];
+}
+
+/**
+ * @brief Tests cathode injection from both walls with open (none) and
+ *        conducting (pec_absorbing) boundaries
+ * 
+ * All 4 configurations must reproduce the exact E_x within tolerance. As a
+ * control, a run without the injection current must fail the same check
+ * (error concentrated near the wall).
+ */
+void test_cathode_bc( ) {
+
     if ( mpi::root() ) {
         std::cout << ansi::bold;
-        std::cout << __func__ << "() complete!\n";
+        std::cout << "Running " << __func__ << "()...";
+        std::cout << ansi::reset << std::endl;
+    }
+
+    float const tol = 1.e-2;
+    int nfail = 0;
+
+    for( auto wall : edge::all ) {
+        for( auto bc : { current::bc::none, current::bc::pec_absorbing } ) {
+            if ( test_cathode_emf( wall, bc ) > tol ) nfail++;
+        }
+    }
+
+    // Control: without the injection current E_x is wrong near the wall
+    bool const control_ok = test_cathode_emf( edge::lower, current::bc::none, false ) > tol;
+
+    if ( mpi::root() ) {
+        std::cout << ansi::bold;
+        if ( nfail == 0 && control_ok ) {
+            std::cout << __func__ << "() PASSED\n";
+        } else {
+            std::cout << __func__ << "() FAILED (" << nfail << " of 4 configurations"
+                      << ( control_ok ? "" : ", control run did not fail" ) << ")\n";
+        }
         std::cout << ansi::reset;
     }
 }
@@ -1485,6 +1613,7 @@ int main( int argc, char *argv[] ) {
     // test_lwfa();
 
     test_cathode_inj();
+    test_cathode_bc();
 
     // test_warm( );
     /*

@@ -89,7 +89,6 @@ DEPDIR := .deps
 #   local   -> $(OBJDIR)/emf.o
 #   zdf/    -> $(OBJDIR)/zdf/zdf.o
 OBJS := $(patsubst %,$(OBJDIR)/%.o,$(basename $(SOURCE))) \
-        $(patsubst %,$(OBJDIR)/cyl_part/%.o,$(basename $(SOURCE/cyl_part))) \
         $(patsubst %,$(OBJDIR)/common/%.o,$(basename $(COMMON_SRC))) \
         $(patsubst %,$(OBJDIR)/zdf/%.o,$(basename $(ZDF_SRC)))
 

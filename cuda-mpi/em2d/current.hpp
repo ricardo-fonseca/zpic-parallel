@@ -16,7 +16,8 @@ class current {
      * @brief Boundary condition types
      * 
      * @note Values match emf::bc, and the current boundary conditions must
-     *       match the field boundary conditions.
+     *       match the field boundary conditions; current::bc::pec_absorbing
+     *       has no emf counterpart and is used with emf::bc::pec.
      * 
      * - none:      open boundary, no processing
      * - periodic:  periodic boundary (handled by the grid guard cell updates)
@@ -26,9 +27,33 @@ class current {
      *              set from the image currents of the wall type:
      *              pec - normal J even, tangential J odd, tangential J = 0 on the wall node
      *              pmc - normal J odd, tangential J even, tangential J doubled on the wall node
+     * - pec_absorbing: conducting (pec) wall with absorbing particles (e.g. a
+     *              conducting cathode). The current deposited beyond the wall
+     *              is discarded (no fold), the guard cells / wall node are set
+     *              as for pec. Must be used with open species boundaries.
+     * 
+     * There is no absorbing pmc wall: a pmc wall is a symmetry plane, so
+     * particles leaving the domain are always matched by incoming images.
      */
     struct bc {
-        enum type { none = 0, periodic, pec, pmc };
+        enum type { none = 0, periodic, pec, pmc, pec_absorbing };
+
+        /**
+         * @brief Name of boundary condition type
+         * 
+         * @param t                 Boundary condition type
+         * @return std::string      Name of boundary condition type
+         */
+        static std::string name( const type t ) {
+            switch( t ) {
+                case none:          return "none";
+                case periodic:      return "periodic";
+                case pec:           return "pec";
+                case pmc:           return "pmc";
+                case pec_absorbing: return "pec_absorbing";
+            }
+            return "-";
+        }
     };
     using bc_type = bounds_2d<bc::type>;
 
@@ -60,13 +85,13 @@ class current {
     std::unique_ptr<filter::digital> filter;
 
     /**
-     * @brief Check if boundary condition is PEC / PMC
+     * @brief Check if boundary condition is a conducting wall
      * 
-     * @param t     Boundary condition tyoe
-     * @return      True if t is PEC or PMC, false otherwise
+     * @param t     Boundary condition type
+     * @return      True if t is PEC, PMC or PEC (absorbing), false otherwise
      */
     static bool is_conducting( current::bc::type t ) noexcept {
-        return t == current::bc::pec || t == current::bc::pmc;
+        return t == current::bc::pec || t == current::bc::pmc || t == current::bc::pec_absorbing;
     }
 
 

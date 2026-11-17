@@ -39,12 +39,14 @@ class simulation {
 
     /**
     * @brief CFL time limit from cell size
+    *
+    * @note This uses the stability limit from field solver
     * 
     * @param dx        Cell size
     * @return float    CFL time limit
     */
     static float courant( const float2 dx ) {
-        return std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+        return emf::courant(dx);
     }
 
     /**
@@ -189,6 +191,90 @@ class simulation {
         for( id = 0; id < species.size(); id++ )
             if ( (species[id])->name == name ) break;
         return ( id < species.size() ) ? species[id] : nullptr;
+    }
+
+    /**
+     * @brief Checks that the species, field and current boundary conditions
+     *        are consistent
+     * 
+     * On every global edge:
+     * | current          | emf      | species    |
+     * |------------------|----------|------------|
+     * | none             | none     | open       |
+     * | periodic         | periodic | periodic   |
+     * | pec              | pec      | reflecting |
+     * | pmc              | pmc      | reflecting |
+     * | pec_absorbing    | pec      | open       |
+     * 
+     * Periodic boundaries are validated against the parallel partition by
+     * each object.
+     * 
+     * @note Calls mpi::fatal() on invalid combinations. This is a cheap host
+     *       side check, that could be called at every iteration so that 
+     *.      boundary conditions may be changed at any time.
+     */
+    void validate_bc() const {
+
+        // Access boundary values by direction / edge
+        auto at = []( auto const & b, coord::cart const dir, edge::pos const pos ) {
+            auto const & bd = ( dir == coord::x ) ? b.x : b.y;
+            return ( pos == edge::lower ) ? bd.lower : bd.upper;
+        };
+
+        auto const emf_bc = emf.get_bc();
+        auto const current_bc = current.get_bc();
+
+        for( auto dir : coord::all ) {
+            for( auto pos : edge::all ) {
+                std::string const loc = coord::name( dir ) + " " + edge::name( pos );
+
+                // Get current bc
+                auto const j = at( current_bc, dir, pos );
+
+                // Get required emf bc
+                emf::bc::type emf_req;
+                switch( at( current_bc, dir, pos ) ) {
+                case current::bc::none:
+                    emf_req = emf::bc::none; break;
+                case current::bc::pmc:
+                    emf_req = emf::bc::pmc; break;
+                case current::bc::pec_absorbing:
+                case current::bc::pec:
+                    emf_req = emf::bc::pec; break;
+                default:
+                    continue;   // periodic
+                } 
+
+                auto const e = at( emf_bc, dir, pos );
+                if ( e != emf_req ) {
+                    mpi::fatal( "emf (" + emf::bc::name( e ) + ") and current (" + 
+                        current::bc::name( j ) + ") boundary types do not match on the " +
+                        loc + " edge" );
+                }
+
+                // Get required species bc
+                species::bc::type sp_req;
+                switch( at( current_bc, dir, pos ) ) {
+                case current::bc::none:
+                case current::bc::pec_absorbing:
+                    sp_req = species::bc::open; break;
+                case current::bc::pec:
+                case current::bc::pmc:
+                    sp_req = species::bc::reflecting; break;
+                default:
+                    continue;   // periodic
+                }
+
+                for( auto const * sp : species ) {
+                    auto const s = at( sp -> get_bc(), dir, pos );
+                    if ( s != sp_req ) {
+                        mpi::fatal( "species " + sp -> name + ": the " + loc + " edge is " +
+                            species::bc::name( s ) + ", but the current boundary (" +
+                            current::bc::name( j ) + ") requires " + species::bc::name( sp_req ) );
+                    }
+                }
+            }
+        }
     }
 
     /**

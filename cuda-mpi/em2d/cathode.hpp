@@ -15,7 +15,9 @@
  * particles at initialization.
  * 
  * The injection wall must use an open (absorbing) species boundary, particles
- * returning to the cathode are removed. The other boundaries are unrestricted.
+ * returning to the cathode are removed. The emf / current boundary at the
+ * wall may be `none` (open) or emf `pec` / current `pec_absorbing`
+ * (conducting cathode). The other boundaries are unrestricted.
  */
 class cathode : public species {
 
@@ -58,11 +60,22 @@ private:
     void validate_wall_bc( species::bc_type const & test_bc ) const {
         auto const wall_bc = ( wall == edge::lower ) ? test_bc.x.lower : test_bc.x.upper;
         if ( wall_bc != species::bc::open ) {
-            mpi::fatal( std::string( "cathode ") + name + ": the injection wall (x " +
-                ( ( wall == edge::lower ) ? "lower" : "upper" ) +
-                ") must use a species::bc::open boundary" );
+            mpi::fatal( "cathode " + name + ": the injection wall (x " + edge::name( wall ) +
+                ") must use an open boundary, found " + species::bc::name( wall_bc ) );
         }
     }
+
+    /**
+     * @brief Checks that the field / current boundaries at the injection wall
+     *        are compatible with an open (absorbing) species boundary: either
+     *        emf / current none, or emf pec / current pec_absorbing
+     * 
+     * @note Calls mpi::fatal() otherwise
+     * 
+     * @param fld   EM fields (may be nullptr)
+     * @param J     Electric current density
+     */
+    void validate_fld_bc( emf const * const fld, current const & J ) const;
 
 public:
 

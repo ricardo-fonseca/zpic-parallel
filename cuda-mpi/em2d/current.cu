@@ -26,6 +26,17 @@ template<> struct comp< coord::y > {
 };
 
 /**
+* @brief Check if boundary condition is a conducting wall
+* 
+* @param t     Boundary condition type
+* @return      True if t is PEC, PMC or PEC (absorbing), false otherwise
+*/
+__device__
+inline bool is_conducting( current::bc::type t ) {
+    return t == current::bc::pec || t == current::bc::pmc || t == current::bc::pec_absorbing;
+}
+
+/**
  * @brief Lower wall (pec / pmc) boundary condition for one line of cells
  * 
  * The wall sits on node 0. Layout along the line (stride s):
@@ -37,6 +48,8 @@ template<> struct comp< coord::y > {
  * Fold (particle reflection, same for pec and pmc): the current deposited
  * beyond the wall is mirrored into the domain, with the normal component
  * reversed. The deposit on the wall node is its own mirror and is unchanged.
+ * pec_absorbing walls skip the fold: the current deposited beyond the wall
+ * is overwritten by the image values below.
  * 
  * Images (wall type dependent):
  *  pec - opposite sign image charges: normal J even, tangential J odd, so
@@ -46,18 +59,22 @@ template<> struct comp< coord::y > {
  * 
  * @param p     Pointer to the wall node
  * @param s     Stride along the line normal to the wall (1 or ystride)
- * @param type  Wall type (pec or pmc)
+ * @param type  Wall type (pec, pmc or pec_absorbing)
  * @param fold  Fold guard cell current and correct wall node (once per step)
  */
 template< coord::cart dir >
 __device__ void lower_conducting( float3 * const p, int const s, current::bc::type const type, bool const fold ) {
     using C = comp<dir>;
-    const bool pec = ( type == current::bc::pec );
+    // pec_absorbing walls use pec images, but particles are not reflected
+    const bool pec     = ( type != current::bc::pmc );
+    const bool reflect = ( type != current::bc::pec_absorbing );
 
     if ( fold ) {
-        C::n ( p[ 0 ] ) -= C::n ( p[ -s ] );
-        C::t1( p[ s ] ) += C::t1( p[ -s ] );
-        C::t2( p[ s ] ) += C::t2( p[ -s ] );
+        if ( reflect ) {
+            C::n ( p[ 0 ] ) -= C::n ( p[ -s ] );
+            C::t1( p[ s ] ) += C::t1( p[ -s ] );
+            C::t2( p[ s ] ) += C::t2( p[ -s ] );
+        }
 
         if ( ! pec ) {
             C::t1( p[ 0 ] ) *= 2;
@@ -93,19 +110,23 @@ __device__ void lower_conducting( float3 * const p, int const s, current::bc::ty
  * 
  * @param p     Pointer to the wall node
  * @param s     Stride along the line normal to the wall (1 or ystride)
- * @param type  Wall type (pec or pmc)
+ * @param type  Wall type (pec, pmc or pec_absorbing)
  * @param fold  Fold guard cell current and correct wall node (once per step)
  */
 template< coord::cart dir >
 __device__ void upper_conducting( float3 * const p, int const s, current::bc::type const type, bool const fold ) {
     using C = comp<dir>;
-    const bool pec = ( type == current::bc::pec );
+    // pec_absorbing walls use pec images, but particles are not reflected
+    const bool pec     = ( type != current::bc::pmc );
+    const bool reflect = ( type != current::bc::pec_absorbing );
 
     if ( fold ) {
-        C::n ( p[  -s ] ) -= C::n ( p[ 0 ] );
-        C::n ( p[ -2*s] ) -= C::n ( p[ s ] );
-        C::t1( p[  -s ] ) += C::t1( p[ s ] );
-        C::t2( p[  -s ] ) += C::t2( p[ s ] );
+        if ( reflect ) {
+            C::n ( p[  -s ] ) -= C::n ( p[ 0 ] );
+            C::n ( p[ -2*s] ) -= C::n ( p[ s ] );
+            C::t1( p[  -s ] ) += C::t1( p[ s ] );
+            C::t2( p[  -s ] ) += C::t2( p[ s ] );
+        }
 
         if ( ! pec ) {
             C::t1( p[ 0 ] ) *= 2;
@@ -165,7 +186,7 @@ void current_bcx(
     if ( blockIdx.x == 0 ) {
         // Lower boundary
         const auto type = local_bc.x.lower;
-        if ( type != current::bc::pec && type != current::bc::pmc ) return;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
         // Point to ix = 0 on the first (extended) row of the lower x boundary tile
         float3 * const J = & J_grid.tile_buffer( 0, tile_idx_y )[ J_grid.gc.x.lower ];
@@ -178,7 +199,7 @@ void current_bcx(
     } else {
         // Upper boundary
         const auto type = local_bc.x.upper;
-        if ( type != current::bc::pec && type != current::bc::pmc ) return;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
         // Point to ix = nx (first upper guard cell) on the first (extended) row
         // of the upper x boundary tile
@@ -223,7 +244,7 @@ void current_bcy(
     if ( blockIdx.y == 0 ) {
         // Lower boundary
         const auto type = local_bc.y.lower;
-        if ( type != current::bc::pec && type != current::bc::pmc ) return;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
         // Point to iy = 0 on the first (extended) column of the lower y boundary tile
         float3 * const J = & J_grid.tile_buffer( tile_idx_x, 0 )[ J_grid.gc.y.lower * ystride ];
@@ -236,7 +257,7 @@ void current_bcy(
     } else {
         // Upper boundary
         const auto type = local_bc.y.upper;
-        if ( type != current::bc::pec && type != current::bc::pmc ) return;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
         // Point to iy = ny (first upper guard row) on the first (extended)
         // column of the upper y boundary tile

@@ -365,6 +365,39 @@ void cathode_deposit(
 } // namespace kernel
 
 /**
+ * @brief Checks that the field / current boundaries at the injection wall
+ *        are compatible with an open (absorbing) species boundary
+ * 
+ * The injection wall may be either open (emf / current bc::none) or a
+ * conducting cathode (emf::bc::pec / current::bc::pec_absorbing).
+ * 
+ * @note Calls mpi::fatal() otherwise.
+ * 
+ * @param fld   EM fields (may be nullptr)
+ * @param J     Electric current density
+ */
+void cathode::validate_fld_bc( emf const * const fld, current const & J ) const {
+
+    // Check current bc
+    auto const current_bc  = ( wall == edge::lower ) ? J.get_bc().x.lower : J.get_bc().x.upper;
+
+    if ( current_bc != current::bc::none && current_bc != current::bc::pec_absorbing ) {
+        mpi::fatal( "cathode " + name + ": the injection wall (x " + edge::name( wall ) + ")"
+                         " requires a current::bc::none or current::bc::pec_absorbing boundary" );
+    }
+
+    // Check emf bc - must match current bc
+    if ( fld != nullptr ) {
+        auto const emf_bc  = ( wall == edge::lower ) ? fld -> get_bc().x.lower : fld -> get_bc().x.upper;
+        auto const emf_req = ( current_bc == current::bc::none ) ? emf::bc::none : emf::bc::pec;
+        if ( emf_bc != emf_req ) {
+            mpi::fatal( "cathode " + name + ": the injection wall (x " + edge::name( wall ) + ")"
+                        ": emf boundary does not match the current boundary" );
+        }
+    }
+}
+
+/**
  * @brief Total number of stream particles that have crossed the wall
  *        up to time t
  * 
@@ -498,6 +531,9 @@ void cathode::advance() {
  */
 void cathode::advance( current & current ) {
 
+    // Check current boundaries at the injection wall
+    validate_fld_bc( nullptr, current );
+
     // Advance positions and deposit current
     move( * current.J );
 
@@ -519,6 +555,9 @@ void cathode::advance( current & current ) {
  * @param current   Electric current density
  */
 void cathode::advance( emf const & emf, current & current ) {
+
+    // Check field / current boundaries at the injection wall
+    validate_fld_bc( &emf, current );
 
     // Advance momenta
     push( * emf.E, * emf.B );
