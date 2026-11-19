@@ -3,6 +3,7 @@
 #include <mpi.h>
 #include <iostream>
 #include <cstdint>
+#include <complex>
 #include <cstdlib>
 #include <ostream>
 #include <string>

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
+#include <typeinfo>
 #include <iostream>
 
 #include "math.hpp" // for roundup<>()
