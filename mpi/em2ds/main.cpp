@@ -331,12 +331,12 @@ void test_fft_tile( ) {
 
     data.save( "mpi/data.zdf");
 
-    // Output grid
-    auto cdata = grid::fft::complex_grid( data );
-    cdata.name = "transform";
-
     // Create FFT plan
     auto r2c_plan = grid::fft::r2c_plan( data );
+
+    // Output grid
+    auto cdata = r2c_plan.kspace_grid();
+    cdata.name = "transform";
 
     // Transform data
     r2c_plan.transform( cdata, data );
@@ -449,12 +449,12 @@ void test_poisson(){
 
     charge.save( "mpi/charge.zdf");
 
-    // Output grid
-    auto fpotential = grid::fft::complex_grid( charge );
-    
     // Create FFT plan
     auto r2c_plan = grid::fft::r2c_plan( charge );
 
+    // Output grid
+    auto fpotential = r2c_plan.kspace_grid();
+    
     // Transform data
     r2c_plan.transform( fpotential, charge );
 
@@ -853,7 +853,7 @@ int main( int argc, char *argv[] ) {
     // test_halo();
     // test_flat();
 
-    //test_fft_tile();
+    // test_fft_tile();
     // test_poisson();
     //test_laser();
 

@@ -1,8 +1,10 @@
 #include "emf.hpp"
 #include "grid/fft.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <ostream>
+#include <sstream>
 
 /**
 * @brief Construct a new EMF object
@@ -29,6 +31,12 @@ emf::emf( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, do
         mpi::fatal( msg.str() );
     }
 
+    // Only periodic boundaries are currently supported
+    if (( ! parallel.periodic.x ) || ( ! parallel.periodic.y ) ) {
+        mpi::fatal("EMF algorithm only supports periodic boundaries and parallel partitions.");
+    }
+    global_bc = emf::bc_type( emf::bc::periodic );
+
     // Guard cells (1 below, 2 above)
     // These are required for the Yee solver AND for field interpolation
     bounds_2d<unsigned int> gc;
@@ -41,28 +49,26 @@ emf::emf( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, do
     B = new grid::tiled_vec3<float> ( global_ntiles, tile_dims, gc, parallel );
     B -> name = "Magnetic field";
 
-    // Create complex grids for the Fourier transforms
-    fE  = grid::fft::new_complex_grid( *E );
-    fEt = grid::fft::new_complex_grid( *E );
-    fB  = grid::fft::new_complex_grid( *E );
-
     // Create FFT plan
     fft_backward = new grid::fft::c2r_plan( *E );
+
+    // Create complex grids for the Fourier transforms
+    fE  = fft_backward->new_kspace_grid3();
+    fEt = fft_backward->new_kspace_grid3();
+    fB  = fft_backward->new_kspace_grid3();
 
     fE  -> name = "F(E)";
     fEt -> name = "F(Et)";
     fB  -> name = "F(B)";
 
     // Zero fields
+    // Initial fields, if any, are set in k-space (fEt, fB) by the caller
     E -> zero();
     B -> zero();
 
     fE  -> zero();
     fEt -> zero();
     fB  -> zero();
-
-    // Set default boundary conditions to periodic
-    bc = emf::bc_type (emf::bc::periodic);
 
     // Reset iteration number
     iter = 0;
@@ -79,20 +85,22 @@ emf::emf( uint2 const global_ntiles, uint2 const tile_dims, float2 const box, do
  * @param dt 
  */
 void advance_psatd_nocurr( 
-    grid::flat3<std::complex<float>> & fEt, 
-    grid::flat3<std::complex<float>> & fB,
+    grid::flat3<emf::complex_t> & fEt, 
+    grid::flat3<emf::complex_t> & fB,
     const float2 dk, const float dt )
 {
 
-    std::complex<float> * const __restrict__ fEtx = fEt.x();
-    std::complex<float> * const __restrict__ fEty = fEt.y();
-    std::complex<float> * const __restrict__ fEtz = fEt.z();
+    static_assert( grid::fft::kspace_transposed, "Transposed k-space layout expected" );
 
-    std::complex<float> * const __restrict__ fBx  = fB.x();
-    std::complex<float> * const __restrict__ fBy  = fB.y();
-    std::complex<float> * const __restrict__ fBz  = fB.z();
+    emf::complex_t * const __restrict__ fEtx = fEt.x();
+    emf::complex_t * const __restrict__ fEty = fEt.y();
+    emf::complex_t * const __restrict__ fEtz = fEt.z();
 
-    constexpr std::complex<float> I{0,1};
+    emf::complex_t * const __restrict__ fBx  = fB.x();
+    emf::complex_t * const __restrict__ fBy  = fB.y();
+    emf::complex_t * const __restrict__ fBz  = fB.z();
+
+    constexpr emf::complex_t I{0,1};
 
     auto dims = fEt.get_local_dims();
     auto start = fEt.get_local_start();
@@ -103,9 +111,10 @@ void advance_psatd_nocurr(
         const int ix = start.x + idx % dims.x;
         const int iy = start.y + idx / dims.x;
 
-        // Note that ky is along the x direction, and kx is along the y direction
-        const float ky = (( 2 * ix < int(global.x) ) ? ix : ( ix - int(global.x) ) ) * dk.y;
-        const float kx = iy * dk.x;
+        const float2 kvec = grid::fft::k( make_int2(ix,iy), global, dk );
+        
+        const float kx = kvec.x;
+        const float ky = kvec.y;
 
         const float k2 = kx*kx + ky*ky;
         const float k  = sqrtf( k2 );
@@ -114,13 +123,13 @@ void advance_psatd_nocurr(
         const float C   = std::cos( k * dt );
         const float S_k = ( k > 0 ) ? std::sin( k * dt ) / k : dt;
 
-        std::complex<float> Ex = fEtx[idx];
-        std::complex<float> Ey = fEty[idx];
-        std::complex<float> Ez = fEtz[idx];
+        emf::complex_t Ex = fEtx[idx];
+        emf::complex_t Ey = fEty[idx];
+        emf::complex_t Ez = fEtz[idx];
 
-        std::complex<float> Bx = fBx[idx];
-        std::complex<float> By = fBy[idx];
-        std::complex<float> Bz = fBz[idx];
+        emf::complex_t Bx = fBx[idx];
+        emf::complex_t By = fBy[idx];
+        emf::complex_t Bz = fBz[idx];
 
         Ex = C * Ex + S_k * ( I * (  ky *  fBz[idx]                  ) );
         Ey = C * Ey + S_k * ( I * ( -kx *  fBz[idx]                  ) );
@@ -152,25 +161,25 @@ void advance_psatd_nocurr(
  * @param dt    Time step
  */
 void advance_psatd( 
-    grid::flat3<std::complex<float>> & fEt, 
-    grid::flat3<std::complex<float>> & fB,
-    grid::flat3<std::complex<float>> & fJ,
+    grid::flat3<emf::complex_t> & fEt, 
+    grid::flat3<emf::complex_t> & fB,
+    grid::flat3<emf::complex_t> & fJ,
     float2 const dk, float const dt )
 {
 
-    std::complex<float> * const __restrict__ fEtx = fEt.x();
-    std::complex<float> * const __restrict__ fEty = fEt.y();
-    std::complex<float> * const __restrict__ fEtz = fEt.z();
+    emf::complex_t * const __restrict__ fEtx = fEt.x();
+    emf::complex_t * const __restrict__ fEty = fEt.y();
+    emf::complex_t * const __restrict__ fEtz = fEt.z();
 
-    std::complex<float> * const __restrict__ fBx  = fB.x();
-    std::complex<float> * const __restrict__ fBy  = fB.y();
-    std::complex<float> * const __restrict__ fBz  = fB.z();
+    emf::complex_t * const __restrict__ fBx  = fB.x();
+    emf::complex_t * const __restrict__ fBy  = fB.y();
+    emf::complex_t * const __restrict__ fBz  = fB.z();
 
-    std::complex<float> * const __restrict__ fJx = fJ.x();
-    std::complex<float> * const __restrict__ fJy = fJ.y();
-    std::complex<float> * const __restrict__ fJz = fJ.z();
+    emf::complex_t * const __restrict__ fJx = fJ.x();
+    emf::complex_t * const __restrict__ fJy = fJ.y();
+    emf::complex_t * const __restrict__ fJz = fJ.z();
 
-    constexpr std::complex<float> I{0,1};
+    constexpr emf::complex_t I{0,1};
 
     auto dims = fEt.get_local_dims();
     auto start = fEt.get_local_start();
@@ -181,31 +190,32 @@ void advance_psatd(
         const int ix = start.x + idx % dims.x;
         const int iy = start.y + idx / dims.x;
 
-        // Note that ky is along the x direction, and kx is along the y direction
-        const float ky = (( 2 * ix < int(global.x) ) ? ix : ( ix - int(global.x) ) ) * dk.y;
-        const float kx = iy * dk.x;
+        const float2 kvec = grid::fft::k( make_int2(ix,iy), global, dk );
+        
+        const float kx = kvec.x;
+        const float ky = kvec.y;
 
         const float k2 = kx*kx + ky*ky;
         const float k  = sqrt( k2 );
 
         // Compute transverse current
-        const std::complex<float> kdJ  = (kx * fJx[idx] + ky * fJy[idx]);
-        const std::complex<float> fJtx = (k2 > 0) ? fJx[idx] - kx * kdJ / k2 : 0;
-        const std::complex<float> fJty = (k2 > 0) ? fJy[idx] - ky * kdJ / k2 : 0; 
-        const std::complex<float> fJtz = fJz[idx];
+        const emf::complex_t kdJ  = (kx * fJx[idx] + ky * fJy[idx]);
+        const emf::complex_t fJtx = (k2 > 0) ? fJx[idx] - kx * kdJ / k2 : 0;
+        const emf::complex_t fJty = (k2 > 0) ? fJy[idx] - ky * kdJ / k2 : 0; 
+        const emf::complex_t fJtz = fJz[idx];
 
         // PSATD Field advance equations
         const float C   = cos( k * dt );
         const float S_k = ( k > 0 ) ? sin( k * dt ) / k : dt;
-        const std::complex<float> I1mC_k2 = ( k2 > 0 )? I * (1.0f - C) / k2 : 0;
+        const emf::complex_t I1mC_k2 = ( k2 > 0 )? I * (1.0f - C) / k2 : 0;
 
-        std::complex<float> Ex = fEtx[idx];
-        std::complex<float> Ey = fEty[idx];
-        std::complex<float> Ez = fEtz[idx];
+        emf::complex_t Ex = fEtx[idx];
+        emf::complex_t Ey = fEty[idx];
+        emf::complex_t Ez = fEtz[idx];
 
-        std::complex<float> Bx = fBx[idx];
-        std::complex<float> By = fBy[idx];
-        std::complex<float> Bz = fBz[idx];
+        emf::complex_t Bx = fBx[idx];
+        emf::complex_t By = fBy[idx];
+        emf::complex_t Bz = fBz[idx];
 
         Ex = C * Ex + S_k * ( I * (  ky *  fBz[idx]                  ) - fJtx );
         Ey = C * Ey + S_k * ( I * ( -kx *  fBz[idx]                  ) - fJty );
@@ -235,23 +245,23 @@ void advance_psatd(
  * @param dk    k-space cell size
  */
 void update_fE( 
-    grid::flat3<std::complex<float>> & fE, 
-    grid::flat3<std::complex<float>> & fEt, 
-    grid::flat<std::complex<float>>  & frho_src,
+    grid::flat3<emf::complex_t> & fE, 
+    grid::flat3<emf::complex_t> & fEt, 
+    grid::flat<emf::complex_t>  & frho_src,
     float2 const dk )
 {
 
-    std::complex<float> * const __restrict__ fEx = fE.x();
-    std::complex<float> * const __restrict__ fEy = fE.y();
-    std::complex<float> * const __restrict__ fEz = fE.z();
+    emf::complex_t * const __restrict__ fEx = fE.x();
+    emf::complex_t * const __restrict__ fEy = fE.y();
+    emf::complex_t * const __restrict__ fEz = fE.z();
 
-    std::complex<float> const * const __restrict__ fEtx = fEt.x();
-    std::complex<float> const * const __restrict__ fEty = fEt.y();
-    std::complex<float> const * const __restrict__ fEtz = fEt.z();
+    emf::complex_t const * const __restrict__ fEtx = fEt.x();
+    emf::complex_t const * const __restrict__ fEty = fEt.y();
+    emf::complex_t const * const __restrict__ fEtz = fEt.z();
 
-    std::complex<float> const * const __restrict__ frho = frho_src.data();
+    emf::complex_t const * const __restrict__ frho = frho_src.data();
 
-    constexpr std::complex<float> I{0,1};
+    constexpr emf::complex_t I{0,1};
 
     auto dims = fEt.get_local_dims();
     auto start = fEt.get_local_start();
@@ -262,9 +272,10 @@ void update_fE(
         const int ix = start.x + idx % dims.x;
         const int iy = start.y + idx / dims.x;
 
-        // Note that ky is along the x direction, and kx is along the y direction
-        const float ky = (( 2 * ix < int(global.x) ) ? ix : ( ix - int(global.x) ) ) * dk.y;
-        const float kx = iy * dk.x;
+        const float2 kvec = grid::fft::k( make_int2(ix,iy), global, dk );
+        
+        const float kx = kvec.x;
+        const float ky = kvec.y;
 
         const float k2 = kx*kx + ky*ky;
         const float β = ( k2 > 0 ) ? 1.f / k2 : 0;
@@ -399,7 +410,7 @@ void emf::save( const quantity quant, fcomp::cart const fc ) const {
 
     if ( f != nullptr ) {
         // Real field
-        axis[0] = (zdf::grid_axis) {
+        axis[0] = zdf::grid_axis {
             .name = (char *) "x",
             .min = 0.0,
             .max = box.x,
@@ -407,7 +418,7 @@ void emf::save( const quantity quant, fcomp::cart const fc ) const {
             .units = (char *) "c/\\omega_n"
         };
 
-        axis[1] = (zdf::grid_axis) {
+        axis[1] = zdf::grid_axis {
             .name = (char *) "y",
             .min = 0.0,
             .max = box.y,
@@ -421,25 +432,31 @@ void emf::save( const quantity quant, fcomp::cart const fc ) const {
 
     } else {
         // Complex (FFT) field
-        float2 dk = grid::fft::dk( box );
+        // kx: 0 ... nx/2 (r2c half spectrum)
+        // ky: kspace_save() rotates by ceil(ny/2) rows, so it runs from
+        //     -floor(ny/2) to floor((ny-1)/2) modes
+        const float2 dk = grid::fft::dk( box );
+        const int nky = cf -> get_global_dims().y;
 
-        axis[0] = (zdf::grid_axis) {
-            .name = (char *) "ky",
-            .min =  - dk.y * ( cf -> get_global_dims().x / 2 ),
-            .max =    dk.y * ( cf -> get_global_dims().x / 2 - 1 ),
-            .label = (char *) "k_y"
-        };
-
-        axis[1] = (zdf::grid_axis) {
+        axis[0] = zdf::grid_axis {
             .name = (char *) "kx",
             .min = 0.0,
-            .max = (cf -> get_global_dims().y - 1) * dk.x,
-            .label = (char *) "k_x"
+            .max = (cf -> get_global_dims().x - 1) * dk.x,
+            .label = (char *) "k_x",
+            .units = (char *) "\\omega_n/c"
+        };
+
+        axis[1] = zdf::grid_axis {
+            .name = (char *) "ky",
+            .min = - dk.y * ( nky / 2 ),
+            .max =   dk.y * ( (nky - 1) / 2 ),
+            .label = (char *) "k_y",
+            .units = (char *) "\\omega_n/c"
         };
 
         info.axis = axis;
 
-        cf -> save( fc, info, iteration, "EMF" );
+        grid::fft::kspace_save( *cf, fc, info, iteration, "EMF" );
     }
 }
 

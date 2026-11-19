@@ -1154,49 +1154,6 @@ void push_kernel (
 
 #endif
 
-/**
- * @brief Construct a new Species object
- * 
- * @param name  Name for the species object (used for diagnostics)
- * @param m_q   Mass over charge ratio
- * @param ppc   Number of particles per cell
- */
-species::species( std::string const name, float const m_q, uint2 const ppc ):
-    ppc(ppc), name(name), m_q(m_q)
-{
-
-    // Validate parameters
-    if ( m_q == 0 ) {
-        mpi::fatal( "Invalid m_q value (0.0) must be not 0" );
-    }
-
-    if ( ppc.x < 1 || ppc.y < 1 ) {
-        mpi::fatal( "Invalid ppc value (" + to_string(ppc) + 
-            "), must be >= 1 in all directions" );
-    }
-
-    // Set default parameters
-    density   = new density::uniform( 1.0 );
-    udist     = new udist::none();
-    bc        = species::bc_type (species::bc::periodic);
-    push_type = species::pusher::boris;
-
-    // Nullify pointers to data structures
-    particles = nullptr;
-    tmp = nullptr;
-    sort = nullptr;
-    np_inj = nullptr;
-
-    // Invalidate parameters that will be set on initialize
-    id = 0;
-    q = 0;
-    dx = {0, 0};
-    box = { 0, 0 };
-    iter = -1;
-    d_energy = -1;
-    d_nmove = -1;
-}
-
 
 /**
  * @brief Initialize data structures and inject initial particle distribution
@@ -1234,43 +1191,30 @@ void species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     uint2 local_ntiles = parallel.grid_size( global_ntiles );
 
     /// @brief Local parallel node grid size
-    auto  local_dims = tile_dims * local_ntiles;
+    uint2  local_dims = tile_dims * local_ntiles;
 
     // Reference number maximum number of particles
     unsigned int max_part = 1.2 * local_dims.x * local_dims.y * ppc.x * ppc.y;
 
-    // Create particle data structure
-    particles = new part::particles( global_ntiles, tile_dims, max_part, parallel );
+    // Validate boundary conditions against the parallel partition
+    validate_bc( global_bc, parallel );
 
-    // Disable periodic boundaries if parallel partition does not support it
-    if ( ! parallel.periodic.x ) {
-        if ( bc.x.lower == species::bc::periodic ) {
-            bc.x.lower = bc.x.upper = species::bc::open;
-        }
-    };
+    // Compute local_bc
+    // (part, tmp and sort are still null here, they get the periodic flags on construction)
+    update_bc( parallel );
 
-    if ( ! parallel.periodic.y ) {
-        if ( bc.y.lower == species::bc::periodic ) {
-            bc.y.lower = bc.y.upper = species::bc::open;
-        }
-    };
-
-    // Set periodic boundaries
-    int2 periodic = {
-        ( bc.x.lower == species::bc::periodic ),
-        ( bc.y.lower == species::bc::periodic )
-    };
-    particles -> set_periodic( periodic );
-
-    tmp = new part::particles( global_ntiles, tile_dims, max_part, parallel );
-    sort = new part::particle_sort( local_ntiles, max_part, parallel );
+    // Create particle data structures 
+    int2 const periodic = global_periodic();
+    particles = new part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
+    tmp = new part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
+    sort = new part::particle_sort( local_ntiles, max_part, parallel, periodic );
     np_inj = memory::malloc<int>( local_ntiles.x * local_ntiles.y );
 
     // Initialize energy diagnostic
-    d_energy = 0;
+    energy = 0;
 
     // Initialize particle move counter
-    d_nmove = 0;
+    nmove = 0;
 
     // Reset iteration numbers
     iter = 0;
@@ -1281,16 +1225,21 @@ void species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     np_inject( particles -> local_range(), np_inj );
 
     // Do an exclusive scan to get the required offsets
-    uint32_t off = 0;
+    uint32_t num_part = 0;
+    auto tile_offset = particles -> get_tile_offset();
     for( unsigned i = 0; i < local_ntiles.x * local_ntiles.y; i ++ ) {
-        particles -> tile_offset[i] = off;
-        off += np_inj[i];
+        tile_offset[i] = num_part;
+        num_part += np_inj[i];
     }
 
-    if ( off > max_part ) {
+    // In case the reference maximum number of particles was too small, grow
+    // the buffers. Note: this is just a safeguard, it should never happen
+    if ( static_cast<unsigned int>(num_part) > max_part ) {
         mpi::cout << "(*warning*) Particle buffer too small for initial injection,"
-                     " growing buffer";
-        particles -> grow_buffer(off);
+                     " growing buffer\n";
+        particles -> grow_buffer(num_part);
+        tmp -> grow_buffer(num_part );
+        sort -> check_buffer(num_part);
     }
 
     // Inject the particles
@@ -1298,62 +1247,6 @@ void species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
 
     // Set inital velocity distribution
     udist -> set( *particles, id );
-}
-
-/**
- * @brief Destroy the Species object
- * 
- */
-species::~species() {
-    memory::free( np_inj );
-    delete( tmp );
-    delete( sort );
-    delete( particles );
-    delete( density );
-    delete( udist );
-};
-
-
-/**
- * @brief Inject particles in the complete simulation box
- * 
- */
-void species::inject( ) {
-
-    /// @brief position of lower corner of global grid in simulation units
-    float2 global_ref{0,0};
-
-    density -> inject( *particles, ppc, dx, global_ref, particles -> local_range() );
-}
-
-/**
- * @brief Inject particles in a specific cell range
- * 
- */
-void species::inject( bounds_2d<unsigned int> range ) {
-
-    /// @brief position of lower corner of global grid in simulation units
-    float2 global_ref{0,0};
-
-    density -> inject( *particles, ppc, dx, global_ref, range );
-}
-
-/**
- * @brief Gets the number of particles that would be injected in a specific cell range
- * 
- * Although the routine only considers injection in a specific range, the
- * number of particles to be injected is calculated on all tiles (returning
- * zero on those, as expected)
- * 
- * @param range 
- * @param np        (device pointer) Number of particles to inject in each tile
- */
-void species::np_inject( bounds_2d<unsigned int> range, int * np ) {
-
-    /// @brief position of lower corner of global grid in simulation units
-    float2 global_ref{0,0};
-
-    density -> np_inject( *particles, ppc, dx, global_ref, range, np );
 }
 
 /**
@@ -1481,102 +1374,23 @@ void species_bcy(
 void species::process_bc() {
     
     // x boundaries
-    if ( bc.x.lower > species::bc::periodic || bc.x.upper > species::bc::periodic ) {
-        #pragma omp parallel for collapse(2)
-        for( unsigned ty = 0; ty < particles -> local_ntiles.y; ty ++ ) {
+    if ( local_bc.x.lower > species::bc::periodic || local_bc.x.upper > species::bc::periodic ) {
+        #pragma omp parallel for collapse(2) schedule(dynamic)
+        for( unsigned ty = 0; ty < particles -> get_local_ntiles().y; ty ++ ) {
             for( unsigned bnd_x : { 0, 1 } ) 
-                species_bcx ( bnd_x, ty, *particles, bc );
+                species_bcx ( bnd_x, ty, particles -> view(), local_bc );
         }
     }
 
     // y boundaries
-    if ( bc.y.lower > species::bc::periodic || bc.y.upper > species::bc::periodic ) {
-       #pragma omp parallel for collapse(2)
+    if ( local_bc.y.lower > species::bc::periodic || local_bc.y.upper > species::bc::periodic ) {
+       #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned bnd_y : { 0, 1 } ) {
-            for( unsigned tx = 0; tx < particles -> local_ntiles.x; tx ++ )
-                species_bcy ( bnd_y, tx, *particles, bc );
+            for( unsigned tx = 0; tx < particles -> get_local_ntiles().x; tx ++ )
+                species_bcy ( bnd_y, tx, particles -> view(), local_bc );
         }
     }
 }
-
-/**
- * @brief Free stream particles 1 iteration
- * 
- * @note No acceleration or current deposition is performed. Used for debug purposes.
- * 
- */
-void species::advance( ) {
-
-    // Advance positions
-    move( );
-
-    // Process physical boundary conditions
-    process_bc();
-    
-    // Sort particles according to tile
-    particles -> tile_sort( *tmp, *sort );
-
-    // Increase internal iteration number
-    iter++;
-}
-
-/**
- * @brief Free-stream particles 1 iteration
- * 
- * This routine will:
- * 1. Advance positions and deposit current
- * 2. Process boundary conditions
- * 3. Sort particles according to tiles
- * 
- * @param emf       EM fields
- * @param current   Electric durrent density
- */
-void species::advance( current &current, charge &charge ) {
-
-    // Advance positions and deposit current
-    move( current.J, charge.rho );
-
-    // Process physical boundary conditions
-    process_bc();
-
-    // Increase internal iteration number
-    iter++;
-    
-    // Sort particles according to tile
-    particles -> tile_sort( *tmp, *sort );
-
-}
-
-/**
- * @brief Advance particles 1 iteration
- * 
- * This routine will:
- * 1. Advance momenta
- * 2. Advance positions and deposit current
- * 3. Process boundary conditions
- * 4. Sort particles according to tiles
- * 
- * @param emf       EM fields
- * @param current   Electric durrent density
- */
-void species::advance( emf const &emf, current &current, charge & charge ) {
-
-    // Advance momenta
-    push( emf.E, emf.B );
-
-    // Advance positions and deposit current/charge
-    move( current.J, charge.rho );
-
-    // Process physical boundary conditions
-    process_bc();
-
-    // Increase internal iteration number
-    iter++;
-    
-    // Sort particles according to tile
-    particles -> tile_sort( *tmp, *sort );
-}
-
 
 /**
  * @brief Moves particles and deposit current
@@ -1585,7 +1399,7 @@ void species::advance( emf const &emf, current &current, charge & charge ) {
  * 
  * @param current   current grid
  */
-void species::move( grid::tiled_vec3<float> * J, grid::tiled<float> * rho )
+void species::move( grid::tiled_vec3<float> & current, grid::tiled<float> & charge )
 {
 
     const float2 dt_dx = make_float2(
@@ -1593,22 +1407,24 @@ void species::move( grid::tiled_vec3<float> * J, grid::tiled<float> * rho )
         dt / dx.y
     );
 
-    uint64_t nmove = d_nmove;
+    uint64_t _nmove = 0;
 
-    #pragma omp parallel for schedule(dynamic) reduction(+:nmove)
-    for( unsigned tid = 0; tid < particles -> local_ntiles.y * particles -> local_ntiles.x; tid ++ ) {
+    auto data = particles -> view();
+
+    #pragma omp parallel for schedule(dynamic) reduction(+:_nmove)
+    for( unsigned tid = 0; tid < data.local_ntiles.y * data.local_ntiles.x; tid ++ ) {
         
-        const auto tile_idx = make_uint2( tid % particles -> local_ntiles.x, tid / particles -> local_ntiles.x );
+        const auto tile_idx = make_uint2( tid % data.local_ntiles.x, tid / data.local_ntiles.x );
         move_deposit_kernel(
-            tile_idx, *particles,
-            J -> view(), rho -> view(),
+            tile_idx, data,
+            current.view(), charge.view(),
             dt_dx, q
         );
 
-        nmove += particles -> tile_np[tid];
+        _nmove += data.tile_np[tid];
     }
 
-    d_nmove = nmove;
+    nmove += _nmove;
 }
 
 /**
@@ -1693,18 +1509,20 @@ void species::move( )
         dt / dx.y
     );
 
-    uint64_t nmove = d_nmove;
+    uint64_t _nmove = 0;
+
+    auto data = particles -> view();
 
     #pragma omp parallel for schedule(dynamic) reduction(+:nmove)
-    for( unsigned tid = 0; tid < particles -> local_ntiles.y * particles -> local_ntiles.x; tid ++ ) {
+    for( unsigned tid = 0; tid < data.local_ntiles.y * data.local_ntiles.x; tid ++ ) {
         
-        const auto tile_idx = make_uint2( tid % particles -> local_ntiles.x, tid / particles -> local_ntiles.x );
-        move_kernel ( tile_idx, *particles, dt_dx );
+        const auto tile_idx = make_uint2( tid % data.local_ntiles.x, tid / data.local_ntiles.x );
+        move_kernel ( tile_idx, data, dt_dx );
 
-        nmove += particles -> tile_np[tid];
+        _nmove += data.tile_np[tid];
     }
 
-    d_nmove = nmove;
+    nmove = _nmove;
 }
 
 /**
@@ -1713,23 +1531,25 @@ void species::move( )
  * @param E     Electric field
  * @param B     Magnetic field
  */
-void species::push( grid::tiled_vec3<float> * const E, grid::tiled_vec3<float> * const B )
+void species::push( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B )
 {
     const float alpha = 0.5 * dt / m_q;
     
-    double energy = 0;
+    double _energy = 0;
+
+    auto data = particles -> view();
 
     switch( push_type ) {
     case( species::pusher::euler ):
         #pragma omp parallel for schedule(dynamic) \
                 reduction(+:energy) \
                 collapse(2)
-        for( unsigned ty = 0; ty < particles ->local_ntiles.y; ty++ ) {
-            for( unsigned tx = 0; tx < particles -> local_ntiles.x; tx++ ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
                 push_kernel <species::pusher::euler> (
-                    make_uint2(tx,ty), *particles,
-                    E -> view(), B -> view(), alpha,
-                    &energy
+                    make_uint2(tx,ty), data,
+                    E.view(), B.view(), alpha,
+                    &_energy
                 );
             }
         }
@@ -1739,19 +1559,19 @@ void species::push( grid::tiled_vec3<float> * const E, grid::tiled_vec3<float> *
         #pragma omp parallel for schedule(dynamic) \
                 reduction(+:energy) \
                 collapse(2)
-        for( unsigned ty = 0; ty < particles ->local_ntiles.y; ty++ ) {
-            for( unsigned tx = 0; tx < particles -> local_ntiles.x; tx++ ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
                 push_kernel <species::pusher::boris> (
-                    make_uint2(tx,ty), *particles,
-                    E -> view(), B -> view(), alpha,
-                    &energy
+                    make_uint2(tx,ty), data,
+                    E.view(), B.view(), alpha,
+                    &_energy
                 );
             }
         }
         break;
     }
 
-    d_energy = energy;
+    energy = _energy;
 }
 
 /**
@@ -1821,16 +1641,102 @@ void dep_charge_kernel(
  */
 void species::deposit_charge( grid::tiled<float> &charge ) const {
 
+    auto data = particles -> view();
+
     #pragma omp parallel for collapse(2) schedule(dynamic)
-    for( unsigned ty = 0; ty < particles -> local_ntiles.y; ++ty ) {
-        for( unsigned tx = 0; tx < particles -> local_ntiles.x; ++tx ) {
+    for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+        for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
             dep_charge_kernel ( 
-                make_uint2( tx, ty ), *particles, q, 
+                make_uint2( tx, ty ), data, q, 
                 charge.view() );
         }
     }
 }
 
+/**
+ * @brief Gather particle data, scaling values
+ * 
+ * @warning This expects the particle buffer to be compact, it will fail if 
+ *          called with a non-compact buffer.
+ *
+ * @note Data (val) will be returned as `scale.x * val + scale.y`
+ * 
+ * @tparam quant    Quantity to gather
+ * @param part      Particle data
+ * @param d_data    Scaled output data
+ * @param scale     Scale factor for data
+ */
+template < part::quantity quant >
+void gather_quant( 
+    part::particles_view src,
+    float * const __restrict__ d_data,
+    const float2 scale )
+{
+    const int2 ntiles = make_int2( src.local_ntiles.x, src.local_ntiles.y );
+
+    #pragma omp parallel for schedule(dynamic)
+    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+
+        auto tx = tid % ntiles.x;
+        auto ty = tid / ntiles.x;
+
+        // Global spatial offsets of local tile
+        const int offx = (src.local_tile_start.x + tx) * src.tile_dims.x;
+        const int offy = (src.local_tile_start.y + ty) * src.tile_dims.y;
+
+        const auto offset = src.tile_offset[tid];
+        const auto np     = src.tile_np[tid];
+
+        int2   const * __restrict__ const ix = &src.ix[ offset ];
+        float2 const * __restrict__ const x  = &src.x[ offset ];
+        float3 const * __restrict__ const u  = &src.u[ offset ];
+        
+        for( int idx = 0; idx < np; idx ++ ) {
+            float val;
+            if constexpr ( quant == part::quantity::x )  val = ( offx + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::quantity::y )  val = ( offy + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::quantity::ux ) val = u[idx].x;
+            if constexpr ( quant == part::quantity::uy ) val = u[idx].y;
+            if constexpr ( quant == part::quantity::uz ) val = u[idx].z;
+            d_data[ offset + idx ] = ops::fma( scale.x, val, scale.y );
+        }
+    }
+};
+
+/**
+ * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+ * 
+ * @warning This expects the particle buffer to be compact, it will fail if 
+ *          called with a non-compact buffer.
+ *
+ * @param quant     Quantity to gather
+ * @param d_data    Output data buffer, assumed to have size >= np
+ * @param scale     Scale factor for data
+ */
+void species::gather( part::quantity quant, float * const __restrict__ data, 
+    const float2 scale ) const
+{
+    auto view = particles -> view();
+
+    switch (quant) {
+    case part::quantity::x : 
+        gather_quant<part::quantity::x> ( view, data, scale );
+        break; 
+    case part::quantity::y: 
+        gather_quant<part::quantity::y> ( view, data, scale );
+        break; 
+    case part::quantity::ux: 
+        gather_quant<part::quantity::ux>( view, data, scale );
+        break; 
+    case part::quantity::uy: 
+        gather_quant<part::quantity::uy>( view, data, scale );
+        break; 
+    case part::quantity::uz: 
+        gather_quant<part::quantity::uz>( view, data, scale );
+        break;
+    }
+
+}
 
 /**
  * @brief Save particle data to file
@@ -1940,16 +1846,16 @@ void species::save() const {
             
             // x and y quantities are scaled before saving to file
             scale = make_float2( dx.x, 0 );
-            particles -> gather( part::quantity::x, scale, data );
+            gather( part::quantity::x, data, scale );
             zdf::write_cdset( part_file, dsets[0], chunk, file_off );
 
             scale = make_float2( dx.y, 0 );
-            particles -> gather( part::quantity::y, scale, data );
+            gather( part::quantity::y, data, scale );
             zdf::write_cdset( part_file, dsets[1], chunk, file_off );
 
             // Remaining quantities are saved "as is"
             for( uint32_t i = 2; i < info.nquants; i++ ) {
-                particles -> gather( quants[i], data );
+                gather( quants[i], data );
                 zdf::write_cdset( part_file, dsets[i], chunk, file_off );
             }
 
@@ -1995,8 +1901,8 @@ void species::save_charge() const {
     gc.x = {0,1};
     gc.y = {0,1};
 
-    // Deposit charge on device
-    grid::tiled<float> charge( particles -> global_ntiles, particles -> tile_dims, gc, particles -> parallel );
+    // Deposit charge
+    grid::tiled<float> charge( particles -> get_global_ntiles(), particles -> get_tile_dims(), gc, particles -> parallel );
 
     charge.zero();
 
@@ -2202,6 +2108,8 @@ void species::dep_phasespace( float * const d_data, const phasespace::quantity q
     float norm = fabs(q) * ( dx.x * dx.y ) *
                  size / (range.y - range.x) ;
 
+    auto local_ntiles = particles ->get_local_ntiles();
+
     // Launch the appropriate phasespace deposition kernel
     phasespace::dispatch(quant, [&] ( auto quant_c ) {
         constexpr auto quant = decltype(quant_c)::value;
@@ -2210,12 +2118,12 @@ void species::dep_phasespace( float * const d_data, const phasespace::quantity q
         if constexpr ( quant == phasespace::quantity::x ) { range.x /= dx.x; range.y /= dx.x; }
         if constexpr ( quant == phasespace::quantity::y ) { range.x /= dx.y; range.y /= dx.y; }
         
-        for( unsigned ty = 0; ty < particles -> local_ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> local_ntiles.x; tx ++ ) {
+        for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
+            for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
                 phasespace::dep_pha1<quant> (
                     make_uint2( tx, ty ), 
                     d_data, range, size, norm, 
-                    *particles
+                    particles -> view()
                 );
             }
         }
@@ -2246,6 +2154,8 @@ void species::dep_phasespace(
                           ( size0 / (range0.y - range0.x) ) *
                           ( size1 / (range1.y - range1.x) );
 
+    auto local_ntiles = particles ->get_local_ntiles();
+
     // Launch the appropriate phasespace deposition kernel
     phasespace::dispatch(quant0, [&] ( auto qc0 ) {
     phasespace::dispatch(quant1, [&] ( auto qc1 ) {
@@ -2262,12 +2172,12 @@ void species::dep_phasespace(
             if constexpr ( quant1 == phasespace::quantity::x ) { range1.x /= dx.x; range1.y /= dx.x; }
             if constexpr ( quant1 == phasespace::quantity::y ) { range1.x /= dx.y; range1.y /= dx.y; }
             
-            for( unsigned ty = 0; ty < particles -> local_ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> local_ntiles.x; tx ++ ) {
+            for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
+                for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
                     phasespace::dep_pha2<quant0,quant1> (
                         make_uint2( tx, ty ), 
                         d_data, range0, size0, range1, size1, norm, 
-                        *particles
+                        particles -> view()
                     );
                 }
             }

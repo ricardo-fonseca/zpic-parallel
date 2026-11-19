@@ -7,53 +7,47 @@
 
 #include <iostream>
 #include <cassert>
-
-namespace laser {
+#include <cmath>
 
 /**
- * @brief Gets longitudinal laser envelope a given position
+ * @brief Gets longitudinal laser envelope at a given position
  * 
- * @param z         position
- * @param start     Start position
- * @param rise      Rise length
- * @param flat      Flat length
- * @param fall      Fall length
- * @return float    laser envelope
+ * @param env       Envelope parameters
+ * @param z         Position
+ * @return float    Laser envelope
  */
-inline float lon_env( laser::pulse & laser, float z ) {
+inline float lon_env( const laser::envelope & env, const float z ) {
 
-    if ( z > laser.start ) {
+    if ( z > env.start ) {
         // Ahead of laser
-        return 0.0;
-    } else if ( z > laser.start - laser.rise ) {
+        return 0.0f;
+    } else if ( z > env.start - env.rise ) {
         // Laser rise
-        float csi = z - laser.start;
-        float e = sin( M_PI_2 * csi / laser.rise );
+        const float csi = z - env.start;
+        const float e = sinf( static_cast<float>(M_PI_2) * csi / env.rise );
         return e*e;
-    } else if ( z > laser.start - (laser.rise + laser.flat) ) {
+    } else if ( z > env.start - (env.rise + env.flat) ) {
         // Flat-top
-        return 1.0;
-    } else if ( z > laser.start - (laser.rise + laser.flat + laser.fall) ) {
+        return 1.0f;
+    } else if ( z > env.start - (env.rise + env.flat + env.fall) ) {
         // Laser fall
-        float csi = z - (laser.start - laser.rise - laser.flat - laser.fall);
-        float e = sin( M_PI_2 * csi / laser.fall );
+        const float csi = z - (env.start - env.rise - env.flat - env.fall);
+        const float e = sinf( static_cast<float>(M_PI_2) * csi / env.fall );
         return e*e;
     }
 
     // Before laser
-    return 0.0;
+    return 0.0f;
 }
 
 /**
  * @brief Ensures div F = 0 by modifying the x component of F
  * 
- * @param data      FFT of field data organized as a contiguous grid
- * @param dims      Dimensions of k-space grid
- * @param dk        k-space cell size
+ * @note Solves kx Fx + ky Fy = 0 for Fx. The kx = 0 column is set to 0.
  */
 inline void lon_x( 
-    std::complex<float> * const __restrict__ fld_x, 
-    const std::complex<float> * const __restrict__ fld_y, 
+    laser::complex_t * const __restrict__ fld_x, 
+    const laser::complex_t * const __restrict__ fld_y, 
     const uint2 global_dims, const uint2 local_dims, const uint2 local_start, const float2 dk ) {
 
     #pragma omp for
@@ -69,81 +63,118 @@ inline void lon_x(
     }
 }
 
-}
+namespace {
 
 /**
- * @brief Validates laser parameters
- * 
- * @return      0 on success, -1 on error
+ * @brief Get cell size from box size and global grid dimensions
  */
-int laser::pulse::validate() {
+float2 cell_size( const grid::tiled_vec3<float> & E, const float2 box ) {
+    return make_float2(
+        box.x / E.get_global_dims().x,
+        box.y / E.get_global_dims().y
+    );
+}
+
+} // anonymous namespace
+
+void laser::pulse::validate() const {
 
     if ( a0 <= 0 ) {
-        mpi::fatal("Invalid laser parameter (a0), must be > 0");
+        mpi::fatal( "Invalid laser parameter (a0), must be > 0" );
     }    
 
     if ( omega0 <= 0 ) {
         mpi::fatal( "Invalid laser parameter (omega0), must be > 0" );
     }    
 
-    if ( fwhm > 0 ) {
-        // The fwhm parameter overrides the rise/flat/fall parameters
-        rise = fwhm;
-        fall = fwhm;
-        flat = 0.;
-    } else {
+    // If fwhm > 0 it overrides the rise/flat/fall parameters, so these are
+    // only checked when it is not set
+    if ( fwhm <= 0 ) {
         if ( rise <= 0 ) {
             mpi::fatal( "Invalid laser parameter (rise), must be > 0" );
         }
 
         if ( flat < 0 ) {
-            mpi::fatal("Invalid laser parameter (flat), must be >= 0" );
+            mpi::fatal( "Invalid laser parameter (flat), must be >= 0" );
         }
 
         if ( fall <= 0 ) {
             mpi::fatal( "Invalid laser parameter (fall), must be > 0" );
         }
     }
+}
 
-    return 0;
+/**
+ * @brief Get the longitudinal envelope
+ * 
+ * @note If fwhm > 0 this returns rise = fall = fwhm and flat = 0, otherwise
+ *       the rise, flat and fall parameters are used
+ * 
+ * @return laser::envelope 
+ */
+laser::envelope laser::pulse::get_envelope() const {
+    if ( fwhm > 0 ) {
+        return laser::envelope{ start, fwhm, 0.0f, fwhm };
+    }
+    return laser::envelope{ start, rise, flat, fall };
+}
+
+/**
+ * @brief Get the polarization direction
+ * 
+ * @note Uses cos_pol / sin_pol if either is set, otherwise these are
+ *       calculated from the polarization angle
+ * 
+ * @return float2   { cos(polarization), sin(polarization) }
+ */
+float2 laser::pulse::get_polarization() const {
+    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
+        return make_float2( std::cos( polarization ), std::sin( polarization ) );
+    }
+    return make_float2( cos_pol, sin_pol );
 }
 
 /**
  * @brief Adds a new laser pulse onto an EMF object
  * 
  * @param emf   EMF object
- * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ * @return      Returns 0 on success
  */
-int laser::pulse::add( emf & emf ) {
+int laser::pulse::add( emf & emf ) const {
 
-    grid::tiled_vec3<float> tmp_E( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
-    grid::tiled_vec3<float> tmp_B( emf.E -> global_ntiles, emf.E-> tile_dims, emf.E -> gc, emf.E -> part );
+    grid::tiled_vec3<float> tmp_E( emf.E -> global_ntiles, emf.E -> tile_dims, emf.E -> gc, emf.E -> part );
+    grid::tiled_vec3<float> tmp_B( emf.B -> global_ntiles, emf.B -> tile_dims, emf.B -> gc, emf.B -> part );
 
     // Get laser fields
     int ierr = launch( tmp_E, tmp_B, emf.box );
 
+    // Add laser to simulation
     if ( ! ierr ) {
 
         // Add to k-space fields
+        // Note: lon_x() and the k-space low-pass filter commute, and the
+        // k-space data must be added to fEt / fB before the backward
+        // transform, since c2r transforms may overwrite their input
         grid::fft::r2c_plan dft_forward( tmp_E );
-        auto fft_tmp = grid::fft::complex_grid( tmp_E );
+        auto fft_tmp = dft_forward.kspace_grid3();
         const float2 dk = grid::fft::dk( emf.box );
 
-        filter::lowpass filter( make_float2( 0.5, 0.5 ) );
+        filter::lowpass lowpass( filter );
 
         // transform tmp_E and add to fEt
         dft_forward.transform( fft_tmp, tmp_E );
         lon_x( fft_tmp, dk );
-        filter.apply( fft_tmp );
+        lowpass.apply( fft_tmp );
         emf.fEt -> add( fft_tmp );
 
+        // This will also set the real space guard cells
         emf.fft_backward -> transform( tmp_E, fft_tmp  );
         emf.E -> add( tmp_E );
 
         // transform tmp_B and add to fB 
         dft_forward.transform( fft_tmp, tmp_B );
         lon_x( fft_tmp, dk );
-        filter.apply( fft_tmp );
+        lowpass.apply( fft_tmp );
         emf.fB  -> add( fft_tmp );
 
         emf.fft_backward -> transform( tmp_B, fft_tmp );
@@ -156,31 +187,25 @@ int laser::pulse::add( emf & emf ) {
 /**
  * @brief Launches a plane wave
  * 
- * The E and B tiled grids have the complete laser field.
+ * The E and B tiled grids have the complete laser field. Guard cells are
+ * not set, they are not used by the forward FFT.
  * 
  * @param E     Electric field
  * @param B     Magnetic field
  * @param box   Box size
- * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ * @return      Returns 0 on success
  */
-int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, float2 box ) {
+int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, float2 box ) const {
 
-    if ( validate() < 0 ) return -1;
+    validate();
 
-    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = std::cos( polarization );
-        sin_pol = std::sin( polarization );
-    }
+    const float2 dx  = cell_size( E, box );
+    const float2 pol = get_polarization();
 
-    const float2 dx = make_float2(
-        box.x / E.get_global_dims().x,
-        box.y / E.get_global_dims().y
-    );
+    laser::envelope env = get_envelope();
 
-    // Laser k
-    const float k = omega0;
-    // Amplitude
     const float amp = omega0 * a0;
+    const float k = omega0;
 
     // Grid tile parameters
     auto local_ntiles = E.get_local_ntiles();
@@ -202,18 +227,18 @@ int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<floa
                 for( unsigned ix = 0; ix < tile_dims.x; ix++ ) {
                     const float z   = ( ix0 + ix ) * dx.x;
 
-                    float lenv   = amp * laser::lon_env( *this, z ) * std::cos( k * z );
+                    float lenv   = amp * lon_env( env, z ) * std::cos( k * z );
 
                     tile_E[ ix + iy * ystride ] = make_float3(
                         0,
-                        +lenv * cos_pol,
-                        +lenv * sin_pol
+                        +lenv * pol.x,
+                        +lenv * pol.y
                     );
 
                     tile_B[ ix + iy * ystride ] = make_float3(
                         0,
-                        -lenv * sin_pol,
-                        +lenv * cos_pol
+                        -lenv * pol.y,
+                        +lenv * pol.x
                     );
                 }
             }
@@ -230,20 +255,15 @@ int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<floa
 /**
  * @brief Validate Gaussian laser parameters
  * 
- * @return      0 on success, -1 on error
+ * @note Invalid parameters cause the simulation to stop (mpi::fatal)
  */
-int laser::gaussian::validate() {
+void laser::gaussian::validate() const {
     
-    if ( laser::pulse::validate() < 0 ) {
-        return -1;
-    }
+    laser::pulse::validate();
 
     if ( W0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser W0, must be > 0\n";
-        return (-1);
+        mpi::fatal( "Invalid laser parameter (W0), must be > 0" );
     }
-
-    return 0;
 }
 
 /**
@@ -277,19 +297,15 @@ inline float gauss_phase( const float omega0, const float W0, const float z, con
  * @param dx    Cell size
  * @return      Returns 0 on success, -1 on error (invalid laser parameters)
  */
-int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 box ) {
+int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 box ) const 
+{
 
-    if ( validate() < 0 ) return -1;
+    validate();
 
-    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = std::cos( polarization );
-        sin_pol = std::sin( polarization );
-    }
+    const float2 dx  = cell_size( E, box );
+    const float2 pol = get_polarization();
 
-    const float2 dx = make_float2(
-        box.x / E.get_global_dims().x,
-        box.y / E.get_global_dims().y
-    );
+    laser::envelope env = get_envelope();
 
     // Laser amplitude
     const float amp = omega0 * a0;
@@ -315,17 +331,17 @@ int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
                     const float z = ( ix0 + ix ) * dx.x;
                     const float r = ( iy0 + iy ) * dx.y - axis;
 
-                    const float lenv   = amp * laser::lon_env( *this, z ) * gauss_phase( omega0, W0, z - focus, r );
+                    const float lenv   = amp * lon_env( env, z ) * gauss_phase( omega0, W0, z - focus, r );
 
                     tile_E[ ix + iy * ystride ] = make_float3(
                         0,
-                        +lenv * cos_pol,
-                        +lenv * sin_pol
+                        +lenv * pol.x,
+                        +lenv * pol.y
                     );
                     tile_B[ ix + iy * ystride ] = make_float3(
                         0,
-                        -lenv * sin_pol,
-                        +lenv * cos_pol
+                        -lenv * pol.y,
+                        +lenv * pol.x
                     );
                 }
             }
@@ -344,9 +360,9 @@ int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
  * @brief 
  * 
  */
-int laser::gaussian::lon_x( grid::flat3<std::complex<float>> & fld, const float2 dk ) {
+int laser::gaussian::lon_x( grid::flat3<laser::complex_t> & fld, const float2 dk ) const {
 
-    laser::lon_x( 
+    ::lon_x( 
         fld.x(), fld.y(), 
         fld.get_global_dims(), fld.get_local_dims(), fld.get_local_start(), 
         dk );

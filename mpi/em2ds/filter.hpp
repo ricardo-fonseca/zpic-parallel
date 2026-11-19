@@ -5,34 +5,56 @@
 
 namespace filter {
 
+using complex_t = std::complex<float>;
+
 class digital {
     public:
-    virtual digital * clone() const = 0;
-    virtual void apply( grid::flat<std::complex<float>> & fld )  = 0;
-    virtual void apply( grid::flat3<std::complex<float>> & fld ) = 0;
+    virtual std::unique_ptr<digital> clone() const = 0;
+    virtual void apply( grid::flat<complex_t> & fld )  = 0;
+    virtual void apply( grid::flat3<complex_t> & fld ) = 0;
     virtual ~digital() = default;
 };
 
 class none : public digital {
     public:
-    none * clone() const override { return new none(); };
-    void apply( grid::flat<std::complex<float>> & fld ) override { /* do nothing */ };
-    void apply( grid::flat3<std::complex<float>> & fld ) override { /* do nothing */ };
+    std::unique_ptr<digital> clone() const override {
+        return std::make_unique<none>( *this );
+    }
+    void apply( grid::flat<complex_t> & fld ) override { /* do nothing */ };
+    void apply( grid::flat3<complex_t> & fld ) override { /* do nothing */ };
 };
 
+/**
+ * @brief Sharp (brick-wall) spectral lowpass filter
+ * 
+ * Zeroes all modes with kx > cutoff.x * kx_Nyquist or |ky| > cutoff.y * ky_Nyquist
+ */
 class lowpass : public digital {
     protected:
 
+    /// @brief Cutoff as a fraction of the Nyquist mode, in [0,1] along each direction
     const float2 cutoff;
     
     public:
 
-    lowpass( const float2 cutoff ) : cutoff( cutoff ) {};
+    /**
+     * @brief Construct a new lowpass filter
+     * 
+     * @param cutoff    Cutoff as a fraction of the Nyquist mode along x and y,
+     *                  must be in [0,1] (1 keeps all modes)
+     */
+    lowpass( const float2 cutoff ) : cutoff( cutoff ) {
+        if ( cutoff.x < 0.f || cutoff.x > 1.f || cutoff.y < 0.f || cutoff.y > 1.f ) {
+            mpi::fatal( "filter::lowpass: cutoff values must be in the range [0,1]" );
+        }
+    };
 
-    lowpass * clone() const override { return new lowpass ( cutoff ); };
+    std::unique_ptr<digital> clone() const override {
+        return std::make_unique<lowpass>( *this );
+    }
 
-    void apply( grid::flat<std::complex<float>> & fld ) override {
-        std::complex<float> * __restrict__ data = fld.data();
+    void apply( grid::flat<complex_t> & fld ) override {
+        complex_t * __restrict__ data = fld.data();
 
         auto dims = fld.get_local_dims();
         auto start = fld.get_local_start();
@@ -57,10 +79,10 @@ class lowpass : public digital {
         }
     };
     
-    void apply( grid::flat3<std::complex<float>> & fld ) override {
-        std::complex<float> * __restrict__ data_x = fld.x();
-        std::complex<float> * __restrict__ data_y = fld.y();
-        std::complex<float> * __restrict__ data_z = fld.z();
+    void apply( grid::flat3<complex_t> & fld ) override {
+        complex_t * __restrict__ data_x = fld.x();
+        complex_t * __restrict__ data_y = fld.y();
+        complex_t * __restrict__ data_z = fld.z();
         
 
         auto dims = fld.get_local_dims();

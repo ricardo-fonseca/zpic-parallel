@@ -12,7 +12,7 @@ namespace density {
 
         profile(float const n0) : n0(std::abs(n0)) {};
 
-        virtual profile * clone() const = 0;
+        virtual std::unique_ptr<profile> clone() const = 0;
         
         virtual void inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const = 0;
     
@@ -31,8 +31,8 @@ namespace density {
 
         none( float const n0) : profile( n0 ) { };
 
-        none * clone() const override {
-            return new none( n0 );
+        std::unique_ptr<profile> clone() const override {
+            return std::make_unique<none>( n0 );
         };
         void inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const override {
             // no injection
@@ -54,8 +54,8 @@ namespace density {
 
         uniform( float const n0 ) : profile(n0) { };
 
-        uniform * clone() const override {
-            return new uniform(n0);
+        std::unique_ptr<profile> clone() const override {
+            return std::make_unique<uniform>( n0 );
         };
         void inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const override;
         void np_inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range, int * np ) const override;
@@ -76,8 +76,8 @@ namespace density {
 
         step( coord::cart dir, float const n0, float const pos ) : profile(n0), pos(pos), dir(dir) {};
 
-        step * clone() const override {
-            return new step( dir, n0, pos );
+        std::unique_ptr<profile> clone() const override {
+            return std::make_unique<step>( dir, n0, pos );
         };
 
         void inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const override;
@@ -102,8 +102,8 @@ namespace density {
 
         slab( coord::cart dir, float const n0, float begin, float end ) : profile(n0), begin(begin), end(end), dir(dir) {};
         
-        slab * clone() const override {
-            return new slab( dir, n0, begin, end );
+        std::unique_ptr<profile> clone() const override {
+            return std::make_unique<slab>( dir, n0, begin, end );
         };
 
         void inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const override;
@@ -126,8 +126,8 @@ namespace density {
 
         sphere( float const n0, float2 center, float radius ) : profile(n0), center(center), radius(radius) {};
 
-        sphere * clone() const override { 
-            return new sphere(n0, center, radius);
+        std::unique_ptr<profile> clone() const override { 
+            return std::make_unique<sphere>( n0, center, radius );
         };
         void inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const override;
         void np_inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range, int * np ) const override;

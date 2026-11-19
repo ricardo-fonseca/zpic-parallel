@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visxd"
+version = "0.1.0"
+description = "Quick-look visualization of ZDF simulation output"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "zdf",          # ZDF Python reader, distributed as its own package
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

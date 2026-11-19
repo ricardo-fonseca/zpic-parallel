@@ -11,7 +11,7 @@
  void charge_bcx( 
     int bnd_x, int tile_idx_y,
     const grid::tiled_view<float> charge,
-    const charge::bc_type bc ) {
+    const charge::bc_type local_bc ) {
 
     const int ystride = charge.tile_ystride();
 
@@ -21,7 +21,7 @@
             (0,tile_idx_y)      // lower x boundary tile
             [ charge.gc.x.lower ];     // point to first x cell (ix = 0)
 
-        switch( bc.x.lower ) {
+        switch( local_bc.x.lower ) {
         case( charge::bc::reflecting ):
             for( unsigned idx = 0; idx < charge.tile_ext_dims.y; idx ++ ) {
                 // iy includes the y-stride
@@ -40,7 +40,7 @@
             (charge.local_ntiles.x-1,tile_idx_y)    // upper x boundary tile
             [ charge.gc.x.lower + charge.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
 
-        switch( bc.x.upper ) {
+        switch( local_bc.x.upper ) {
         case( charge::bc::reflecting ):
             for( unsigned idx = 0; idx < charge.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
@@ -66,7 +66,7 @@
 void charge_bcy( 
     int bnd_y, int tile_idx_x,
     const grid::tiled_view<float> charge,
-    const charge::bc_type bc ) {
+    const charge::bc_type local_bc ) {
 
     const int ystride = charge.tile_ystride();
     
@@ -76,7 +76,7 @@ void charge_bcy(
             (tile_idx_x,0)              // lower y boundary tiles
             [ charge.gc.y.lower * ystride ];   // point to first y cell (iy = 0)
 
-        switch( bc.y.lower ) {
+        switch( local_bc.y.lower ) {
         case( charge::bc::reflecting ):
             for( unsigned idx = 0; idx < charge.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
@@ -94,7 +94,7 @@ void charge_bcy(
             (tile_idx_x,charge.local_ntiles.y-1)   // upper y boundary tiles
             [ (charge.gc.y.lower + charge.tile_dims.y ) * ystride ];  // point to first upper gc (iy = tile_dims.y)
 
-        switch( bc.y.upper ) {
+        switch( local_bc.y.upper ) {
         case( charge::bc::reflecting ):
             for( unsigned idx = 0; idx < charge.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
@@ -117,21 +117,21 @@ void charge::process_bc() {
     const uint2 ntiles          = rho -> get_local_ntiles();
 
     // x boundaries
-    if ( bc.x.lower > charge::bc::periodic || bc.x.upper > charge::bc::periodic ) {
+    if ( local_bc.x.lower > charge::bc::periodic || local_bc.x.upper > charge::bc::periodic ) {
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
             for( unsigned bnd_x : {0,1} ) {
-                charge_bcx( bnd_x, ty, rho -> view(), bc );
+                charge_bcx( bnd_x, ty, rho -> view(), local_bc );
             }
         }
     }
 
     // y boundaries
-    if ( bc.y.lower > charge::bc::periodic || bc.y.upper > charge::bc::periodic ) {
+    if ( local_bc.y.lower > charge::bc::periodic || local_bc.y.upper > charge::bc::periodic ) {
         #pragma omp parallel for collapse(2)
         for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-                charge_bcy( bnd_y, tx, rho -> view(), bc );
+                charge_bcy( bnd_y, tx, rho -> view(), local_bc );
             }
         }
     }

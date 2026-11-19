@@ -1,6 +1,10 @@
 #ifndef ZDF_H_
 #define ZDF_H_
 
+#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -17,11 +21,9 @@ extern "C" {
 
 #endif
 
-#include <stdint.h>
-#include <stdio.h>
-
 /**
- * Number of bytes in each ZDF file unit
+ * Number of bytes in each ZDF file unit. All records, and all data vectors
+ * (including 8 and 16 bit types) are padded to a multiple of this value.
  */
 #define BYTES_PER_ZDF_UNIT    (4)
 
@@ -107,7 +109,7 @@ typedef struct ZDF_Chunk {
     uint64_t count[zdf_max_dims];      ///< Dimension of chunk
     uint64_t start[zdf_max_dims];      ///< Start position of data chunk
     uint64_t stride[zdf_max_dims];     ///< Chunk stride
-    void * data;                       ///< Pointer to chunk data
+    void * data;                       ///< Pointer to chunk data (host memory)
 } t_zdf_chunk;
 
 /**
@@ -191,25 +193,49 @@ typedef struct ZDF_TrackInfo {
     const char** qunits;    ///< Units for quantities
 } t_zdf_track_info;
 
+/*
+ * Return value conventions
+ * ------------------------
+ * Functions returning `int` return 1 on success and 0 on error.
+ * Functions returning `size_t` return the number of bytes written (or read) on success
+ * and 0 on error, except where noted.
+ * `create_path()` is the exception, it follows the POSIX convention (0 on success).
+ */
+
 // Low level interface
 
 /**
  * @brief Recursively creates a path if required
  * 
  * @param path      path to create
- * @return int      returns 0 on success, otherwise returns the value returned by mkdir
+ * @return int      returns 0 on success, otherwise returns an errno value
  */
 int create_path( const char path[] );
 
 /**
- * Returns size of ZDF datatype
+ * @brief Returns size of ZDF datatype
+ *
  * @param  data_type Data type id
  * @return           Returns type size in bytes or 0 for an invalid data type
  */
 size_t zdf_sizeof( enum zdf_data_type data_type );
 
 /**
- * Opens ZDF file
+ * @brief Returns the number of bytes a vector of the specified datatype occupies in a ZDF file,
+ *        including the padding required to keep the file aligned to BYTES_PER_ZDF_UNIT
+ *
+ * @param  data_type Data type id
+ * @param  len       Number of elements in vector
+ * @return           Size in bytes
+ */
+size_t zdf_sizeof_vector( enum zdf_data_type data_type, uint64_t len );
+
+/**
+ * @brief Opens ZDF file
+ * 
+ * When opening a file in ZDF_UPDATE mode the file is scanned for existing datasets, so that
+ * new datasets get unique ids, and the file pointer is placed at the end of the file.
+ * 
  * @param  zdf      ZDF file to open
  * @param  filename Filename of the ZDF file to open, including path
  * @param  mode     Can be one of ZDF_CREATE, ZDF_READ, or ZDF_UPDATE
@@ -218,24 +244,28 @@ size_t zdf_sizeof( enum zdf_data_type data_type );
 int zdf_open_file( t_zdf_file* zdf, const char* filename, enum zdf_file_access_mode mode );
 
 /**
- * Closes ZDF file
+ * @brief Closes ZDF file
  * @param  zdf ZDF file to close
  * @return     Returns 1 on success, 0 on error
  */
 int zdf_close_file( t_zdf_file* zdf );
 
 /**
- * Writes a vector of the specified datatype to file
+ * @brief Writes a vector of the specified datatype to file. Padding is added at the end of the
+ *        vector if necessary to keep the file aligned to BYTES_PER_ZDF_UNIT.
+ *
  * @param  zdf       ZDF file descriptor
  * @param  data      Pointer to data
  * @param  data_type Data type descriptor
  * @param  len       Number of elements in vector
- * @return           Returns number of bytes written on success, 0 on error
+ * @return           Returns number of bytes written on success, 0 on error. Note that
+ *                   writing a 0 length vector also returns 0.
  */
 size_t zdf_vector_write( t_zdf_file* zdf, const void * data, enum zdf_data_type data_type, size_t len );
 
 /**
- * Adds string element to ZDF file
+ * @brief Adds string element to ZDF file
+ *
  * @param  zdf  ZDF File handle
  * @param  name Element name
  * @param  str  String value
@@ -244,7 +274,8 @@ size_t zdf_vector_write( t_zdf_file* zdf, const void * data, enum zdf_data_type 
 size_t zdf_add_string( t_zdf_file* zdf, const char* name, const char* str );
 
 /**
- * Adds int32 element to ZDF file
+ * @brief Adds int32 element to ZDF file
+ *
  * @param  zdf    ZDF File handle
  * @param  name   Element name
  * @param  value  int32 value
@@ -253,7 +284,8 @@ size_t zdf_add_string( t_zdf_file* zdf, const char* name, const char* str );
 size_t zdf_add_int32( t_zdf_file* zdf, const char* name, const int32_t value );
 
 /**
- * Adds float64 element to ZDF file
+ * @brief Adds float64 element to ZDF file
+ *
  * @param  zdf    ZDF file handle
  * @param  name   Element name
  * @param  value  float64 value
@@ -262,7 +294,8 @@ size_t zdf_add_int32( t_zdf_file* zdf, const char* name, const int32_t value );
 size_t zdf_add_double( t_zdf_file* zdf, const char* name, const double value );
 
 /**
- * Adds iteration metadata group to ZDF file
+ * @brief Adds iteration metadata group to ZDF file
+ *
  * @param  zdf  ZDF file handle
  * @param  iter Iteration info
  * @return      Number of bytes written on success, 0 on error
@@ -270,7 +303,8 @@ size_t zdf_add_double( t_zdf_file* zdf, const char* name, const double value );
 size_t zdf_add_iteration( t_zdf_file* zdf, const t_zdf_iteration* iter );
 
 /**
- * Adds grid information metadata group to file
+ * @brief Adds grid information metadata group to file
+ *
  * @param  zdf  File handle
  * @param  grid Grid information
  * @return      Number of bytes written on success, 0 on error
@@ -278,7 +312,8 @@ size_t zdf_add_iteration( t_zdf_file* zdf, const t_zdf_iteration* iter );
 size_t zdf_add_grid_info( t_zdf_file* zdf, const t_zdf_grid_info* grid );
 
 /**
- * Adds particle information metadata group to file
+ * @brief Adds particle information metadata group to file
+ *
  * @param  zdf  File handle
  * @param  part Particle information
  * @return      Number of bytes written on success, 0 on error
@@ -286,7 +321,8 @@ size_t zdf_add_grid_info( t_zdf_file* zdf, const t_zdf_grid_info* grid );
 size_t zdf_add_part_info( t_zdf_file* zdf, const t_zdf_part_info* part );
 
 /**
- * Adds tracks information metadata group to file
+ * @brief Adds tracks information metadata group to file
+ *
  * @param  zdf    File handle
  * @param  tracks Tracks information
  * @return        Number of bytes written on success, 0 on error
@@ -294,7 +330,8 @@ size_t zdf_add_part_info( t_zdf_file* zdf, const t_zdf_part_info* part );
 size_t zdf_add_track_info( t_zdf_file* zdf, const t_zdf_track_info* tracks );
 
 /**
- * Adds dataset to file
+ * @brief Adds dataset to file
+ *
  * @param  zdf     ZDF file handle
  * @param  dataset Dataset object (includes pointer to data)
  * @return         Number of bytes written on success, 0 on error. The dataset object is also
@@ -305,7 +342,18 @@ size_t zdf_add_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset );
 // Chunked dataset interface
 
 /**
- * Adds a chunked dataset header to file
+ * @brief Writes a dataset header (id, type, dimensions) at the current file position. The dataset
+ *        object is modified to store the file position of the header.
+ *
+ * @param  zdf     ZDF file handle
+ * @param  dataset Dataset object
+ * @return         Number of bytes written on success, 0 on error
+ */
+size_t zdf_dataset_header_write( t_zdf_file* zdf, t_zdf_dataset* dataset );
+
+/**
+ * @brief Adds a chunked dataset header to file
+ *
  * @param  zdf     ZDF file handle
  * @param  dataset Dataset object
  * @return         Number of bytes written on success, 0 on error. The dataset object is also
@@ -314,14 +362,16 @@ size_t zdf_add_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset );
 size_t zdf_start_cdset( t_zdf_file* zdf, t_zdf_dataset* dataset );
 
 /**
- * Returns size of chunk header
+ * @brief Returns size of chunk header
+ *
  * @param  dataset Dataset object
  * @return         Chunk header size in bytes
  */
 size_t size_zdf_chunk_header(const t_zdf_dataset* dataset);
 
 /**
- * Adds a chunk header to file
+ * @brief Adds a chunk header to file
+ *
  * @param  zdf     ZDF file handle
  * @param  dataset Dataset object
  * @param  chunk   Chunk object
@@ -330,16 +380,19 @@ size_t size_zdf_chunk_header(const t_zdf_dataset* dataset);
 size_t zdf_write_chunk_header( t_zdf_file* zdf, t_zdf_dataset* dataset, t_zdf_chunk* chunk );
 
 /**
- * Adds a chunk of dataset data to file
+ * @brief Adds a chunk of dataset data to file
+ *
  * @param  zdf     ZDF file handle
  * @param  dataset Dataset object
- * @param  chunk   Chunk object (includes pointer to data). Data is expected to be contiguos in memory
+ * @param  chunk   Chunk object (includes pointer to data). Data is expected to be contiguos in memory.
+ *                 Empty chunks (0 elements) are allowed.
  * @return         Number of bytes written on success, 0 on error.
  */
 size_t zdf_write_cdset( t_zdf_file* zdf, t_zdf_dataset* dataset, t_zdf_chunk* chunk );
 
 /**
- * Add an end marker for a chunked dataset to file
+ * @brief Add an end marker for a chunked dataset to file
+ *
  * @param  zdf     ZDF file handle
  * @param  dataset Dataset object
  * @return         Number of bytes written on success, 0 on error.
@@ -347,16 +400,17 @@ size_t zdf_write_cdset( t_zdf_file* zdf, t_zdf_dataset* dataset, t_zdf_chunk* ch
 size_t zdf_end_cdset( t_zdf_file* zdf, t_zdf_dataset* dataset );
 
 /**
- * Open a dataset and read the header. The dataset is selected by name.
+ * @brief Open a dataset and read the header. The dataset is selected by name.
+ *
  * @param  zdf     ZDF file handle
  * @param  dataset Dataset object
- * @return         Returns 1 if successful, 0 on error.
+ * @return         Returns 1 if successful, 0 on error or if the dataset is not found.
  */
 size_t zdf_open_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset );
 
 /**
- * Extends dataset dimensions. After this call the file pointer is positioned at the
- * end of the file.
+ * @brief Extends dataset dimensions. After this call the file pointer is positioned at the
+ *        end of the file.
  *
  * @param  zdf       ZDF file handle
  * @param  dataset   Datasete object
@@ -370,7 +424,8 @@ int zdf_extend_dataset( t_zdf_file* zdf, t_zdf_dataset* dataset, uint64_t* new_c
 // High level interface
 
 /**
- * Opens ZDF file and adds TYPE, GRID, and ITERATION metadata
+ * @brief Opens ZDF file and adds TYPE, GRID, and ITERATION metadata
+ *
  * @param  zdf       File handle
  * @param  info      Grid information
  * @param  iteration Iteration information
@@ -381,7 +436,8 @@ int zdf_open_grid_file( t_zdf_file *file, const t_zdf_grid_info *info,
     const t_zdf_iteration *iteration, char const path[] );
 
 /**
- * Saves a ZDF grid file
+ * @brief Saves a ZDF grid file
+ *
  * @param  data       Pointer to grid data
  * @param  data_type  ZDF Data type of grid data
  * @param  info       Grid information
@@ -393,7 +449,8 @@ int zdf_save_grid( const void* data, enum zdf_data_type data_type, const t_zdf_g
     const t_zdf_iteration *iteration, char const path[] );
 
 /**
- * Opens ZDF file and adds TYPE, PARTICLES, and ITERATION metadata
+ * @brief Opens ZDF file and adds TYPE, PARTICLES, and ITERATION metadata
+ *
  * @param  zdf        File handle
  * @param  info       Particles information
  * @param  iteration  Iteration information
@@ -404,12 +461,13 @@ int zdf_open_part_file( t_zdf_file *file, t_zdf_part_info *info,
     const t_zdf_iteration *iteration, char const path[] );
 
 /**
- * Adds individual particle quantity to file
+ * @brief Adds individual particle quantity to file
+ *
  * @param  zdf  File handle
  * @param  name Quantity name
  * @param  data Quantity data (float32)
  * @param  np   Number of particles
- * @return      Number of bytes written on success, 0 on error
+ * @return      1 on success, 0 on error
  */
 int zdf_add_quant_part_file( t_zdf_file *zdf, const char *name, const float* data,
     const uint64_t np );

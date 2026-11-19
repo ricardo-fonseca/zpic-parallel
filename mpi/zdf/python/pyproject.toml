@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zdf"
+version = "1.0.0"
+description = "Python reader for ZDF simulation data files"
+requires-python = ">=3.8"
+dependencies = ["numpy"]
+
+[tool.setuptools]
+py-modules = ["zdf"]

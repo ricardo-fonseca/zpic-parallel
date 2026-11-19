@@ -1,0 +1,239 @@
+#pragma once
+
+#include <cstdint>
+#include "../core/vec_types.hpp"
+#include "../parallel/partition.hpp"
+#include "../util/memory.hpp"
+#include "../util/math.hpp"
+
+#include "comms.hpp"
+
+namespace part {
+
+/**
+ * @brief   Data structure to hold particle sort data
+ * 
+ * @warning This is meant to be used only as a superclass for particle_sort. The
+ *          struct does not include methods for allocating / deallocating
+ *          memory
+ *
+ * 
+ */
+struct particle_sort_view {
+    /// @brief Maximum number of particles to be sorted
+    uint32_t max_part;
+    /// @brief Particle index list [max_part]
+    int *idx;
+    /// @brief Number of particles in index list [local_ntiles]
+    int * nidx;
+    /// @brief Number of particles leaving tile in all directions [ntiles * 9]
+    int * npt;
+    /**
+     * @brief New number of particles per tile
+     * @note  Includes incoming/outgoing particles per edge tile
+     */
+    int * new_np;
+    /// @brief Local number of tiles
+    const uint2 ntiles;
+};
+
+/**
+ * @brief Class for particle sorting data
+ * 
+ * @note This class does not hold any actual particle data, only particle
+ *       inidices and counts. It should work for any type of particle data.
+ * 
+ */
+class particle_sort {
+
+    /// @brief Maximum number of particles to be sorted
+    uint32_t max_part;
+    /// @brief Particle index list [max_part]
+    int *idx;
+    /// @brief Number of particles in index list [local_ntiles]
+    int * nidx;
+    /// @brief Number of particles leaving tile in all directions [ntiles * 9]
+    int * npt;
+    /**
+     * @brief New number of particles per tile
+     * @note  Includes incoming/outgoing particles per edge tile
+     */
+    int * new_np;
+    /// @brief Local number of tiles
+    const uint2 ntiles;
+
+    struct message {
+        /// @brief Buffer for all 8 messages
+        int * buffer;
+        /// @brief Number of incoming particles per message
+        int msg_np[9];
+        /// @brief Total number of particles to be exchanged
+        int total_np;
+        /// @brief Message requests
+        MPI_Request requests[9];
+    };
+
+    /// @brief MPI communicator
+    MPI_Comm comm;
+    /// @brief Neighbor ranks
+    int neighbor[9];
+
+    private:
+
+    /**
+     * @brief Size of the per-tile counters buffer (new_np, nidx and npt)
+     * 
+     * @return int  Number of int elements
+     */
+    inline int counters_size() const {
+        return part::all_tiles( ntiles ) + 10 * part::local_tiles( ntiles );
+    }
+
+    /**
+     * @brief Message tag for incoming messages
+     * 
+     * @param dir   Communication direction (0-8)
+     * @return int 
+     */
+    inline int source_tag( int dir ) {
+        return (8 - dir) | 0x100;
+    }
+
+    /**
+     * @brief Message tag for outgoing messages
+     * 
+     * @param dir   Communication direction (0-8) 
+     * @return int 
+     */
+    inline int dest_tag( int dir ) {
+        return dir | 0x100;
+    }
+    
+    public:
+
+    /// @brief Incoming messages
+    particle_sort::message recv;
+    /// @brief Outgoing messages
+    particle_sort::message send;
+
+    /**
+     * @brief Construct a new Particle Sort object
+     * 
+     * @param ntiles        Local number of tiles
+     * @param max_part      Maximum number of particles in buffer
+     * @param par           Parallel partition
+     */
+    particle_sort( uint2 const ntiles, uint32_t const max_part, mpi::cart2d & par, const int2 periodic ) :
+        max_part( max_part ), ntiles( ntiles )
+    {
+        idx = memory::malloc<int>( max_part );
+
+        // Number of local ltiles
+        int local_tiles = part::local_tiles(ntiles);
+
+        // Number of edge tiles for messaging
+        int msg_tiles = part::msg_tiles(ntiles);
+
+        // Single buffer for all per-tile counters, so they can be zeroed
+        // together in reset():
+        //   [ new_np (local + msg tiles) | nidx (local tiles) | npt (9 * local tiles) ]
+        // new_np must come first, its msg tiles section is used as the
+        // send buffer (number of particles leaving node)
+        new_np = memory::malloc<int>( counters_size() );
+        
+        // Number of particles leaving each local tile
+        nidx   = &new_np[ local_tiles + msg_tiles ];
+
+        // Particle can move in 9 different directions
+        npt    = &nidx[ local_tiles ];
+
+        // Send buffer
+        send.buffer = &new_np[ local_tiles ];
+        memory::zero( send.msg_np, 9 );
+
+        // Receive buffer
+        recv.buffer = memory::malloc<int>( msg_tiles );
+        memory::zero( recv.buffer, msg_tiles );
+        
+        memory::zero( recv.msg_np, 9 );
+
+        // MPI Communicator
+        comm = par.get_comm();
+
+
+        // Neighbor MPI ranks and messages
+        for( int dir = 0; dir < 9; dir++ ) {
+            // This will disable messages to self
+            neighbor[ dir ] = part::dir_neighbor( dir, par, periodic );
+            // Initialize messages
+            recv.requests[dir] = send.requests[dir] = MPI_REQUEST_NULL;
+        }
+    }
+
+    /**
+     * @brief Destroy the Particle Sort object
+     * 
+     */
+    ~particle_sort() {
+        memory::free( recv.buffer );
+
+        // new_np, nidx and npt share the same buffer
+        memory::free( new_np );
+        memory::free( idx );
+    }
+
+    particle_sort( const particle_sort & ) = delete;
+    particle_sort( particle_sort && ) = delete;
+
+    particle_sort_view view() const noexcept {
+        return {
+            max_part,
+            idx,
+            nidx,
+            npt,
+            new_np,
+            ntiles
+        };
+    }
+
+    /**
+     * @brief Checks if idx buffer is large enough, grows if needed
+     *
+     * @note idx buffer is grown in multiples of 64k elements
+     * 
+     * @param new_max   New maximum number of particles required
+     */
+    void check_buffer( uint32_t new_max ) {
+        if ( new_max > max_part ) {
+            memory::free( idx );
+            max_part = roundup<65536>(new_max);
+            idx = memory::malloc<int>( max_part );
+        }
+    }
+
+    /**
+     * @brief Sets np values to 0
+     * 
+     * @note `bnd_check()` accumulates `new_np`, `npt` and `nidx` using global
+     *       atomics (it may use multiple blocks per tile), so all must be
+     *       zeroed before it is called. They share a single buffer, so this
+     *       is done with a single memset.
+     */
+    void reset() {
+        memory::zero( new_np, counters_size() );
+    }
+
+    /**
+    * @brief Exchange number of particles in edge cells
+    *
+    */
+    void exchange_np();
+
+    void update_neighbors( const mpi::cart2d & par, const int2 periodic ) {
+        for( int dir = 0; dir < 9; dir++ )
+            neighbor[ dir ] = part::dir_neighbor( dir, par, periodic );
+    }
+};
+
+
+}

@@ -6,12 +6,12 @@
  * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
  * @param tile_idx_y    Tile index along y direction
  * @param current       View of tiled current grid
- * @param bc            Boundary condition
+ * @param local_bc            Boundary condition
  */
 void current_bcx(
     int bnd_x, int tile_idx_y,
     const grid::tiled_view<float3> current,
-    const current::bc_type bc ) {
+    const current::bc_type local_bc ) {
 
     const int ystride = current.tile_ystride();
 
@@ -21,17 +21,21 @@ void current_bcx(
             (0,tile_idx_y)      // lower x boundary tile
             [ current.gc.x.lower ];     // point to first x cell (ix = 0)
         
-        switch( bc.x.lower ) {
+        switch( local_bc.x.lower ) {
         case( current::bc::reflecting ):
             for( unsigned idx = 0; idx < current.tile_ext_dims.y; idx ++ ) {
                 // iy includes the y-stride
                 const int iy = idx * ystride;
 
-                float jx0 = -J[ -1 + iy ].x + J[ 0 + iy ].x; 
-                float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
-                float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
+                const float jx0 = -J[ -1 + iy ].x + J[ 0 + iy ].x; 
+                const float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
+                const float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
 
-                J[ -1 + iy ].x = J[ 0 + iy ].x = jx0;
+                // Normal component (odd): guard is the negative mirror
+                J[  0 + iy ].x =  jx0;
+                J[ -1 + iy ].x = -jx0;
+
+                // Tangential components (even)
                 J[ -1 + iy ].y = J[ 1 + iy ].y = jy1;
                 J[ -1 + iy ].z = J[ 1 + iy ].z = jz1;
             }
@@ -45,18 +49,22 @@ void current_bcx(
             (current.local_ntiles.x-1,tile_idx_y)    // upper x boundary tile
             [ current.gc.x.lower + current.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
         
-        switch( bc.x.upper ) {
+        switch( local_bc.x.upper ) {
         case( current::bc::reflecting ):
             for( unsigned idx = 0; idx < current.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
 
-                float jx0 =  J[ -1 + iy ].x - J[ + 0 + iy ].x; 
-                float jy1 =  J[ -1 + iy ].y + J[ + 1 + iy ].y;
-                float jz1 =  J[ -1 + iy ].z + J[ + 1 + iy ].z;
+                const float jx0 =  J[ -1 + iy ].x - J[ 0 + iy ].x; 
+                const float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
+                const float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
 
-                J[ -1 + iy ].x = J[ +0 + iy ].x = jx0;
-                J[ -1 + iy ].y = J[ +1 + iy ].y = jy1;
-                J[ -1 + iy ].z = J[ +1 + iy ].z = jz1;
+                // Normal component (odd): interior cell is -1, guard is 0
+                J[ -1 + iy ].x =  jx0;
+                J[  0 + iy ].x = -jx0;
+
+                // Tangential components (even)
+                J[ -1 + iy ].y = J[ 1 + iy ].y = jy1;
+                J[ -1 + iy ].z = J[ 1 + iy ].z = jz1;
             }
             break;
         default:
@@ -71,12 +79,12 @@ void current_bcx(
  * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
  * @param tile_idx_x    Tile index along x direction
  * @param current       View of tiled current grid
- * @param bc            Boundary condition
+ * @param local_bc      Boundary condition
  */
 void current_bcy( 
     int bnd_y, int tile_idx_x,
     const grid::tiled_view<float3> current,
-    const current::bc_type bc ) {
+    const current::bc_type local_bc ) {
 
     const int ystride = current.tile_ystride();
     
@@ -86,17 +94,21 @@ void current_bcy(
             (tile_idx_x,0)              // lower y boundary tiles
             [ current.gc.y.lower * ystride ];   // point to first y cell (iy = 0)
 
-        switch( bc.y.lower ) {
+        switch( local_bc.y.lower ) {
         case( current::bc::reflecting ):
             for( unsigned idx = 0; idx < current.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
-                float jy0 = -J[ ix - ystride ].y + J[ ix +       0 ].y;
-                float jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
+                const float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
+                const float jy0 = -J[ ix - ystride ].y + J[ ix           ].y;
+                const float jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
 
+                // Normal component (odd): guard is the negative mirror
+                J[ ix           ].y =  jy0;
+                J[ ix - ystride ].y = -jy0;
+
+                // Tangential components (even)
                 J[ ix - ystride ].x = J[ ix + ystride ].x = jx1;
-                J[ ix - ystride ].y = J[ ix +       0 ].y = jy0;
                 J[ ix - ystride ].z = J[ ix + ystride ].z = jz1;
             }
             break;
@@ -109,18 +121,22 @@ void current_bcy(
             (tile_idx_x,current.local_ntiles.y-1)   // upper y boundary tiles
             [ (current.gc.y.lower + current.tile_dims.y ) * ystride ];  // point to first upper gc (iy = tile_dims.y)
         
-        switch( bc.y.upper ) {
+        switch( local_bc.y.upper ) {
         case( current::bc::reflecting ):
             for( unsigned idx = 0; idx < current.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                float jx1 =  J[ ix + (-1)*ystride ].x + J[ ix + (+ 1)*ystride ].x; 
-                float jy0 =  J[ ix + (-1)*ystride ].y - J[ ix + (+ 0)*ystride ].y;
-                float jz1 =  J[ ix + (-1)*ystride ].z + J[ ix + (+ 1)*ystride ].z;
+                const float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
+                const float jy0 =  J[ ix - ystride ].y - J[ ix           ].y;
+                const float jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
 
-                J[ ix + (-1)*ystride ].x = J[ ix + (+1)*ystride ].x = jx1;
-                J[ ix + (-1)*ystride ].y = J[ ix + (+0)*ystride ].y = jy0;
-                J[ ix + (-1)*ystride ].z = J[ ix + (+1)*ystride ].z = jz1;
+                // Normal component (odd): interior cell is -1, guard is 0
+                J[ ix - ystride ].y =  jy0;
+                J[ ix           ].y = -jy0;
+
+                // Tangential components (even)
+                J[ ix - ystride ].x = J[ ix + ystride ].x = jx1;
+                J[ ix - ystride ].z = J[ ix + ystride ].z = jz1;
             }
             break;
         default:
@@ -138,21 +154,21 @@ void current::process_bc() {
     const uint2 ntiles          = J -> get_local_ntiles();
 
     // x boundaries
-    if ( bc.x.lower > current::bc::periodic || bc.x.upper > current::bc::periodic ) {
+    if ( local_bc.x.lower > current::bc::periodic || local_bc.x.upper > current::bc::periodic ) {
         #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
             for( unsigned bnd_x : {0,1} ) {
-                current_bcx( bnd_x, ty, J -> view(), bc );
+                current_bcx( bnd_x, ty, J -> view(), local_bc );
             }
         }
     }
 
     // y boundaries
-    if ( bc.y.lower > current::bc::periodic || bc.y.upper > current::bc::periodic ) {
+    if ( local_bc.y.lower > current::bc::periodic || local_bc.y.upper > current::bc::periodic ) {
        #pragma omp parallel for collapse(2)
         for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-                current_bcy( bnd_y, tx, J -> view(), bc );
+                current_bcy( bnd_y, tx, J -> view(), local_bc );
             }
         }
     }

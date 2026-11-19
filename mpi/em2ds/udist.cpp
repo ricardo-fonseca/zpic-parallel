@@ -5,17 +5,20 @@
  * @brief Sets none(0 temperature, 0 fluid) u distribution
  * 
  * @param part  Particle data
+ * @param seed  Random number seed (unused)
  */
-void udist::none::set( part::particles & part, unsigned int seed ) const {
+void udist::none::set( part::particles & part, [[maybe_unused]] unsigned int seed ) const {
+
+    const auto data = part.view();
 
     #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < part.local_ntiles.x * part.local_ntiles.y; tid ++ ) {
+    for( unsigned tid = 0; tid < data.local_ntiles.x * data.local_ntiles.y; tid ++ ) {
 
-        const int offset = part.tile_offset[tid];
-        const int np     = part.tile_np[tid];
-        float3 * __restrict__ const u  = &part.u[ offset ];
+        const int offset = data.tile_offset[tid];
+        const int np     = data.tile_np[tid];
+        float3 * __restrict__ const u  = &data.u[ offset ];
 
-        for( auto i = 0; i < np; i++ ) u[i] = make_float3(0,0,0);
+        for( int i = 0; i < np; i++ ) u[i] = make_float3(0,0,0);
     }
 }
 
@@ -23,46 +26,53 @@ void udist::none::set( part::particles & part, unsigned int seed ) const {
  * @brief Sets cold(0 temperatures) u distribution
  * 
  * @param part  Particle data
+ * @param seed  Random number seed (unused)
  */
-void udist::cold::set( part::particles & part, unsigned int seed ) const {
+void udist::cold::set( part::particles & part, [[maybe_unused]] unsigned int seed ) const {
+
+    const auto data = part.view();
 
     #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < part.local_ntiles.x * part.local_ntiles.y; tid ++ ) {
+    for( unsigned tid = 0; tid < data.local_ntiles.x * data.local_ntiles.y; tid ++ ) {
 
-        const int offset = part.tile_offset[tid];
-        const int np     = part.tile_np[tid];
-        float3 * __restrict__ const u  = &part.u[ offset ];
+        const int offset = data.tile_offset[tid];
+        const int np     = data.tile_np[tid];
+        float3 * __restrict__ const u  = &data.u[ offset ];
 
-        for( auto i = 0; i < np; i++ ) u[i] = ufl;
+        for( int i = 0; i < np; i++ ) u[i] = ufl;
     }
 }
 
 /**
  * @brief Sets momentum of all particles in object using uth / ufl
  * 
+ * @param part  Particle data
+ * @param seed  Random number seed
  */
 void udist::thermal::set( part::particles & part, unsigned int seed ) const {
+
+    const auto data = part.view();
 
     uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
 
     #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < part.local_ntiles.x * part.local_ntiles.y; tid ++ ) {
+    for( unsigned tid = 0; tid < data.local_ntiles.x * data.local_ntiles.y; tid ++ ) {
 
         // Get global tile index
         uint2 global_tile = make_uint2( 
-            part.local_tile_start.x + tid % part.local_ntiles.x,
-            part.local_tile_start.y + tid / part.local_ntiles.x
+            data.local_tile_start.x + tid % data.local_ntiles.x,
+            data.local_tile_start.y + tid / data.local_ntiles.x
         );
-        int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
+        int global_tid = global_tile.y * data.global_ntiles.x + global_tile.x;
 
         // Initialize random state variables
         uint2 state;
         double norm;
         zrandom::rand_init( global_tid, rnd_seed, state, norm );
 
-        const int offset = part.tile_offset[tid];
-        const int np     = part.tile_np[tid];
-        float3 * __restrict__ const u  = &part.u[ offset ];
+        const int offset = data.tile_offset[tid];
+        const int np     = data.tile_np[tid];
+        float3 * __restrict__ const u  = &data.u[ offset ];
 
         for( int i = 0; i < np; i++ ) {
             u[i] = make_float3(
@@ -77,16 +87,20 @@ void udist::thermal::set( part::particles & part, unsigned int seed ) const {
 /**
  * @brief Sets particle momentum correcting local ufl fluctuations
  * 
+ * @param part  Particle data
+ * @param seed  Random number seed
  */
 void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const {
 
+    const auto data = part.view();
+
     uint2 rnd_seed = make_uint2( 12345 + seed, 67890 );
 
-    const auto bsize = part.tile_dims.x * part.tile_dims.y;
-    const int ystride = part.tile_dims.x;
+    const unsigned bsize = data.tile_dims.x * data.tile_dims.y;
+    const int ystride = data.tile_dims.x;
 
     #pragma omp parallel for schedule(dynamic)   
-    for( unsigned tid = 0; tid < part.local_ntiles.x * part.local_ntiles.y; tid ++ ) {
+    for( unsigned tid = 0; tid < data.local_ntiles.x * data.local_ntiles.y; tid ++ ) {
 
         // fluid[] and npcell[] should be in block shared memory
         float3 fluid[ bsize ];
@@ -101,22 +115,22 @@ void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const
 
         // Get global tile index
         uint2 global_tile = make_uint2( 
-            part.local_tile_start.x + tid % part.local_ntiles.x,
-            part.local_tile_start.y + tid / part.local_ntiles.x
+            data.local_tile_start.x + tid % data.local_ntiles.x,
+            data.local_tile_start.y + tid / data.local_ntiles.x
         );
-        int global_tid = global_tile.y * part.global_ntiles.x + global_tile.x;
+        int global_tid = global_tile.y * data.global_ntiles.x + global_tile.x;
 
         // Initialize random state variables
         uint2 state;
         double norm;
         zrandom::rand_init( global_tid, rnd_seed, state, norm );
 
-        const int offset = part.tile_offset[tid];
-        const int np     = part.tile_np[tid];
-        float3 * __restrict__ const u  = &part.u[ offset ];
-        int2 const * const __restrict__ ix = &part.ix[offset];
+        const int offset = data.tile_offset[tid];
+        const int np     = data.tile_np[tid];
+        float3 * __restrict__ const u  = &data.u[ offset ];
+        int2 const * const __restrict__ ix = &data.ix[offset];
 
-        for( auto i = 0; i < np; i++ ) {
+        for( int i = 0; i < np; i++ ) {
             float3 upart = make_float3(
                 uth.x * zrandom::rand_norm( state, norm ),
                 uth.y * zrandom::rand_norm( state, norm ),

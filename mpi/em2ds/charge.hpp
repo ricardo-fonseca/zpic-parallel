@@ -9,6 +9,8 @@ class charge {
 
     public:
 
+    using complex_t = std::complex<float>;
+
     enum class quantity  { rho = 0, frho };
 
     struct bc {
@@ -27,8 +29,11 @@ class charge {
     /// @brief time step
     float dt;
 
-    /// @brief Boundary condition
-    charge::bc_type bc;
+    /// @brief Boundary condition (global values)
+    charge::bc_type global_bc;
+
+    /// @brief Boundary condition (local rank values)
+    charge::bc_type local_bc;
 
     /// @brief Iteration number
     int iter;
@@ -42,19 +47,84 @@ class charge {
      */
     void process_bc();
 
+    /**
+     * @brief Validate boundary conditions against the parallel partition
+     * 
+     * @note Calls mpi::fatal() on invalid combinations
+     * 
+     * @param test_bc   Boundary conditions to validate
+     */
+    void validate_bc( const charge::bc_type & test_bc ) const {
+
+        // Periodic boundaries must be set on both sides
+        if ( (test_bc.x.lower == charge::bc::periodic) || (test_bc.x.upper == charge::bc::periodic) ) {
+            if ( test_bc.x.lower != test_bc.x.upper ) {
+                mpi::fatal( "Charge boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to charge::bc::periodic." );
+            }
+        }
+
+        if ( (test_bc.y.lower == charge::bc::periodic) || (test_bc.y.upper == charge::bc::periodic) ) {
+            if ( test_bc.y.lower != test_bc.y.upper ) {
+                mpi::fatal( "Charge boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to charge::bc::periodic." );
+            }
+        }
+
+        // Boundary periodicity must match partition periodicity (both ways)
+        const auto & part = rho -> get_part();
+
+        if ( part.periodic.x && test_bc.x.lower != charge::bc::periodic ) {
+            mpi::fatal( "Only periodic x boundaries are supported with periodic x parallel partitions.");
+        }
+
+        if ( part.periodic.y && test_bc.y.lower != charge::bc::periodic ) {
+            mpi::fatal( "Only periodic y boundaries are supported with periodic y parallel partitions.");
+        }
+
+        if ( ! part.periodic.x && test_bc.x.lower == charge::bc::periodic ) {
+            mpi::fatal( "Periodic x boundaries require a periodic x parallel partition.");
+        }
+
+        if ( ! part.periodic.y && test_bc.y.lower == charge::bc::periodic ) {
+            mpi::fatal( "Periodic y boundaries require a periodic y parallel partition.");
+        }
+    }
+
     public:
 
-    /// @brief Charge density
+    /**
+     * @brief Charge density
+     * 
+     * @note Owned by this object
+     */
     grid::tiled<float> * rho;
 
-    /// @brief Charge density k-space
-    grid::flat<std::complex<float>> * frho;
+    /**
+     * @brief Charge density k-space (filtered)
+     * 
+     * @note Owned by this object. Symmetric (NVSHMEM) allocation created by
+     *       `fft_forward`
+     */
+    grid::flat<complex_t> * frho;
 
-    /// @brief Neutralizing background
+    /**
+     * @brief Neutralizing background
+     * 
+     * @note Defaults to `nullptr` (no background). If set, ownership is
+     *       transferred to this object, which will delete it. Must have the
+     *       same tiling as `rho`
+     */
     grid::tiled<float> * neutral;
 
-    /// @brief Filtering parameters
-    filter::digital *filter;
+    /**
+     * @brief Filtering parameters
+     * 
+     * @note Owned by this object, use set_filter() to replace it
+     */
+    std::unique_ptr<filter::digital> filter;
 
     /**
      * @brief Construct a new Charge object
@@ -79,17 +149,21 @@ class charge {
         rho -> name = "Charge";
 
         fft_forward = new grid::fft::r2c_plan( *rho );
-        frho = grid::fft::new_complex_grid( *rho );
+        frho = fft_forward -> new_kspace_grid();
 
         // Zero initial charge
         // This is only relevant for diagnostics, current should always zeroed before deposition
         rho -> zero();
 
-        // Set default boundary conditions to periodic
-        bc = charge::bc_type (charge::bc::periodic);
+        // Default boundary conditions follow the partition periodicity:
+        // periodic where the partition is periodic, none otherwise
+        charge::bc_type default_bc = charge::bc_type (charge::bc::periodic);
+        if ( ! parallel.periodic.x ) default_bc.x.lower = default_bc.x.upper = charge::bc::none;
+        if ( ! parallel.periodic.y ) default_bc.y.lower = default_bc.y.upper = charge::bc::none;
+        set_bc( default_bc );
 
         // Set default filtering
-        filter = new filter::lowpass( make_float2( 0.5, 0.5 ) );
+        filter = std::make_unique<filter::lowpass>( make_float2( 0.5, 0.5 ) );
 
         // Reset iteration number
         iter = 0;
@@ -106,12 +180,10 @@ class charge {
      * 
      */
     ~charge() {
-        delete (filter);
-        
         delete (rho);
         delete (frho);
-        delete (neutral);
 
+        delete (neutral);
         delete( fft_forward );
     }
 
@@ -120,7 +192,7 @@ class charge {
      * 
      * @return charge::bc_type
      */
-    charge::bc_type get_bc( ) { return bc; }
+    charge::bc_type get_bc( ) { return global_bc; }
 
     /**
      * @brief Set the boundary conditions
@@ -130,46 +202,47 @@ class charge {
     void set_bc( charge::bc_type new_bc ) {
 
         // Validate parameters
-        if ( (new_bc.x.lower == charge::bc::periodic) || (new_bc.x.upper == charge::bc::periodic) ) {
-            if ( new_bc.x.lower != new_bc.x.upper ) {
-                mpi::fatal( "Charge boundary type mismatch along x."
-                            " When choosing periodic boundaries both lower and upper types"
-                            " must be set to current::bc::periodic." );
-            }
-        }
-
-        if ( (new_bc.y.lower == charge::bc::periodic) || (new_bc.y.upper == charge::bc::periodic) ) {
-            if ( new_bc.y.lower != new_bc.y.upper ) {
-                mpi::fatal( "Charge boundary type mismatch along y."
-                            " When choosing periodic boundaries both lower and upper types"
-                            " must be set to current::bc::periodic." );
-            }
-        }
-
-        if ( rho -> get_part().periodic.x && new_bc.x.lower != charge::bc::periodic ) {
-            mpi::fatal( "Only periodic x boundaries are supported with periodic x parallel partitions.");
-        }
-
-        if ( rho -> get_part().periodic.y && new_bc.y.lower != charge::bc::periodic ) {
-            mpi::fatal( "Only periodic y boundaries are supported with periodic y parallel partitions.");
-        }
+        validate_bc( new_bc );
 
         // Store new values
-        bc = new_bc;
+        local_bc = global_bc = new_bc;
 
+        // Correct local rank values
+        const auto & part = rho -> get_part();
+        if ( ! part.on_edge( coord::x, edge::lower ) ) local_bc.x.lower = charge::bc::none;
+        if ( ! part.on_edge( coord::x, edge::upper ) ) local_bc.x.upper = charge::bc::none;
+        if ( ! part.on_edge( coord::y, edge::lower ) ) local_bc.y.lower = charge::bc::none;
+        if ( ! part.on_edge( coord::y, edge::upper ) ) local_bc.y.upper = charge::bc::none;
+
+        // Issue warning for reflecting boundaries
         if ( mpi::root() ) {
-            std::string bc_name[] = {"none", "periodic", "reflecting"};
-            std::cout << "(*info*) Charge boundary conditions\n";
-            std::cout << "(*info*) x : [ " << bc_name[ bc.x.lower ] << ", " << bc_name[ bc.x.upper ] << " ]\n";
-            std::cout << "(*info*) y : [ " << bc_name[ bc.y.lower ] << ", " << bc_name[ bc.y.upper ] << " ]\n";
+            if ( global_bc.x.lower == charge::bc::reflecting || global_bc.x.upper == charge::bc::reflecting ||
+                 global_bc.y.lower == charge::bc::reflecting || global_bc.y.upper == charge::bc::reflecting ) {
+                std::cout << "(*warning*) Reflecting charge boundaries only fold guard cell charge,"
+                             " the spectral field solve remains periodic\n";
+            }
         }
+    }
+
+    /**
+     * @brief Replace the digital filter
+     * 
+     * @note Stores a copy (via clone()) and deletes the previous filter; the
+     *       caller keeps ownership of `new_filter`
+     * 
+     * @param new_filter    New filter object
+     */
+    void set_filter( const filter::digital & new_filter ) {
+        filter = new_filter.clone();
     }
 
     /**
      * @brief Advance charge
      * 
-     * @note This will i) update tile edge values, ii) add neutral background,
-     *       iii) Fourier transform and iv) filter 
+     * @note This will i) add up charge deposited on guard cells, ii) apply
+     *       physical boundary conditions, iii) add the neutralizing background,
+     *       iv) Fourier transform and v) filter.
+     * @note Filtering is applied to `frho` only, `rho` remains unfiltered
      */
     void advance();
 
@@ -183,6 +256,9 @@ class charge {
 
     /**
      * @brief Save charge density to disk
+     * 
+     * @note `rho` is saved unfiltered, `frho` is saved filtered, with ky
+     *       rotated so that the ky axis is monotonic
      * 
      * @param quant     Which quantity to save (rho or frho)
      */

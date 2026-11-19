@@ -199,6 +199,8 @@ inline void inject_uniform_kernel(
 void density::uniform::inject( part::particles & part, 
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {
+    const auto data = part.view();
+
 
 #if 0
 
@@ -218,16 +220,16 @@ void density::uniform::inject( part::particles & part,
 
 
 
-    // const int2 ntiles = make_int2( part.local_ntiles.x, part.local_ntiles.y );
+    // const int2 ntiles = make_int2( data.local_ntiles.x, data.local_ntiles.y );
 
-    auto ntiles = part.local_ntiles;
+    auto ntiles = data.local_ntiles;
 
     #pragma omp parallel for
     for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
         auto tx = tid % ntiles.x;
         auto ty = tid / ntiles.x;
         const uint2 tile_idx = make_uint2( tx, ty );
-        inject_uniform_kernel( tile_idx, range, ppc, part );
+        inject_uniform_kernel( tile_idx, range, ppc, data );
     }
 #endif
 
@@ -310,12 +312,14 @@ void density::uniform::np_inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
+    const auto data = part.view();
+
     #pragma omp parallel for collapse(2)
-    for( unsigned ty = 0; ty < part.local_ntiles.y; ty++ ) {
-        for( unsigned tx = 0; tx < part.local_ntiles.x; tx++ ) {
+    for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+        for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
             np_inject_uniform_kernel(
                 make_uint2( tx, ty ), range, ppc,
-                part, np
+                data, np
             );
         }
     }
@@ -440,6 +444,8 @@ void inject_step_kernel(
 void density::step::inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {    
+    const auto data = part.view();
+
     /// @brief Step position (normalized to node grid coordinates)
     float step_pos;
 
@@ -447,22 +453,22 @@ void density::step::inject( part::particles & part,
     case( coord::x ):
         step_pos = (pos - ref.x) / dx.x;
         #pragma omp parallel for collapse(2) schedule(dynamic)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 inject_step_kernel <coord::x> (
                     make_uint2( tx, ty ), range, step_pos, ppc, 
-                    part );
+                    data );
             }
         }
         break;
     case( coord::y ):
         step_pos = (pos - ref.y) / dx.y;
         #pragma omp parallel for collapse(2) schedule(dynamic)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.y; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 inject_step_kernel <coord::y> (
                     make_uint2( tx, ty ), range, step_pos, ppc,
-                    part );
+                    data );
             }
         }
         break;
@@ -577,6 +583,8 @@ void density::step::np_inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
+    const auto data = part.view();
+
     /// @brief Step position (normalized to node grid coordinates)
     float step_pos;
 
@@ -584,22 +592,22 @@ void density::step::np_inject( part::particles & part,
     case( coord::x ):
         step_pos = (pos - ref.x) / dx.x;
         #pragma omp parallel for collapse(2)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 np_inject_step_kernel <coord::x> (
                     make_uint2( tx, ty ), range, step_pos, ppc,
-                    part, np );
+                    data, np );
             }
         }
         break;
     case( coord::y ):
         step_pos = (pos - ref.y) / dx.y;
         #pragma omp parallel for collapse(2)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.y; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 np_inject_step_kernel <coord::y> (
                     make_uint2( tx, ty ), range, step_pos, ppc,
-                    part, np );
+                    data, np );
             }
         }
         break;
@@ -731,6 +739,8 @@ void inject_slab_kernel(
 void density::slab::inject( part::particles & part,
     uint2 const ppc,float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {
+    const auto data = part.view();
+
     /// @brief Slab start position (normalized to node grid coordinates) 
     float slab_begin;
     /// @brief Slab end position (normalized to node grid coordinates) 
@@ -741,11 +751,11 @@ void density::slab::inject( part::particles & part,
         slab_begin = (begin - ref.x)/ dx.x;
         slab_end   = (end - ref.x)/ dx.x;
         #pragma omp parallel for collapse(2) schedule(dynamic)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 inject_slab_kernel < coord::x > (
                     make_uint2( tx, ty ), range, slab_begin, slab_end, ppc,
-                    part );
+                    data );
             }
         }
         break;
@@ -753,11 +763,11 @@ void density::slab::inject( part::particles & part,
         slab_begin = (begin - ref.y)/ dx.y;
         slab_end   = (end - ref.y)/ dx.y;
         #pragma omp parallel for collapse(2) schedule(dynamic)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 inject_slab_kernel < coord::y > (
                     make_uint2( tx, ty ), range, slab_begin, slab_end, ppc,
-                    part );
+                    data );
             }
         }
         break;
@@ -879,6 +889,8 @@ void density::slab::np_inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
+    const auto data = part.view();
+
     /// @brief Slab start position (normalized to node grid coordinates) 
     float slab_begin;
     /// @brief Slab end position (normalized to node grid coordinates) 
@@ -889,12 +901,12 @@ void density::slab::np_inject( part::particles & part,
         slab_begin = (begin - ref.x)/ dx.x;
         slab_end   = (end - ref.x)/ dx.x;
         #pragma omp parallel for collapse(2)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 np_inject_slab_kernel < coord::x > (
                     make_uint2( tx, ty ),
                     range, slab_begin, slab_end, ppc,
-                    part, np );
+                    data, np );
             }
         }
         break;
@@ -902,11 +914,11 @@ void density::slab::np_inject( part::particles & part,
         slab_begin = (begin - ref.y)/ dx.y;
         slab_end   = (end - ref.y)/ dx.y;
         #pragma omp parallel for collapse(2)
-        for( unsigned ty = 0; ty < part.local_ntiles.y; ++ty ) {
-            for( unsigned tx = 0; tx < part.local_ntiles.x; ++tx ) {
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
                 np_inject_slab_kernel < coord::y > (
                     make_uint2( tx, ty ), range, slab_begin, slab_end, ppc,
-                    part, np );
+                    data, np );
             }
         }
         break;
@@ -1026,17 +1038,19 @@ inline void inject_sphere_kernel(
 void density::sphere::inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {
+    const auto data = part.view();
+
 
     float2 sphere_center = center;
     sphere_center.x -= ref.x;
     sphere_center.y -= ref.y;
 
     #pragma omp parallel for collapse(2) schedule(dynamic)
-    for( unsigned ty = 0; ty < part.local_ntiles.y; ty++ ) {
-        for( unsigned tx = 0; tx < part.local_ntiles.x; tx++ ) {
+    for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+        for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
             inject_sphere_kernel (
                 make_uint2( tx, ty ), range, sphere_center, radius, dx, ppc,
-                part );
+                data );
         }
     }
 }
@@ -1139,17 +1153,19 @@ void density::sphere::np_inject( part::particles & part,
     uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
+    const auto data = part.view();
+
     float2 sphere_center = center;
     sphere_center.x -= ref.x;
     sphere_center.y -= ref.y;
 
     #pragma omp parallel for collapse(2)
-    for( unsigned ty = 0; ty < part.local_ntiles.y; ty++ ) {
-        for( unsigned tx = 0; tx < part.local_ntiles.x; tx++ ) {
+    for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+        for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
             np_inject_sphere_kernel (
                 make_uint2( tx, ty ),
                 range, sphere_center, radius, dx, ppc,
-                part, np );
+                data, np );
         }
     }
 

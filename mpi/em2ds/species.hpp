@@ -11,6 +11,15 @@
 #include "density.hpp"
 #include "udist.hpp"
 
+namespace part {
+
+/**
+ * @brief Particle quantity identifiers (for gather)
+ * 
+ */
+enum class quantity { x, y, ux, uy, uz };
+}
+
 namespace phasespace {
     enum class quantity { x = 0, y, ux, uy, uz };
 
@@ -44,7 +53,7 @@ class species {
 public:
 
     enum class pusher{ boris = 0, euler };
-    struct bc { enum type { open = 0, periodic, reflecting }; };
+    struct bc { enum type { open = 0, comm, periodic, reflecting }; };
     using bc_type = bounds_2d<bc::type>;
 
 protected:
@@ -80,7 +89,10 @@ protected:
     part::particle_sort *sort;
 
     /// @brief Initial density profile
-    density::profile * density;
+    std::unique_ptr<density::profile> density;
+
+    /// @brief Initial velocity distribution
+    std::unique_ptr<udist::type> udist;
 
     /// @brief Number of particles being injected
     int * np_inj;
@@ -93,17 +105,98 @@ protected:
 
 private:
 
-    /// @brief Boundary condition
-    species::bc_type bc;
+    /// @brief Boundary condition (global values)
+    species::bc_type global_bc;
 
-    /// @brief Initial velocity distribution
-    udist::type * udist;
+    /// @brief Boundary condition (local rank values)
+    species::bc_type local_bc;
 
-    /// @brief Total species energy on device
-    double d_energy;
+    /// @brief Total species energy
+    double energy;
 
     /// @brief Total number of particles moved
-    uint64_t d_nmove;
+    uint64_t nmove;
+
+    /**
+     * @brief Periodic flags (x,y) corresponding to the current global_bc
+     * 
+     * @return int2 
+     */
+    int2 global_periodic() const {
+        return make_int2(
+            global_bc.x.lower == species::bc::periodic,
+            global_bc.y.lower == species::bc::periodic
+        );
+    }
+
+    /**
+     * @brief Validate boundary conditions against the parallel partition
+     * 
+     * @note Calls mpi::fatal() on invalid combinations
+     * 
+     * @param test_bc   Global boundary conditions to validate
+     */
+    void validate_bc( const species::bc_type & test_bc, const mpi::cart2d & parallel ) const {
+
+        if ( test_bc.x.lower == species::bc::comm || test_bc.x.upper == species::bc::comm ||
+             test_bc.y.lower == species::bc::comm || test_bc.y.upper == species::bc::comm  ) {
+            mpi::fatal( "invalid species boundary type, bc::comm is for internal use only");
+        }
+
+        if ( (test_bc.x.lower == species::bc::periodic) || (test_bc.x.upper == species::bc::periodic) ) {
+            if ( test_bc.x.lower != test_bc.x.upper ) {
+                mpi::fatal( "species boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
+            }
+        }
+
+        if ( (test_bc.y.lower == species::bc::periodic) || (test_bc.y.upper == species::bc::periodic) ) {
+            if ( test_bc.y.lower != test_bc.y.upper ) {
+                mpi::fatal( "species boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
+            }
+        }
+
+        // Issue warning for reflecting boundaries
+        if ( mpi::root() ) {
+            if ( test_bc.x.lower == species::bc::reflecting || test_bc.x.upper == species::bc::reflecting ||
+                 test_bc.y.lower == species::bc::reflecting || test_bc.y.upper == species::bc::reflecting ) {
+                std::cout << "(*warning*) Reflecting species bc only fold particles,"
+                             " the spectral field solve remains periodic\n";
+            }
+        }
+
+        // Test against parallel partition
+        if ( ! parallel.periodic.x && test_bc.x.lower == species::bc::periodic ) {
+            mpi::fatal( "Periodic x boundaries require a periodic x parallel partition.");
+        }
+
+        if ( ! parallel.periodic.y && test_bc.y.lower == species::bc::periodic ) {
+            mpi::fatal( "Periodic y boundaries require a periodic y parallel partition.");
+        }
+    }
+
+    /**
+     * @brief Update values of local_bc and other objects from global_bc
+     *
+     * @note Assumes global_bc have been validated
+     */
+    void update_bc( const mpi::cart2d & parallel ) {
+        // update local rank boundary conditions
+        local_bc = global_bc;
+        if ( ! parallel.on_edge( coord::x, edge::lower ) ) local_bc.x.lower = species::bc::comm;
+        if ( ! parallel.on_edge( coord::x, edge::upper ) ) local_bc.x.upper = species::bc::comm;
+        if ( ! parallel.on_edge( coord::y, edge::lower ) ) local_bc.y.lower = species::bc::comm;
+        if ( ! parallel.on_edge( coord::y, edge::upper ) ) local_bc.y.upper = species::bc::comm;
+
+        // Update particles, tmp and sort objects, if initialized
+        int2 periodic = global_periodic();
+        if ( particles ) particles -> set_periodic( periodic );
+        if ( tmp )  tmp -> set_periodic( periodic );
+        if ( sort ) sort -> update_neighbors( parallel, periodic );
+    };
 
     /**
      * @brief Deposit 1D phasespace density
@@ -149,7 +242,42 @@ public:
      * @param m_q   Mass over charge ratio
      * @param ppc   Number of particles per cell
      */
-    species( std::string const name, float const m_q, uint2 const ppc );
+    species( std::string const name, float const m_q, uint2 const ppc ):
+    ppc(ppc), name(name), m_q(m_q)
+    {
+
+        // Validate parameters
+        if ( m_q == 0 ) {
+            mpi::fatal( "Invalid m_q value (0.0) must be not 0" );
+        }
+
+        if ( ppc.x < 1 || ppc.y < 1 ) {
+            mpi::fatal( "Invalid ppc value (" + to_string(ppc) + 
+                "), must be >= 1 in all directions" );
+        }
+
+        // Set default parameters
+        density   = std::make_unique<density::uniform>( 1.0 );
+        udist     = std::make_unique<udist::none>();
+        global_bc = species::bc_type (species::bc::periodic);
+        push_type = species::pusher::boris;
+
+        // Nullify pointers to data structures
+        particles = nullptr;
+        tmp = nullptr;
+        sort = nullptr;
+        np_inj = nullptr;
+
+        // Invalidate parameters that will be set on initialize
+        id = 0;
+        q = 0;
+        dx = {0, 0};
+        box = { 0, 0 };
+        iter = -1;
+
+        energy = -1;
+        nmove = 0;
+    }
 
     /**
      * @brief Copy constructor
@@ -180,7 +308,13 @@ public:
      * @brief Destroy the Species object
      * 
      */
-    virtual ~species();
+    virtual ~species(){
+        memory::free( np_inj );
+
+        delete( tmp );
+        delete( sort );
+        delete( particles );
+    };
 
     /**
      * @brief Set the density profile object
@@ -188,7 +322,6 @@ public:
      * @param new_density   New density object to be cloned
      */
     virtual void set_density( density::profile const & new_density ) {
-        delete density;
         density = new_density.clone();
 
         // Recompute charge normalization factor in case initialize()
@@ -211,7 +344,6 @@ public:
      * @param new_udist     New udist object to be cloned
      */
     virtual void set_udist( udist::type const & new_udist ) {
-        delete udist;
         udist = new_udist.clone();
     }
 
@@ -231,41 +363,14 @@ public:
      */
     void set_bc( species::bc_type new_bc ) {
 
-        // Validate parameters
-        if ( (new_bc.x.lower == species::bc::periodic) || (new_bc.x.upper == species::bc::periodic) ) {
-            if ( new_bc.x.lower != new_bc.x.upper ) {
-                mpi::fatal( "Species boundary type mismatch along x."
-                            " When choosing periodic boundaries both lower and upper types"
-                            " must be set to species::bc::periodic." );
-            }
-        }
-
-        if ( (new_bc.y.lower == species::bc::periodic) || (new_bc.y.upper == species::bc::periodic) ) {
-            if ( new_bc.y.lower != new_bc.y.upper ) {
-                mpi::fatal( "Species boundary type mismatch along y."
-                            " When choosing periodic boundaries both lower and upper types"
-                            " must be set to species::bc::periodic." );
-            }
-        }
-
-        // Only periodic and open boundaries are currently implemented
-        if (( new_bc.x.lower == species::bc::reflecting ) ||
-            ( new_bc.x.upper == species::bc::reflecting ) ||
-            ( new_bc.y.lower == species::bc::reflecting ) ||
-            ( new_bc.y.upper == species::bc::reflecting ) ) {
-            
-            mpi::fatal( "Reflecting boundaries for species is not yet implemented");
-        }
-
         // Store new values
-        bc = new_bc;
+        global_bc = new_bc;
 
-        // Set periodic flags on tile grids
+        // If initialized, update local_bc and other objects
         if ( particles ) {
-            particles -> set_periodic( make_int2( 
-                bc.x.lower == species::bc::periodic,
-                bc.y.lower == species::bc::periodic
-            ));
+            const auto & parallel = particles -> get_parallel();
+            validate_bc( new_bc, parallel );
+            update_bc( parallel );
         }
     }
 
@@ -274,30 +379,52 @@ public:
      * 
      * @return species::bc_type 
      */
-    species::bc_type get_bc( ) { return bc; }
+    species::bc_type get_bc( ) { return global_bc; }
 
 
     /**
-     * @brief Inject particles in the simulation box
+     * @brief Inject particles in the complete simulation box
      * 
      */
-    virtual void inject();
+    virtual void inject() {
+
+        /// @brief position of lower corner of global grid in simulation units
+        float2 global_ref{0,0};
+
+        density -> inject( *particles, ppc, dx, global_ref, particles -> local_range() );
+    }
 
     /**
      * @brief Inject particles in the specified range of the simulation
      * 
      * @param range     Range in which to inject particles
      */
-    virtual void inject( bounds_2d<unsigned int> range );
+    virtual void inject( bounds_2d<unsigned int> range ){
+
+        /// @brief position of lower corner of global grid in simulation units
+        float2 global_ref{0,0};
+
+        density -> inject( *particles, ppc, dx, global_ref, range );
+    }
 
 
     /**
      * @brief Gets number of particles that will be injected per tile
      * 
+     * Although the routine only considers injection in a specific range, the
+     * number of particles to be injected is calculated on all tiles (returning
+     * zero on those, as expected)
+     *
      * @param range     Range in which to inject particles
      * @param np        Device pointer to number of particles to be injected per tile
      */
-    virtual void np_inject( bounds_2d<unsigned int> range, int * np );
+    virtual void np_inject( bounds_2d<unsigned int> range, int * np ) {
+
+        /// @brief position of lower corner of global grid in simulation units
+        float2 global_ref{0,0};
+
+        density -> np_inject( *particles, ppc, dx, global_ref, range, np );
+    }
 
     /**
      * @brief Advance particle velocities
@@ -305,14 +432,14 @@ public:
      * @param E     Electric field
      * @param B     Magnetic field
      */
-    void push( grid::tiled_vec3<float> * const E, grid::tiled_vec3<float> * const B );
+    void push( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B );
 
     /**
      * @brief Move particles (advance positions) and deposit current/charge
      * 
      * @param current   Electric current density
      */
-    void move( grid::tiled_vec3<float> * const current, grid::tiled<float> * charge );
+    void move( grid::tiled_vec3<float> & current, grid::tiled<float> & charge );
 
     /**
      * @brief Move particles (advance positions) without depositing current
@@ -323,30 +450,81 @@ public:
     /**
      * @brief Free stream particles 1 timestep
      * 
-     * Particles are free-streamed (no momentum update), no current is deposited.
-     * Used mostly for debug purposes.
+     * @note Particles are free-streamed (no momentum update), no current is deposited.
+     *       Used mostly for debug purposes.
      * 
      */
-    virtual void advance();
+    virtual void advance() {
+
+        // Advance positions
+        move();
+
+        // Process physical boundary conditions
+        process_bc();
+        
+        // Sort particles according to tile
+        particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
+    }
 
     /**
      * @brief Free stream particles 1 timestep
      * 
-     * Particles are free-streamed (no momentum update) and current is deposited
+     * This routine will:
+     * 1. Advance positions and deposit current
+     * 2. Process boundary conditions
+     * 3. Sort particles according to tiles
      * 
      * @param current   Electric current density
+     * @param charge    Electric charge density
      */
-    virtual void advance( current &current, charge &charge );
+    virtual void advance( current &current, charge &charge ) {
+
+        // Advance positions and deposit current/charge
+        move( * current.J, * charge.rho );
+
+        // Process physical boundary conditions
+        process_bc();
+
+        // Sort particles according to tile
+        particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
+    }
 
     /**
-     * @brief Advance particles 1 timestep
-     * 
-     * Momentum is advanced from EMF fields and current is deposited
-     * 
-     * @param emf       EM fields
-     * @param current   Electric current density
-     */
-    virtual void advance( emf const &emf, current &current, charge &charge );
+    * @brief Advance particles 1 iteration
+    * 
+    * This routine will:
+    * 1. Advance momenta
+    * 2. Advance positions and deposit current
+    * 3. Process boundary conditions
+    * 4. Sort particles according to tiles
+    * 
+    * @param emf        EM fields
+    * @param current    Electric durrent density
+    * @param charge     Electric charge density
+    */
+    virtual void advance( emf const &emf, current &current, charge &charge ){
+
+        // Advance momenta
+        push( * emf.E, * emf.B );
+
+        // Advance positions and deposit current/charge
+        move( * current.J, * charge.rho );
+
+        // Process physical boundary conditions
+        process_bc();
+
+        // Sort particles according to tile
+        particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
+    }
 
     /**
      * @brief Deposit species charge
@@ -362,7 +540,7 @@ public:
      */
     double get_energy() const {
         // Normalize and return
-        return d_energy * q * m_q * dx.x * dx.y;
+        return energy * q * m_q * dx.x * dx.y;
     }
 
     /**
@@ -372,7 +550,7 @@ public:
      */
     auto get_nmove() const {
 
-        return d_nmove;
+        return nmove;
     }
 
     /**
@@ -412,6 +590,19 @@ public:
     uint64_t global_np( bool all = false ) {
         return particles -> global_np( all );
     }
+
+    /**
+    * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+    * 
+    * @warning This expects the particle buffer to be compact, it will fail if 
+    *          called with a non-compact buffer.
+    *
+    * @param quant     Quantity to gather
+    * @param d_data    Output data buffer, assumed to have size >= np
+    * @param scale     Scale factor for data
+    */
+    void gather( part::quantity quant, float * const __restrict__ d_data,
+        const float2 scale = make_float2( 1, 0 ) ) const;
 
     /**
      * @brief Save particle data to file

@@ -202,3 +202,99 @@ __GEN_VEC3( double3, double )
 
 #undef __GEN_VEC3
 
+
+/**
+ * @brief Define basic vec4 types compatible with CUDA types and a set of
+ *        utility functions
+ * 
+ * @warning The vec3 types are not enforcing memory alignment
+ * 
+ * @note
+ * 
+ * It implements the following functions:
+ * 
+ * + operator+=
+ * + operator-=
+ * + operator*=
+ * + operator+
+ * + operator-
+ * + operator* ( v3, v3 ) - multiplies each component
+ * + operator* ( v3, scalar )
+ * + operator* ( scalar, v3 )
+ * + operator==
+ * + operator!=
+ * + operator<<
+ * + dot ( v3, v3 ) - dot product 
+ * + cross ( v3, v3 ) - dot product 
+ * + vec2<T> - template for returning vector type from scalar type
+ */
+
+
+template < class T > struct vec4_class{ 
+    static_assert( sizeof(T) == 0, "Unsupported datatype");
+    using type = void;
+};
+
+template < class T >
+using vec4 = typename vec4_class<T>::type;
+
+#define __GEN_VEC4( V, S, A ) \
+struct alignas(A) V { S x, y, z, w; }; \
+\
+inline \
+V make_##V ( S x, S y, S z, S w ) { V vec4{x,y,z,w}; return vec4; } \
+\
+inline \
+V& operator+= ( V& lhs, const V& rhs ) { lhs.x += rhs.x; lhs.y += rhs.y; lhs.z += rhs.z; lhs.w += rhs.w; return lhs; }\
+\
+inline \
+V& operator-= ( V& lhs, const V& rhs ) { lhs.x -= rhs.x; lhs.y -= rhs.y; lhs.z -= rhs.z; lhs.w -= rhs.w; return lhs; }\
+\
+inline \
+V& operator*= ( V& lhs, const V& rhs ) { lhs.x *= rhs.x; lhs.y *= rhs.y; lhs.z *= rhs.z; lhs.w *= rhs.w; return lhs; }\
+\
+inline \
+V& operator/= ( V& lhs, const V& rhs ) { lhs.x /= rhs.x; lhs.y /= rhs.y; lhs.z /= rhs.z; lhs.w /= rhs.w; return lhs; }\
+\
+inline \
+V operator+ ( V lhs, const V& rhs ) { lhs += rhs; return lhs; }\
+\
+inline \
+V operator- ( V lhs, const V& rhs ) { lhs -= rhs; return lhs; }\
+\
+inline \
+V operator* ( V lhs, const V& rhs ) { lhs *= rhs; return lhs; }\
+\
+inline \
+V operator/ ( V lhs, const V& rhs ) { lhs /= rhs; return lhs; }\
+\
+inline std::ostream& operator<<(std::ostream& os, const V& obj) { \
+    return os << "(" << obj.x << ", " << obj.y << ", " << obj.z << ", " << obj.w << ")"; } \
+\
+inline std::string to_string( const V& obj ) { \
+    std::ostringstream oss; oss << obj; return oss.str(); \
+} \
+inline \
+bool operator==( const V &lhs, const V &rhs ) { \
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w; } \
+\
+inline \
+bool operator!=( const V &lhs, const V &rhs ) { \
+    return lhs.x != rhs.x || lhs.y != rhs.y || lhs.z != rhs.z || lhs.w != rhs.w; } \
+\
+inline \
+auto dot( const V lhs, const V rhs  ) { return lhs.x*rhs.x + lhs.y*rhs.y + lhs.z*rhs.z + lhs.w*rhs.w; } \
+\
+inline \
+V operator*( V v4, const S& s ) { v4.x *= s; v4.y *= s; v4.z *= s; v4.w *= s; return v4; } \
+\
+inline \
+V operator*( const S& s, V v4 ) { v4.x *= s; v4.y *= s; v4.z *= s; v4.w *= s; return v4; } \
+\
+template <> struct vec4_class<S> { using type = V; };
+__GEN_VEC4( int4, int, 16 )
+__GEN_VEC4( uint4, unsigned int, 16 )
+__GEN_VEC4( float4, float, 16 )
+__GEN_VEC4( double4, double, 16 )
+
+#undef __GEN_VEC4
