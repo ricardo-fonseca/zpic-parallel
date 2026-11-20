@@ -16,4 +16,4 @@
     X( float,  q,  "Individual particle charge" ) \
     X( float2, th, "Angular position stored as { cos(θ), sin(θ) }" )
 
-#include "../common/part/particles.hpp"
+#include "part/particles_common.hpp"

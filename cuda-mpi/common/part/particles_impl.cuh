@@ -9,12 +9,12 @@
  * 
  *              #include "particles.hpp"
  *              #define PARTICLES_NAMESPACE cyl_part
- *              #include "../common/particles_impl.cuh"
+ *              #include "part/particles_impl.cuh"
  * 
  *          The particle quantities are not needed here; all per-quantity
  *          operations go through `particles_view` methods (`load()`,
  *          `store()`, `pack()`, `unpack()`, `check_finite()`) generated in
- *          `common/particles.hpp`.
+ *          `common/part/particles_common.hpp`.
  * 
  * @note    This file is only meant to be included (it uses the .cuh extension
  *          so that build system `*.cu` globs do not pick it up), it will fail
@@ -261,13 +261,10 @@ __global__
  */
 void __launch_bounds__(opt_update_tile_info_block) update_tile_info( 
     particles_view tmp,
-    part::particle_sort_view sort,
+    const int * __restrict__ new_np,
     const int * __restrict__ recv_buffer,
     const int * __restrict__ extra,
     uint32_t * __restrict__ dev_np ) {
-
-    // New number of particles per tile
-    const int * __restrict__ new_np = sort.new_np;
 
     const auto ntiles     = part::local_tiles( tmp.local_ntiles );
     const auto ntiles_all = part::all_tiles( tmp.local_ntiles );  
@@ -341,7 +338,8 @@ void __launch_bounds__(opt_update_tile_info_block) update_tile_info(
  */
 uint32_t update_tile_info( 
     particles_view tmp, 
-    part::particle_sort & sort,
+    const int * __restrict__ new_np,
+    const int * __restrict__ recv_np,
     gpu::device::var<uint32_t> & dev_np,
     const int * __restrict__ extra = nullptr ) {
 
@@ -352,7 +350,7 @@ uint32_t update_tile_info(
     size_t shm_size = ntiles_all * sizeof(int);
     gpu::block::set_shmem_size( kernel::update_tile_info, shm_size );
     kernel::update_tile_info <<< 1, block, shm_size >>> (
-        tmp, sort.view(), sort.recv.buffer, 
+        tmp, new_np, recv_np, 
         extra, dev_np.ptr() );
 
     return dev_np.get();
@@ -1238,9 +1236,9 @@ void particles::tile_sort( particles & tmp, part::particle_sort & sort, const in
     // Get new offsets, including:
     // - Incoming particles from other MPI nodes
     // - New particles that will be injected (if any)
-    auto total_np = update_tile_info ( tmp.view(), sort, dev_tmp_uint32, extra );
+    auto total_np = update_tile_info ( tmp.view(), sort.view().new_np, sort.recv.buffer, dev_tmp_uint32, extra );
 
-    if ( total_np > max_part ) { 
+    if ( total_np > max_part || total_np > tmp.max_part ) { 
 
         // Grow tmp particle buffer (tile_offset / tile_np are preserved)
         tmp.grow_buffer( total_np );
@@ -1386,18 +1384,7 @@ void validate( particles_view data, const int over, const int rank, uint32_t * o
         }
 
         // Position inside cell (if available)
-        if constexpr ( particle_detail::has_x< particle_t >::value ) {
-            if ( p.x.x < -0.5 || p.x.x >= 0.5 ) {
-                printf("[%d] [%d,%d] Invalid x[%d].x position (%f), range = [-0.5,0.5[\n", rank, tile_idx.x, tile_idx.y, i, double( p.x.x ) );
-                err = 1;
-            }
-        }
-        if constexpr ( particle_detail::has_y< particle_t >::value ) {
-            if ( p.x.y < -0.5 || p.x.y >= 0.5 ) {
-                printf("[%d] [%d,%d] Invalid x[%d].y position (%f), range = [-0.5,0.5[\n", rank, tile_idx.x, tile_idx.y, i, double( p.x.y ) );
-                err = 1;
-            }
-        }
+        if ( particle_detail::check_cell_position( p, i, rank, tile_idx ) ) err = 1;
 
         // All floating point values must be finite
         if ( data.check_finite( offset + i, rank, tile_idx ) ) err = 1;

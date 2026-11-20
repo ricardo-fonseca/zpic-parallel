@@ -14,4 +14,4 @@
     X( float2, x, "Position inside cell normalized to cell size [-0.5,0.5)" ) \
     X( float3, u, "Generalized velocity" )
 
-#include "../common/part/particles.hpp"
+#include "part/particles_common.hpp"
