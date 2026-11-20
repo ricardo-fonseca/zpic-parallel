@@ -268,7 +268,8 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u,
  * @param x0        Initial particle position
  * @param x1        Final particle position
  * @param qnx       Normalization values for in plane current deposition
- * @param qvz       Out of plane current
+ * @param qvz       Out of plane current, q vz / 3 (times the fraction of
+ *                  the time step spent on this segment)
  * @param J         current(J) grid (should be in shared memory)
  * @param stride    current(J) grid stride
  */
@@ -301,20 +302,24 @@ inline void dep_current_seg(
     float * __restrict__ const Js = (float *) (&J[ix.x   + stride* ix.y]);
     int const stride3 = 3 * stride;
 
+    // Jz weights are the time average of Sx(t) Sy(t) along the segment:
+    //   (S0x S0y + S1x S1y)/3 + (S0x S1y + S1x S0y)/6
+    // The factor 1/3 is included in qvz
+
     // Reorder for linear access
     //                   y    x  fc
 
     // When using more than 1 thread per tile all of these need to be atomic
     Js[       0 + 0 + 0 ] += wl1 * wp10;
     Js[       0 + 0 + 1 ] += wl2 * wp20;
-    Js[       0 + 0 + 2 ] += qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f );
+    Js[       0 + 0 + 2 ] += qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 + S1x0 * S0y0)/2.0f );
 
     Js[       0 + 3 + 1 ] += wl2 * wp21;
-    Js[       0 + 3 + 2 ] += qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f );
+    Js[       0 + 3 + 2 ] += qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 + S1x1 * S0y0)/2.0f );
 
     Js[ stride3 + 0 + 0 ] += wl1 * wp11;
-    Js[ stride3 + 0 + 2 ] += qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f );
-    Js[ stride3 + 3 + 2 ] += qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f );
+    Js[ stride3 + 0 + 2 ] += qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 + S1x0 * S0y1)/2.0f );
+    Js[ stride3 + 3 + 2 ] += qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 + S1x1 * S0y1)/2.0f );
 }
 
 
@@ -671,18 +676,18 @@ void vdep_current_seg(
     vfloat a00x = vec_mul( wl1, wp10 );
     vfloat a00y = vec_mul( wl2, wp20 );
 
-    // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f );
-    vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmsub( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
+    // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 + S1x0 * S0y0)/2.0f );
+    vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmadd( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
 
     vfloat a01y = vec_mul( wl2, wp21 );
-    // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f );
-    vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmsub( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
+    // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 + S1x1 * S0y0)/2.0f );
+    vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmadd( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
 
     vfloat a10x = vec_mul( wl1, wp11 );
-    // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f );
-    vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmsub( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
-    // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f );
-    vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmsub( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
+    // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 + S1x0 * S0y1)/2.0f );
+    vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmadd( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
+    // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 + S1x1 * S0y1)/2.0f );
+    vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmadd( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
 
     vint idx = vec_add( ix.x, vec_mul( ix.y, stride ) );
 
@@ -748,18 +753,18 @@ inline void vdep_current_seg(
         vfloat a00x = vec_mul( wl1, wp10 );
         vfloat a00y = vec_mul( wl2, wp20 );
 
-        // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f );
-        vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmsub( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
+        // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 + S1x0 * S0y0)/2.0f );
+        vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmadd( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
 
         vfloat a01y = vec_mul( wl2, wp21 );
-        // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f );
-        vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmsub( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
+        // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 + S1x1 * S0y0)/2.0f );
+        vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmadd( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
 
         vfloat a10x = vec_mul( wl1, wp11 );
-        // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f );
-        vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmsub( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
-        // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f );
-        vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmsub( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
+        // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 + S1x0 * S0y1)/2.0f );
+        vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmadd( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
+        // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 + S1x1 * S0y1)/2.0f );
+        vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmadd( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
 
         vint idx = vec_add( ix.x, vec_mul( ix.y, stride) );
         vmask deposit = mask;
@@ -1001,7 +1006,8 @@ void move_deposit_kernel(
             vec_mul( vec_mul( rg, pu.y ), dt_dx.y )
         };
 
-        vfloat qvz = vec_mul( vec_mul( pu.z, rg ), q * 0.5f );
+        // Out of plane current, includes the 1/3 factor of the Jz weights
+        vfloat qvz = vec_mul( vec_mul( pu.z, rg ), q * (1.0f / 3.0f) );
 
         // Advance position
         vfloat2 x1 = {
@@ -1058,7 +1064,8 @@ void move_deposit_kernel(
             dt_dx.y * rg * pu.y
         );
 
-        float qvz = q * pu.z * rg * 0.5f;
+        // Out of plane current, includes the 1/3 factor of the Jz weights
+        float qvz = q * pu.z * rg * (1.0f / 3.0f);
 
         // Advance position
         float2 x1 = make_float2(
@@ -1350,7 +1357,8 @@ void move_deposit_kernel(
             dt_dx.y * rg * pu.y
         );
 
-        float qvz = q * pu.z * rg * 0.5f;
+        // Out of plane current, includes the 1/3 factor of the Jz weights
+        float qvz = q * pu.z * rg * (1.0f / 3.0f);
 
         // Advance position
         float2 x1 = make_float2(
@@ -1618,7 +1626,8 @@ void species_bcx(
             for( int i = 0; i < np; i++ ) {
                 if( ix[i].x >=  nx ) {
                     ix[i].x -= 1;
-                    x[i].x = -x[i].x;
+                    // Protects against x[i].x exactly == -0.5
+                    x[i].x = std::fmin( -x[i].x, std::nextafter( 0.5f, 0.f ) );
                     u[i].x = -u[i].x;
                 }
             }
@@ -1677,7 +1686,8 @@ void species_bcy(
             for( int i = 0; i < np; i++ ) {
                 if( ix[i].y >=  ny ) {
                     ix[i].y -= 1;
-                    x[i].y = -x[i].y;
+                    // Protects against x[i].y exactly == -0.5
+                    x[i].y = std::fmin( -x[i].y, std::nextafter( 0.5f, 0.f ) );
                     u[i].y = -u[i].y;
                 }
             }

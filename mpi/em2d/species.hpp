@@ -684,7 +684,7 @@ public:
     void deposit_charge( grid::tiled<float> &charge ) const;
 
     /**
-     * @brief Returns total time centered kinetic energy
+     * @brief Returns local time centered kinetic energy
      * 
      * @note The energy is computed during push(); the value refers to the
      *       last push and is not updated by advance( current & )
