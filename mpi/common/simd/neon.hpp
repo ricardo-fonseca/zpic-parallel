@@ -4,17 +4,19 @@
 #include <cstdint>
 #include <iostream>
 
+namespace simd {
+
 /**
  * @brief SIMD vector unit name
  * 
  */
-constexpr char vecname[] = "ARM NEON";
+constexpr char name[] = "ARM NEON";
 
 /**
  * @brief Main SIMD vector width
  * 
  */
-constexpr int vecwidth = 4;
+constexpr int width = 4;
 
 /**
  * @brief float32 vector
@@ -39,7 +41,7 @@ using vmask  = uint32x4_t;
  *
  * @return int 
  */
-inline int simd_init() {return 0;}
+inline int init() {return 0;}
 
 /**
  * @brief ARM NEON SIMD vectors
@@ -1133,3 +1135,4 @@ struct alignas(vec_mask32) vmask2 {
     vec_mask32 x, y;
 };
 
+} // namespace simd

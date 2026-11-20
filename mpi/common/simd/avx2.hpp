@@ -5,16 +5,18 @@
 #include <iostream>
 #include <iomanip>
 
+namespace simd {
+
 /**
  * @brief SIMD vector unit name
  * 
  */
-constexpr char vecname[] = "x86_64 AVX2";
+constexpr char name[] = "x86_64 AVX2";
 /**
  * @brief Main SIMD vector width
  * 
  */
-constexpr int vecwidth = 8;
+constexpr int width = 8;
 
 /**
  * @brief float32 vector
@@ -39,7 +41,7 @@ using vmask  = __m256i;
  *
  * @return int 
  */
-inline int simd_init() {return 0;}
+inline int init() {return 0;}
 
 /**
  * @brief x86 AVX2 SIMD vectors (256 bit)
@@ -246,9 +248,9 @@ inline __m256 vec_div( __m256 a, __m256 b ) {
  * 
  * @param a 
  * @param b 
- * @return vec_mask32
+ * @return vmask
  */
-inline vec_mask32 vec_eq( __m256 a, __m256 b ) { 
+inline vmask vec_eq( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_EQ_OQ) );
 }
 
@@ -259,7 +261,7 @@ inline vec_mask32 vec_eq( __m256 a, __m256 b ) {
  * @param b 
  * @return __m256i
  */
-inline vec_mask32 vec_ne( __m256 a, __m256 b ) { 
+inline vmask vec_ne( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_NEQ_OQ) );
 }
 
@@ -270,7 +272,7 @@ inline vec_mask32 vec_ne( __m256 a, __m256 b ) {
  * @param b 
  * @return __m256i
  */
-inline vec_mask32 vec_gt( __m256 a, __m256 b ) { 
+inline vmask vec_gt( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_GT_OQ) );
 }
 
@@ -281,7 +283,7 @@ inline vec_mask32 vec_gt( __m256 a, __m256 b ) {
  * @param b 
  * @return      Resulting mask, for each element i 0 if false, -1 if true
  */
-inline vec_mask32 vec_ge( __m256 a, __m256 b ) { 
+inline vmask vec_ge( __m256 a, __m256 b ) { 
     return _mm256_castps_si256( _mm256_cmp_ps(a,b,_CMP_GE_OQ) );
 }
 
@@ -737,7 +739,7 @@ inline __m256i vec_int( int a, int b, int c, int d, int e, int f, int g, int h )
  * @return __m256i 
  */
 inline __m256i vec_load( const int * mem_addr) { 
-    return _mm256_load_epi32( mem_addr );
+    return _mm256_load_si256( reinterpret_cast<const __m256i *>( mem_addr ) );
 }
 
 /**
@@ -749,7 +751,7 @@ inline __m256i vec_load( const int * mem_addr) {
  * @param a 
  */
 inline __m256i vec_store( int * mem_addr, __m256i a ) { 
-    _mm256_store_epi32( mem_addr, a ); return a;
+    _mm256_store_si256( reinterpret_cast<__m256i *>( mem_addr ), a ); return a;
 }
 
 /**
@@ -1148,3 +1150,4 @@ struct alignas(__m256i) vmask2 {
     __m256i x, y;
 };
 
+} // namespace simd

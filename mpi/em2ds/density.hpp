@@ -1,9 +1,30 @@
 #pragma once
 
+#include <cmath>
+#include <memory>
+
+#include "util/memory.hpp"
 #include "part/particles.hpp"
 
 namespace density {
 
+    /**
+     * @brief Base class for plasma density profiles
+     * 
+     * All injection methods share the same arguments:
+     * 
+     * @param part      Particle data object
+     * @param ppc       Number of particles per cell
+     * @param dx        Cell size
+     * @param ref       Position of local grid on global simulation box in
+     *                  simulation units
+     * @param range     Cell range in which to inject, in local cell coordinates,
+     *                  inclusive on both ends
+     * 
+     * `np_inject()` writes the number of particles that `inject()` would add to
+     * each tile into `np` (one int per local tile). The two
+     * methods are guaranteed to use exactly the same injection test.
+     */
     class profile {
         public:
 
@@ -39,7 +60,8 @@ namespace density {
         };
         void np_inject( part::particles & part, uint2 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range, int * np ) const override {
             // no injection
-            part.zero_np();
+            auto ntiles = part.get_local_ntiles();
+            memory::zero( np, static_cast<size_t>( ntiles.x ) * ntiles.y );
         };
     };
 
@@ -62,9 +84,10 @@ namespace density {
     };
 
     /**
-     * @brief step (Heavyside) plasma density
+     * @brief step (Heaviside) plasma density
      * 
-     * Uniform plasma density after a given position. Can be set in either x or y coordinates
+     * Uniform plasma density for positions >= `pos`. Can be set in either x or
+     * y coordinates
      */
     class step : public profile {
         public:
@@ -87,7 +110,8 @@ namespace density {
     /**
      * @brief slab plasma density
      * 
-     * Uniform plasma density inside given 1D range. Can be set in either x or y coordinates
+     * Uniform plasma density for positions in [`begin`, `end`). Can be set in
+     * either x or y coordinates
      * 
      */
     class slab : public profile {
@@ -113,7 +137,8 @@ namespace density {
     /**
      * @brief sphere plasma density
      * 
-     * Uniform plasma density centered about a given position
+     * Uniform plasma density for positions strictly inside a circle of radius
+     * `radius` centered about `center`
      * 
      */
     class sphere : public profile {

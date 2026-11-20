@@ -5,17 +5,19 @@
 #include <iostream>
 #include <iomanip>
 
+namespace simd {
+
 /**
  * @brief SIMD vector unit name
  * 
  */
-constexpr char vecname[] = "x86_64 AVX512f";
+constexpr char name[] = "x86_64 AVX512f";
 
 /**
  * @brief Main SIMD vector width
  * 
  */
-constexpr int vecwidth = 16;
+constexpr int width = 16;
 
 /**
  * @brief float32 vector
@@ -40,7 +42,7 @@ using vmask  = __mmask16;
  *
  * @return int 
  */
-inline int simd_init() {return 0;}
+inline int init() {return 0;}
 
 /**
  * @brief 256 bit vector utilities
@@ -1251,8 +1253,8 @@ inline void vec_store_s2( float * addr, const vfloat2 v ) {
     const __m512i perm0 =  _mm512_set_epi32(15, 7,14, 6,13, 5,12, 4,11, 3,10, 2, 9, 1, 8, 0);
     __m512i t0 = _mm512_permutexvar_epi32( perm0, _mm512_castps_si512(v.x) );
     __m512i t1 = _mm512_permutexvar_epi32( perm0, _mm512_castps_si512(v.y) );
-    _mm512_store_epi32( &addr[ 0], _mm512_mask_alignr_epi32( t0, 0xAAAA, t1, t1, 15 ) );
-    _mm512_store_epi32( &addr[16], _mm512_mask_alignr_epi32( t1, 0x5555, t0, t0, 1 ) ); 
+    _mm512_storeu_epi32( &addr[ 0], _mm512_mask_alignr_epi32( t0, 0xAAAA, t1, t1, 15 ) );
+    _mm512_storeu_epi32( &addr[16], _mm512_mask_alignr_epi32( t1, 0x5555, t0, t0, 1 ) ); 
 
 }
 
@@ -1386,3 +1388,4 @@ struct alignas(__mmask16) vmask2 {
     __mmask16 x, y;
 };
 
+} // namespace simd

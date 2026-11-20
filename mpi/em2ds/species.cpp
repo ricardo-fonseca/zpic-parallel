@@ -37,8 +37,8 @@ inline float rgamma( const float3 u ) {
  * @brief Interpolate EM field values at particle position using linear 
  * (1st order) interpolation.
  * 
- * @note The EM fields are assumed to be organized according to the Yee scheme with
- * the charge defined at lower left corner of the cell
+ * @note The EM fields are assumed to be collocated (spectral solver), with all
+ * components defined at the lower left corner of the cell
  * 
  * @param E         Pointer to position (0,0) of E field grid
  * @param B         Pointer to position (0,0) of B field grid
@@ -338,6 +338,9 @@ inline void dep_charge( float * const __restrict__ rho, const int ystride, int2 
 
 #ifdef SIMD
 
+// SIMD types and vec_*() functions (see simd/simd.hpp)
+using namespace simd;
+
 /**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
@@ -579,7 +582,7 @@ void vdep_current(
 
     vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
 
-    for ( int i = 0; i < vecwidth; i++ ) {
+    for ( int i = 0; i < simd::width; i++ ) {
 
         float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
         int const stride3 = 3 * ystride;
@@ -642,7 +645,7 @@ inline void vdep_charge(
 
     vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
 
-    for ( int i = 0; i < vecwidth; i++ ) {
+    for ( int i = 0; i < simd::width; i++ ) {
         float * __restrict__ rhos = & rho[ vec_extract( idx, i ) ];
 
         rhos[           0 ] += vec_extract( rho00, i );
@@ -694,8 +697,8 @@ void move_deposit_kernel(
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
 
-    const int np_vec = (np/vecwidth) * vecwidth;
-    for( int i = 0; i < np_vec; i+= vecwidth ) {
+    const int np_vec = (np/simd::width) * simd::width;
+    for( int i = 0; i < np_vec; i+= simd::width ) {
         const vint   c1i   = vec_int(1);
         const vfloat c1_2  = vec_float( .5f);
         const vfloat cm1_2 = vec_float(-.5f);
@@ -947,9 +950,9 @@ void push_kernel (
 
     const vfloat valpha = vec_float( alpha );
 
-    const int np_vec = (np/vecwidth) * vecwidth;
+    const int np_vec = (np/simd::width) * simd::width;
 
-    for( int i = 0; i < np_vec; i += vecwidth ) {
+    for( int i = 0; i < np_vec; i += simd::width ) {
         vfloat3 e, b;
 
         const vint2   vix = vec_load_s2( (int *) & ix[i] );
@@ -1513,7 +1516,7 @@ void species::move( )
 
     auto data = particles -> view();
 
-    #pragma omp parallel for schedule(dynamic) reduction(+:nmove)
+    #pragma omp parallel for schedule(dynamic) reduction(+:_nmove)
     for( unsigned tid = 0; tid < data.local_ntiles.y * data.local_ntiles.x; tid ++ ) {
         
         const auto tile_idx = make_uint2( tid % data.local_ntiles.x, tid / data.local_ntiles.x );
@@ -1522,7 +1525,7 @@ void species::move( )
         _nmove += data.tile_np[tid];
     }
 
-    nmove = _nmove;
+    nmove += _nmove;
 }
 
 /**
@@ -1542,7 +1545,7 @@ void species::push( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B )
     switch( push_type ) {
     case( species::pusher::euler ):
         #pragma omp parallel for schedule(dynamic) \
-                reduction(+:energy) \
+                reduction(+:_energy) \
                 collapse(2)
         for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
             for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
@@ -1557,7 +1560,7 @@ void species::push( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B )
 
     case( species::pusher::boris ):
         #pragma omp parallel for schedule(dynamic) \
-                reduction(+:energy) \
+                reduction(+:_energy) \
                 collapse(2)
         for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
             for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {

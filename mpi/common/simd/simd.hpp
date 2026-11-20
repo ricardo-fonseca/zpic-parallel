@@ -1,6 +1,32 @@
 #pragma once
 
+/**
+ * @file simd.hpp
+ * @brief Explicit SIMD vectorization support
+ * 
+ * @details Select (at most) one backend at compile time with USE_AVX2,
+ *          USE_AVX512, USE_NEON or USE_SVE. When a backend is selected the
+ *          SIMD macro is defined (e.g. `#define SIMD AVX2`).
+ * 
+ *          Everything is defined in the `simd` namespace:
+ *          - `simd::name`, `simd::width` and `simd::init()` are always
+ *            available (with no backend: "none", 1, and a no-op)
+ *          - `simd::is_aligned()` and `simd::assert_aligned()` are always
+ *            available
+ *          - The vector types (`vfloat`, `vint`, `vmask`, `vfloat2`, ...) and
+ *            the `vec_*()` functions are only available when a backend is
+ *            selected (`#ifdef SIMD`)
+ * 
+ *          The `vec_*()` functions take raw intrinsic types (e.g. `__m256`),
+ *          which have no namespace, so argument-dependent lookup will not
+ *          find them. Source files using them should add
+ *          `using namespace simd;` inside their `#ifdef SIMD` section (never
+ *          in a header file).
+ */
+
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <iostream>
 
@@ -14,7 +40,7 @@
 #error SIMD has already been defined, only 1 type of SIMD code should be enabled.
 #endif
 
-#include "avx2.h"
+#include "avx2.hpp"
 #define SIMD AVX2
 
 #endif
@@ -29,7 +55,7 @@
 #error SIMD has already been defined, only 1 type of SIMD code should be enabled.
 #endif
 
-#include "avx512.h"
+#include "avx512.hpp"
 #define SIMD AVX512
 
 #endif
@@ -59,21 +85,26 @@
 #error SIMD has already been defined, only 1 type of SIMD code should be enabled.
 #endif
 
-#include "sve.h"
+#include "sve.hpp"
 #define SIMD SVE
 
 #endif
 
 
+namespace simd {
+
 /**
- * @brief Disable use of SIMD optimized code
+ * @brief Disable use of SIMD optimized code if SIMD has not been defined
  * 
  */
 #ifndef SIMD
 
-constexpr char vecname[] = "none";
-constexpr int vecwidth = 1;
-inline int simd_init() {return 0;}
+/// @brief SIMD vector unit name
+constexpr char name[] = "none";
+/// @brief Main SIMD vector width
+constexpr int width = 1;
+/// @brief SIMD initialization (no initialization required)
+inline int init() {return 0;}
 
 #endif
 
@@ -93,7 +124,7 @@ inline int simd_init() {return 0;}
 template< unsigned int n, typename T >
 constexpr bool is_aligned( T * addr ) {
     static_assert( (n & (n-1)) == 0, "n must be a power of 2" );
-    return (((uintptr_t)addr & (n-1)) == 0);
+    return (((std::uintptr_t)addr & (n-1)) == 0);
 }
 
 /**
@@ -116,7 +147,7 @@ void assert_aligned( T * addr, std::string msg = "" ) {
         // as a string in case we call the function with char*
         std::cerr << "Address " << (int*) addr << " is not ";
         std::cerr << n << " bit aligned, aborting." << std::endl;
-        abort();
+        std::abort();
     }
 }
 
@@ -134,25 +165,25 @@ void assert_aligned( T * addr, std::string msg = "" ) {
  */
 inline void vec_memadd( float * __restrict__ dst, const float * __restrict__ src, std::size_t n ) {
 
-    constexpr std::size_t blk = 4 * vecwidth;
+    constexpr std::size_t blk = 4 * width;
 
     std::size_t i = 0;
 
     // Main loop, unrolled 4x to keep several loads in flight
     for( ; i + blk <= n; i+= blk ) {
         vfloat a0 = vec_add( vec_load(&dst[i             ]), vec_load(&src[i             ]) );
-        vfloat a1 = vec_add( vec_load(&dst[i +   vecwidth]), vec_load(&src[i +   vecwidth]) );
-        vfloat a2 = vec_add( vec_load(&dst[i + 2*vecwidth]), vec_load(&src[i + 2*vecwidth]) );
-        vfloat a3 = vec_add( vec_load(&dst[i + 3*vecwidth]), vec_load(&src[i + 3*vecwidth]) );
+        vfloat a1 = vec_add( vec_load(&dst[i +   width]), vec_load(&src[i +   width]) );
+        vfloat a2 = vec_add( vec_load(&dst[i + 2*width]), vec_load(&src[i + 2*width]) );
+        vfloat a3 = vec_add( vec_load(&dst[i + 3*width]), vec_load(&src[i + 3*width]) );
 
         vec_store( &dst[i             ], a0 );
-        vec_store( &dst[i +   vecwidth], a1 );
-        vec_store( &dst[i + 2*vecwidth], a2 );
-        vec_store( &dst[i + 3*vecwidth], a3 );
+        vec_store( &dst[i +   width], a1 );
+        vec_store( &dst[i + 2*width], a2 );
+        vec_store( &dst[i + 3*width], a3 );
     }
 
     // remaining full vectors
-    for( ; i + vecwidth <=n; i += vecwidth )
+    for( ; i + width <=n; i += width )
         vec_store( &dst[i], vec_add( vec_load( &dst[i] ), vec_load( &src[i] ) ) );
 
     // remaining scalars
@@ -161,3 +192,5 @@ inline void vec_memadd( float * __restrict__ dst, const float * __restrict__ src
 }
 
 #endif
+
+} // namespace simd

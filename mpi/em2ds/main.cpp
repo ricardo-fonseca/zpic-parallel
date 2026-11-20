@@ -844,6 +844,9 @@ int main( int argc, char *argv[] ) {
     // Initialize the MPI environment
     mpi::init( & argc, & argv );
 
+    // Initialize SIMD support
+    simd::init();
+
     grid::fft::init();
 
     info();

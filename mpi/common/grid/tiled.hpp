@@ -16,6 +16,18 @@
 
 namespace grid {
 
+/**
+ * @brief Tile volume alignment (number of elements)
+ * 
+ * @details Tile buffers are stored contiguously (tile `tid` starts at element
+ *          `tid * tile_vol`), and `tile_vol` is rounded up to a multiple of
+ *          this value. With a 64 byte aligned base buffer, every tile buffer is
+ *          then 64 byte aligned for any element type with sizeof(T) >= 4
+ *          (float, float3, double, ...), as required by aligned SIMD
+ *          loads/stores up to AVX512 (e.g. `vec_memadd()`).
+ */
+constexpr unsigned int tile_vol_align = 16;
+
 template <class T>
 struct tiled_view {
 
@@ -301,7 +313,7 @@ class tiled {
         tile_ext_dims( make_uint2( gc.x.lower + tile_dims.x + gc.x.upper,
                             gc.y.lower + tile_dims.y + gc.y.upper )),
         inner_offset( gc.y.lower * tile_ext_dims.x + gc.x.lower ),
-        tile_vol( roundup<4>( tile_ext_dims.x * tile_ext_dims.y ) ),
+        tile_vol( roundup<tile_vol_align>( tile_ext_dims.x * tile_ext_dims.y ) ),
         name( "tiled grid" )
     {
         // Validate parameters
@@ -328,7 +340,7 @@ class tiled {
         gc( 0 ),
         tile_ext_dims( make_uint2( tile_dims.x, tile_dims.y )),
         inner_offset( 0 ),
-        tile_vol( roundup<4>( tile_dims.x * tile_dims.y )),
+        tile_vol( roundup<tile_vol_align>( tile_dims.x * tile_dims.y )),
         name( "tiled grid" )
     {
         // Validate parameters

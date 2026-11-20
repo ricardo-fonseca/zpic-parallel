@@ -15,6 +15,8 @@
 #include <iostream>
 #include <iomanip>
 
+namespace simd {
+
 constexpr int sve_vec_width = __ARM_FEATURE_SVE_BITS / 32;
 
 typedef svfloat32_t vec_f32  __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SVE_BITS)));
@@ -26,12 +28,12 @@ typedef svbool_t    vec_mask __attribute__((arm_sve_vector_bits(__ARM_FEATURE_SV
  * @brief SIMD vector unit name
  * 
  */
-constexpr char vecname[] = "ARM SVE";
+constexpr char name[] = "ARM SVE";
 /**
  * @brief Main SIMD vector width
  * 
  */
-constexpr int vecwidth = sve_vec_width;
+constexpr int width = sve_vec_width;
 
 /**
  * @brief float32 vector
@@ -56,7 +58,7 @@ using vmask  = vec_mask;
  *
  * @return int 
  */
-inline int simd_init() { 
+inline int init() { 
     return prctl(PR_SVE_SET_VL, __ARM_FEATURE_SVE_BITS / 8);
 };
 
@@ -93,7 +95,7 @@ inline float vec_extract( const vec_f32 v, int i ) {
  * @return std::ostream& 
  */
 inline std::ostream& operator<<(std::ostream& os, const vec_f32 v) {
-    os << "[";
+    os << "["
        <<         vec_extract< 0>( v )
        << ", " << vec_extract< 1>( v )
        << ", " << vec_extract< 2>( v )
@@ -1220,3 +1222,4 @@ struct alignas(vec_mask) vmask2 {
     vec_mask x, y;
 };
 
+} // namespace simd
