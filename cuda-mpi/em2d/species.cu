@@ -532,8 +532,8 @@ void move(
  * @param shift             Cell index shift applied after the move
  * @param d_nmove           (out) Number of particles pushed (for performance metrics)
  */
-__global__
-void __launch_bounds__(opt_move_block) move_deposit(
+__global__ __launch_bounds__(opt_move_block)
+void move_deposit(
     part::particles_view const part,
     grid::tiled_view<float3> current,
     float2 const dt_dx, float const q, float2 const qnx, int2 const shift,
@@ -745,8 +745,8 @@ void __launch_bounds__(opt_move_block) move_deposit(
  * @param d_energy      Total particle energy
  */
 template < species::pusher type >
-__global__
-void __launch_bounds__(opt_push_block) push ( 
+__global__ __launch_bounds__(opt_push_block)
+void push ( 
     part::particles_view const part,
     grid::tiled_view<const float3> const E_grid, grid::tiled_view<const float3> const B_grid,
     float const alpha, double * __restrict__ d_energy )

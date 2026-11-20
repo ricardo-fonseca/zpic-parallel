@@ -1,58 +1,8 @@
-#include "emf.h"
+#include "emf.hpp"
 
 #include <iostream>
-#include "bnd.h"
-
-#include "zdf-cpp.h"
-
-/**
- * @brief Construct a new EMF object
- * 
- * @param global_ntiles     Global number of tiles
- * @param nx                Individual tile size
- * @param box               Global simulation box size
- * @param dt                Time step
- * @param parallel          Parallel partition 
- */
-EMF::EMF( uint2 const global_ntiles, uint2 const nx, float2 const box,
-    double const dt, Partition & parallel ) : 
-    dx( make_float2( box.x / ( nx.x * global_ntiles.x ), box.y / ( nx.y * global_ntiles.y ) ) ),
-    dt( dt ), box(box)
-{
-    // Verify Courant condition
-    auto cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
-    if ( dt >= cour ){
-        if ( mpi::world_root() ) {
-            std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
-            std::cerr << "(*error*) For the current resolution " << dx;
-            std::cerr << " the maximum timestep is dt = " << cour <<'\n';
-        }
-        mpi::abort(1);
-    }
-
-    // Guard cells (1 below, 2 above)
-    // These are required for the Yee solver AND for field interpolation
-    bnd<unsigned int> gc;
-    gc.x = {1,2};
-    gc.y = {1,2};
-
-    E = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
-    E -> name = "Electric field";
-
-    B = new vec3grid<float3> ( global_ntiles, nx, gc, parallel );
-    B -> name = "Magnetic field";
-
-    // Zero fields
-    E -> zero();
-    B -> zero();
-
-    // Set boundary conditions to none
-    bc = emf::bc_type (emf::bc::none);
-
-    // Reset iteration number
-    iter = 0;
-}
-
+#include <ostream>
+#include <sstream>
 
 /**
  * @brief B advance for Yee algorithm
@@ -110,21 +60,128 @@ void yee_e(
 }
 
 /**
+ * @brief Enforce zero tangential E on PEC wall nodes
+ * 
+ * The bc kernels only run after the full B/2 - E - B/2 step. Without this
+ * the second B half step would use the tangential E evolved on the wall
+ * node (from the wall node current), polluting B next to the wall.
+ * 
+ * @note Must be called after the E update and before the second B half
+ *       step, with a block synchronization before and after.
+ * 
+ * @note Corner cells may be written by both the x and y loops; both write
+ *       zero to the shared (z) component, so this is benign.
+ * 
+ * @param E             Pointer to 0,0 coordinate of E field (shared memory)
+ * @param tile_idx      Tile index
+ * @param local_ntiles  Local number of tiles
+ * @param tile_dims     Internal tile size
+ * @param ystride       Stride for y coordinate
+ * @param bc            Local rank boundary conditions
+ */
+void pec_walls( 
+    float3 * const __restrict__ E, 
+    uint2 const tile_idx, uint2 const local_ntiles,
+    uint2 const tile_dims, int const ystride,
+    emf::bc_type const bc )
+{
+    const int nx = tile_dims.x;
+    const int ny = tile_dims.y;
+
+    // E is updated on rows / columns 0 .. n+1
+    if ( tile_idx.x == 0 && bc.x.lower == emf::bc::pec ) {
+        for( int i = 0; i < ny + 2; i ++ ) {
+            E[ i * ystride ].y = 0;
+            E[ i * ystride ].z = 0;
+        }
+    }
+
+    if ( tile_idx.x == local_ntiles.x - 1 && bc.x.upper == emf::bc::pec ) {
+        for( int i = 0; i < ny + 2; i ++ ) {
+            E[ nx + i * ystride ].y = 0;
+            E[ nx + i * ystride ].z = 0;
+        }
+    }
+
+    if ( tile_idx.y == 0 && bc.y.lower == emf::bc::pec ) {
+        for( int i = 0; i < nx + 2; i ++ ) {
+            E[ i ].x = 0;
+            E[ i ].z = 0;
+        }
+    }
+
+    if ( tile_idx.y == local_ntiles.y - 1 && bc.y.upper == emf::bc::pec ) {
+        for( int i = 0; i < nx + 2; i ++ ) {
+            E[ i + ny * ystride ].x = 0;
+            E[ i + ny * ystride ].z = 0;
+        }
+    }
+}
+
+/**
+ * @brief Complete Yee step (no current)
+ * 
+ * @param E_grid    Electric field
+ * @param B_grid    Magnetic field
+ * @param dt_dx     time step over cell size ratio
+ */
+void yee( 
+    const uint2 tile_idx,
+    grid::tiled_vec3_view<float> E_grid,
+    grid::tiled_vec3_view<float> B_grid,
+    float2 const dt_dx, emf::bc_type const local_bc ) {
+
+    const int tile_id   = tile_idx.y * E_grid.local_ntiles.x + tile_idx.x;
+    const uint2 tile_dims = E_grid.tile_dims;
+    const int ystride = E_grid.tile_ystride();
+
+    float2 const dt_dx_2 = make_float2( dt_dx.x/2, dt_dx.y/2 );
+
+    // Copy E and B into shared memory
+    float3 E_local[ E_grid.tile_vol ];
+    float3 B_local[ B_grid.tile_vol ];
+    
+    memory::memcpy( E_local, E_grid.tile_buffer(tile_id), E_grid.tile_vol );
+    memory::memcpy( B_local, B_grid.tile_buffer(tile_id), B_grid.tile_vol );
+
+    float3 * const __restrict__ E = & E_local[ E_grid.inner_offset ];
+    float3 * const __restrict__ B = & B_local[ B_grid.inner_offset ];
+
+    // Half B advance
+    yee_b( E, B, tile_dims, ystride, dt_dx_2 );
+
+    // Full E advance
+    yee_e( E, B, tile_dims, ystride, dt_dx );
+
+    // Keep tangential E zero on PEC walls
+    pec_walls( E, tile_idx, E_grid.local_ntiles, tile_dims, ystride, local_bc );
+
+    // Half B advance
+    yee_b( E, B, tile_dims, ystride, dt_dx_2 );
+    
+    memory::memcpy( E_grid.tile_buffer(tile_id), E_local, E_grid.tile_vol );
+    memory::memcpy( B_grid.tile_buffer(tile_id), B_local, B_grid.tile_vol );
+}
+
+/**
  * @brief Move simulation window
  * 
  * When using a moving simulation window checks if a window move is due
- * at the current iteration and if so shifts left the data, zeroing the
- * rightmost cells.
+ * at the current iteration and if so shifts left the data by one cell.
  * 
+ * @note The new rightmost interior column takes the values of the first
+ *       upper guard column (at the open x boundary these were evolved by
+ *       the Yee kernel from stale guard values); only the last guard column
+ *       is zeroed.
  */
-void EMF::move_window() {
+void emf::move_window() {
 
-    if ( moving_window.needs_move( iter * dt ) ) {
+    if ( mov_window.needs_move( iter * dt ) ) {
 
         E->x_shift_left(1);
         B->x_shift_left(1);
 
-        moving_window.advance();
+        mov_window.advance();
     }
 }
 
@@ -132,49 +189,16 @@ void EMF::move_window() {
  * @brief Advance EM fields 1 time step (no current)
  * 
  */
-void EMF::advance() {
+void emf::advance() {
 
-    const auto ntiles   = E -> get_ntiles();
-    const auto field_vol = E -> tile_vol;
-    const auto nx       = E -> nx;
-    const auto offset   = E -> offset;
-    const int  ystride  = E -> ext_nx.x;
-
+    const auto ntiles   = E -> get_local_ntiles();
     float2 const dt_dx   = make_float2( dt/dx.x, dt/dx.y );
-    float2 const dt_dx_2 = make_float2( dt_dx.x/2, dt_dx.y/2 );
 
-    // Loop over tiles
-    #pragma omp parallel for
-    for( int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
-
-        const auto tile_off = tid * field_vol;
-
-        // Copy E and B into shared memory
-        float3 E_local[ field_vol ];
-        float3 B_local[ field_vol ];
-        for( unsigned i = 0; i < field_vol; i++ ) {
-            E_local[i] = E->d_buffer[ tile_off + i ];
-            B_local[i] = B->d_buffer[ tile_off + i ];
-        }
-
-        float3 * const __restrict__ tile_E = & E_local[ offset ];
-        float3 * const __restrict__ tile_B = & B_local[ offset ];
-
-        // synchronize block (...)
-        yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
-        // synchronize block (...)
-
-        yee_e( tile_E, tile_B, nx, ystride, dt_dx );
-        // synchronize block (...)
-
-        yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
-        
-        // synchronize block (...)
-
-        // Copy data to global memory
-        for( unsigned i = 0; i < field_vol; i++ ) {
-            E->d_buffer[ tile_off + i ] = E_local[i];
-            B->d_buffer[ tile_off + i ] = B_local[i];
+    #pragma omp parallel for collapse(2) schedule(dynamic)
+    for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx++ ) {
+            uint2 tile_idx = make_uint2( tx, ty );
+            yee( tile_idx, E -> view(), B -> view(), dt_dx, local_bc );
         }
     }
 
@@ -183,15 +207,16 @@ void EMF::advance() {
     B -> copy_to_gc();
 
     // Do additional bc calculations if needed
-    // process_bc();
+    process_bc();
 
     // Advance internal iteration number
     iter += 1;
 
     // Move simulation window if needed
-    if ( moving_window.active() ) move_window();
+    if ( mov_window.active() ) move_window();
 
 }
+
 
 /**
  * @brief Physical boundary conditions for the x direction
@@ -204,17 +229,27 @@ void EMF::advance() {
  * @param bc        Boundary condition
  */
 void emf_bcx( 
-    const uint2 tile_idx,
-    float3 * const __restrict__ E, float3 * const __restrict__ B,
-    const uint2 nx, const uint2 ext_nx, emf::bc_type bc ) {
+    unsigned bnd_x, unsigned tile_idx_y,
+    grid::tiled_vec3_view<float> E_grid,
+    grid::tiled_vec3_view<float> B_grid,
+    emf::bc_type local_bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = E_grid.tile_ystride();
 
-    if ( tile_idx.x == 0 ) {
+    if ( bnd_x == 0 ) {
         // Lower boundary
-        switch( bc.x.lower ) {
+        float3 * __restrict__ E = & E_grid.tile_buffer
+            (0,tile_idx_y)      // lower x boundary tile
+            [ E_grid.gc.x.lower ];     // point to first x cell (ix = 0)
+        float3 * __restrict__ B = & B_grid.tile_buffer
+            (0,tile_idx_y)
+            [ B_grid.gc.x.lower ];
+
+        switch( local_bc.x.lower ) {
         case( emf::bc::pmc) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.y); idx ++ ) {
+            for( unsigned idx = 0; 
+                 idx < E_grid.tile_ext_dims.y;
+                 idx ++ ) {
                 // iy includes the y-stride
                 const int iy = idx * ystride;
 
@@ -225,12 +260,13 @@ void emf_bcx(
                 B[ -1 + iy ].x =  B[ 1 + iy ].x;
                 B[ -1 + iy ].y = -B[ 0 + iy ].y;
                 B[ -1 + iy ].z = -B[ 0 + iy ].z;
-
             }
             break;
 
         case( emf::bc::pec ) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.y); idx ++ ) {
+            for( unsigned idx = 0; 
+                 idx < E_grid.tile_ext_dims.y;
+                 idx ++ ) {
                 const int iy = idx * ystride;
 
                 E[ -1 + iy ].x =  E[ 0 + iy ].x;
@@ -252,55 +288,61 @@ void emf_bcx(
         } 
     } else {
         // Upper boundary
-        switch( bc.x.upper ) {
+        float3 * __restrict__ E = & E_grid.tile_buffer
+            (E_grid.local_ntiles.x-1,tile_idx_y)    // upper x boundary tile
+            [ E_grid.gc.x.lower + E_grid.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
+        float3 * __restrict__ B = & B_grid.tile_buffer
+            (B_grid.local_ntiles.x-1,tile_idx_y)    // upper x boundary tile
+            [ B_grid.gc.x.lower + B_grid.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
+
+        switch( local_bc.x.upper ) {
         case( emf::bc::pmc) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.y); idx ++ ) {
+            for( unsigned idx = 0; idx < E_grid.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
 
-                E[ nx.x + iy ].x = -E[ nx.x-1 + iy ].x;
-                //E[ nx.x + iy ].y =  E[ nx.x + iy ].y;
-                //E[ nx.x + iy ].z =  E[ nx.x + iy ].z;
+                E[ iy ].x = -E[ -1 + iy ].x;
+                //E[ iy ].y =  E[ 0 + iy ].y;
+                //E[ iy ].z =  E[ 0 + iy ].z;
 
-                E[ nx.x+1 + iy ].x = -E[ nx.x-2 + iy ].x;
-                E[ nx.x+1 + iy ].y =  E[ nx.x-1 + iy ].y;
-                E[ nx.x+1 + iy ].z =  E[ nx.x-1 + iy ].z;
+                E[ 1 + iy ].x = -E[ -2 + iy ].x;
+                E[ 1 + iy ].y =  E[ -1 + iy ].y;
+                E[ 1 + iy ].z =  E[ -1 + iy ].z;
 
-                // B[ nx.x + iy ].x = -B[ nx.x + iy ].x;
-                B[ nx.x + iy ].y = -B[ nx.x-1 + iy ].y;
-                B[ nx.x + iy ].z = -B[ nx.x-1 + iy ].z;
+                // B[  iy ].x = -B[ iy ].x;
+                B[ iy ].y = -B[ -1 + iy ].y;
+                B[ iy ].z = -B[ -1 + iy ].z;
 
-                B[ nx.x+1 + iy ].x =  B[ nx.x-1 + iy ].x;
-                B[ nx.x+1 + iy ].y = -B[ nx.x-2 + iy ].y;
-                B[ nx.x+1 + iy ].z = -B[ nx.x-2 + iy ].z;
+                B[ 1 + iy ].x =  B[ -1 + iy ].x;
+                B[ 1 + iy ].y = -B[ -2 + iy ].y;
+                B[ 1 + iy ].z = -B[ -2 + iy ].z;
             }
             break;
 
         case( emf::bc::pec) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.y); idx ++ ) {
+            for( unsigned idx = 0; idx < E_grid.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
 
-                E[ nx.x + iy ].x =  E[ nx.x-1 + iy ].x;
-                E[ nx.x + iy ].y =  0;
-                E[ nx.x + iy ].z =  0;
+                E[ iy ].x =  E[ -1 + iy ].x;
+                E[ iy ].y =  0;
+                E[ iy ].z =  0;
 
-                E[ nx.x+1 + iy ].x =  E[ nx.x-2 + iy ].x;
-                E[ nx.x+1 + iy ].y = -E[ nx.x-1 + iy ].y;
-                E[ nx.x+1 + iy ].z = -E[ nx.x-1 + iy ].z;
+                E[ 1 + iy ].x =  E[ -2 + iy ].x;
+                E[ 1 + iy ].y = -E[ -1 + iy ].y;
+                E[ 1 + iy ].z = -E[ -1 + iy ].z;
 
-                B[ nx.x + iy ].x =  0;
-                B[ nx.x + iy ].y =  B[ nx.x-1 + iy ].y;
-                B[ nx.x + iy ].z =  B[ nx.x-1 + iy ].z;
+                B[ iy ].x =  0;
+                B[ iy ].y =  B[ -1 + iy ].y;
+                B[ iy ].z =  B[ -1 + iy ].z;
 
-                B[ nx.x+1 + iy ].x = -B[ nx.x-1 + iy ].x;
-                B[ nx.x+1 + iy ].y =  B[ nx.x-2 + iy ].y;
-                B[ nx.x+1 + iy ].z =  B[ nx.x-2 + iy ].z;
+                B[ 1 + iy ].x = -B[ -1 + iy ].x;
+                B[ 1 + iy ].y =  B[ -2 + iy ].y;
+                B[ 1 + iy ].z =  B[ -2 + iy ].z;
             }
             break;
         default:
             break;
         }
     }
-
 }
 
 /**
@@ -314,17 +356,25 @@ void emf_bcx(
  * @param bc        Boundary condition
  */
 void emf_bcy( 
-    const uint2 tile_idx,
-    float3 * const __restrict__ E, float3 * const __restrict__ B,
-    const uint2 nx, const uint2 ext_nx, emf::bc_type bc ) {
+    unsigned tile_idx_x, unsigned bnd_y,
+    grid::tiled_vec3_view<float> E_grid,
+    grid::tiled_vec3_view<float> B_grid,
+    emf::bc_type local_bc ) {
 
-    const int ystride = ext_nx.x;
-
-    if ( tile_idx.y == 0 ) {
+    const int ystride = E_grid.tile_ystride();
+    
+    if ( bnd_y == 0 ) {
         // Lower boundary
-        switch( bc.y.lower ) {
+        float3 * __restrict__ E = & E_grid.tile_buffer
+            (tile_idx_x,0)              // lower y boundary tiles
+            [ E_grid.gc.y.lower * ystride ];   // point to first y cell (iy = 0)
+        float3 * __restrict__ B = & B_grid.tile_buffer
+            (tile_idx_x,0)
+            [ B_grid.gc.y.lower * ystride ];
+        
+        switch( local_bc.y.lower ) {
         case( emf::bc::pmc) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.x); idx ++ ) {
+            for( unsigned idx = 0; idx < E_grid.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
                 E[ ix - ystride ].x =  E[ ix + ystride ].x;
@@ -338,8 +388,8 @@ void emf_bcy(
             break;
 
         case( emf::bc::pec ) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.x); idx ++ ) {
-                int ix = idx;
+            for( unsigned idx = 0; idx < E_grid.tile_ext_dims.x; idx ++ ) {
+                const int ix = idx;
 
                 E[ ix - ystride ].x = -E[ ix + ystride ].x;
                 E[ ix - ystride ].y =  E[ ix +       0 ].y;
@@ -360,46 +410,52 @@ void emf_bcy(
         }
     } else {
         // Upper boundary
-        switch( bc.y.upper ) {
+        float3 * __restrict__ E = & E_grid.tile_buffer
+            (tile_idx_x,E_grid.local_ntiles.y-1)   // upper y boundary tiles
+            [ (E_grid.gc.y.lower + E_grid.tile_dims.y ) * ystride ];  // point to first upper gc (iy = tile_dims.y)
+        float3 * __restrict__ B = & B_grid.tile_buffer
+            (tile_idx_x,B_grid.local_ntiles.y-1)
+            [ (B_grid.gc.y.lower + B_grid.tile_dims.y ) * ystride ]; 
+
+        switch( local_bc.y.upper ) {
         case( emf::bc::pmc) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.x); idx ++ ) {
-                int ix = idx;
+            for( unsigned idx = 0; idx < E_grid.tile_ext_dims.x;  idx ++ ) {
+                const int ix = idx;
 
-                E[ ix + nx.y * ystride ].y = -E[ ix + (nx.y-1) * ystride ].y;
+                E[ ix ].y = -E[ ix - 1 * ystride ].y;
 
-                E[ ix + (nx.y+1) * ystride ].x =  E[ ix + (nx.y-1) * ystride ].x;
-                E[ ix + (nx.y+1) * ystride ].y = -E[ ix + (nx.y-2) * ystride ].y;
-                E[ ix + (nx.y+1) * ystride ].z =  E[ ix + (nx.y-1) * ystride ].z;
+                E[ ix + ystride ].x =  E[ ix -1 * ystride ].x;
+                E[ ix + ystride ].y = -E[ ix -2 * ystride ].y;
+                E[ ix + ystride ].z =  E[ ix -1 * ystride ].z;
 
-                B[ ix + (nx.y) * ystride ].x = -B[ ix + (nx.y-1)*ystride ].x;
-                B[ ix + (nx.y) * ystride ].z = -B[ ix + (nx.y-1)*ystride ].z;
+                B[ ix ].x = -B[ ix - 1*ystride ].x;
+                B[ ix ].z = -B[ ix - 1*ystride ].z;
 
-                B[ ix + (nx.y+1) * ystride ].x = -B[ ix + (nx.x-2) * ystride ].x;
-                B[ ix + (nx.y+1) * ystride ].y =  B[ ix + (nx.x-1) * ystride ].y;
-                B[ ix + (nx.y+1) * ystride ].z = -B[ ix + (nx.x-2) * ystride ].z;
+                B[ ix + ystride ].x = -B[ ix - 2 * ystride ].x;
+                B[ ix + ystride ].y =  B[ ix - 1 * ystride ].y;
+                B[ ix + ystride ].z = -B[ ix - 2 * ystride ].z;
             }
             break;
 
         case( emf::bc::pec) :
-            for( int idx = 0; idx < static_cast<int>(ext_nx.x); idx ++ ) {
+            for( unsigned idx = 0; idx < E_grid.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                E[ ix + (nx.y)*ystride ].x =  0;
-                E[ ix + (nx.y)*ystride ].y =  E[ ix + (nx.y-1)*ystride ].y;
-                E[ ix + (nx.y)*ystride ].z =  0;
+                E[ ix ].x =  0;
+                E[ ix ].y =  E[ ix - 1 * ystride ].y;
+                E[ ix ].z =  0;
 
-                E[ ix + (nx.y+1)*ystride ].x = -E[ ix + (nx.x-1) * ystride ].x;
-                E[ ix + (nx.y+1)*ystride ].y =  E[ ix + (nx.x-2) * ystride ].y;
-                E[ ix + (nx.y+1)*ystride ].z = -E[ ix + (nx.x-1) * ystride ].z;
+                E[ ix + 1 * ystride ].x = -E[ ix- 1 * ystride ].x;
+                E[ ix + 1 * ystride ].y =  E[ ix- 2 * ystride ].y;
+                E[ ix + 1 * ystride ].z = -E[ ix- 1 * ystride ].z;
 
-                B[ ix + (nx.y)*ystride ].x =  B[ ix + (nx.y-1) * ystride ].x;
-                B[ ix + (nx.y)*ystride ].y =  0;
-                B[ ix + (nx.y)*ystride ].z =  B[ ix + (nx.y-1) * ystride ].z;
+                B[ ix ].x =  B[ ix - 1 * ystride ].x;
+                B[ ix ].y =  0;
+                B[ ix ].z =  B[ ix - 1 * ystride ].z;
 
-
-                B[ ix + (nx.y+1) * ystride ].x =  B[ ix + (nx.y-2) * ystride ].x;
-                B[ ix + (nx.y+1) * ystride ].y = -B[ ix + (nx.y-1) * ystride ].y;
-                B[ ix + (nx.y+1) * ystride ].z =  B[ ix + (nx.y-2) * ystride ].z;
+                B[ ix + 1 * ystride ].x =  B[ ix - 2 * ystride ].x;
+                B[ ix + 1 * ystride ].y = -B[ ix - 1 * ystride ].y;
+                B[ ix + 1 * ystride ].z =  B[ ix - 2 * ystride ].z;
             }
             break;
         default:
@@ -412,69 +468,37 @@ void emf_bcy(
 /**
  * @brief Processes "physical" boundary conditions
  * 
+ * @note Physical boundaries are only applied on ranks that sit on the
+ *       corresponding edge of the global domain; internal partition
+ *       boundaries were already handled by copy_to_gc()
  */
-void EMF::process_bc() {
+void emf::process_bc() {
 
-    std::cout << "(*error*) EMF::process_bc() have not been implemented yet,"
-              << " aborting.\n";
-    exit(1);
-
-    const auto ntiles   = E -> get_ntiles();
-    const auto tile_vol = E -> tile_vol;
-    const auto nx       = E -> nx;
-    const auto ext_nx   = E -> ext_nx;
+    const uint2 ntiles          = E -> get_local_ntiles();
 
     // x boundaries
-    if ( bc.x.lower > emf::bc::periodic || bc.x.upper > emf::bc::periodic ) {
-
-        // Loop over tiles
-        for( unsigned ty = 0; ty < ntiles.y; ++ty ) {
-            
-            //  Only lower (0) and upper ( ntiles.x - 1 ) tiles have physical x boundaries
-            for( unsigned tx : { 0u, ntiles.x-1 } ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at x cell 0
-                const auto x_offset = E -> gc.x.lower;
-
-                float3 * const __restrict__ tile_E = & E->d_buffer[ tile_off + x_offset ];
-                float3 * const __restrict__ tile_B = & B->d_buffer[ tile_off + x_offset ];
-
-                emf_bcx( tile_idx, tile_E, tile_B, nx, ext_nx, bc );
+    if ( is_conducting( local_bc.x.lower ) || is_conducting( local_bc.x.upper ) ) {
+        #pragma omp parallel for collapse(2) schedule(dynamic)
+        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+            for( unsigned bnd_x : {0,1} ) {
+                emf_bcx(bnd_x, ty, E -> view(), B->view(), local_bc);
             }
         }
     }
 
-    // y boundaries
-    if ( bc.y.lower > emf::bc::periodic || bc.y.upper > emf::bc::periodic ) {
-
-        // Loop over tiles
-
-        //  Only lower (0) and upper ( ntiles.y - 1 ) tiles have physical y boundaries
-        for( unsigned ty : { 0u, ntiles.y-1 } ) {
-            for( unsigned tx = 0; tx < ntiles.x; ++tx ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at y cell 0
-                const auto y_offset = E -> gc.y.lower * ext_nx.x;
-
-                float3 * const __restrict__ tile_E = & E->d_buffer[ tile_off + y_offset ];
-                float3 * const __restrict__ tile_B = & B->d_buffer[ tile_off + y_offset ];
-
-                emf_bcy( tile_idx, tile_E, tile_B, nx, ext_nx, bc );
+    // y boundaries (must run after x boundaries for correct corner values)
+    if ( is_conducting( local_bc.y.lower ) || is_conducting( local_bc.y.upper ) ) {
+        #pragma omp parallel for collapse(2) schedule(dynamic)
+        for( unsigned bnd_y : { 0,1 } ) {
+            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+                emf_bcx(tx, bnd_y, E -> view(), B->view(), local_bc);
             }
         }
     }
 }
 
 /**
- * @brief E advance for Yee algorithm including
+ * @brief E advance for Yee algorithm including current
  * 
  * @param E         Pointer to 0,0 coordinate of E field
  * @param B         Pointer to 0,0 coordinate of B field
@@ -509,105 +533,115 @@ void yeeJ_e(
 }
 
 /**
+ * @brief Complete Yee step including current
+ * 
+ * @param E_grid    Electric field
+ * @param B_grid    Magnetic field
+ * @param J_grid    Current density (read only)
+ * @param dt_dx     time step over cell size ratio
+ * @param dt        time step
+ * @param local_bc  Local rank boundary conditions
+ */
+void yeeJ( 
+    const uint2 tile_idx,
+    grid::tiled_vec3_view<float> E_grid,
+    grid::tiled_vec3_view<float> B_grid,
+    grid::tiled_view<const float3> J_grid,
+    float2 const dt_dx, float const dt,
+    emf::bc_type const local_bc ) {
+
+    const int tile_id   = tile_idx.y * E_grid.local_ntiles.x + tile_idx.x;
+    const uint2 tile_dims = E_grid.tile_dims;
+
+    // Copy E and B into shared memory
+    float3 E_local[ E_grid.tile_vol ];
+    float3 B_local[ B_grid.tile_vol ];
+    
+    memory::memcpy( E_local, E_grid.tile_buffer(tile_id), E_grid.tile_vol );
+    memory::memcpy( B_local, B_grid.tile_buffer(tile_id), B_grid.tile_vol );
+
+    float3 * const __restrict__ E = & E_local[ E_grid.inner_offset ];
+    float3 * const __restrict__ B = & B_local[ B_grid.inner_offset ];
+    float3 const * const __restrict__ J = J_grid.tile_data(tile_id);
+
+    const int ystride = E_grid.tile_ystride();
+    const int J_ystride = J_grid.tile_ystride();
+    const float2 dt_dx_2 = { dt_dx.x / 2, dt_dx.y / 2 };
+
+    // Half B advance
+    yee_b( E, B, tile_dims, ystride, dt_dx_2 );
+
+    // Full E advance
+    yeeJ_e( E, B, tile_dims, ystride, J, J_ystride, dt_dx, dt );
+
+    // Keep tangential E zero on PEC walls
+    pec_walls( E, tile_idx, E_grid.local_ntiles, tile_dims, ystride, local_bc );
+
+    // Half B advance
+    yee_b( E, B, tile_dims, ystride, dt_dx_2 );
+    
+    memory::memcpy( E_grid.tile_buffer(tile_id), E_local, E_grid.tile_vol );
+    memory::memcpy( B_grid.tile_buffer(tile_id), B_local, B_grid.tile_vol );
+}
+
+/**
  * @brief Advance EM fields 1 time step including current
  * 
+ * @param current   Electric current
  */
-void EMF::advance( Current & current ) {
+void emf::advance( current & current ) {
 
-    const auto ntiles    = E -> get_ntiles();
-    const auto field_vol = E -> tile_vol;
-    const auto nx        = E -> nx;
-    const auto offset    = E -> offset;
-    const int  ystride   = E -> ext_nx.x;
-
-    auto * J              = current.J->d_buffer;
-    const auto J_tile_vol = current.J->tile_vol;
-    const auto J_offset   = current.J->offset;
-    const int  J_ystride  = current.J->ext_nx.x;
-
+    const auto ntiles   = E -> get_local_ntiles();
     float2 const dt_dx   = make_float2( dt/dx.x, dt/dx.y );
-    float2 const dt_dx_2 = make_float2( dt_dx.x/2, dt_dx.y/2 );
 
-    #pragma omp parallel for
-    for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-
-        const auto tile_off = tid * field_vol;
-
-        // Copy E and B into shared memory
-        float3 E_local[ field_vol ];
-        float3 B_local[ field_vol ];
-        for( unsigned i = 0; i < field_vol; i++ ) {
-            E_local[i] = E->d_buffer[ tile_off + i ];
-            B_local[i] = B->d_buffer[ tile_off + i ];
-        }
-
-        float3 * const __restrict__ tile_E = & E_local[ offset ];
-        float3 * const __restrict__ tile_B = & B_local[ offset ];
-        
-        // Use J from global memory
-        const auto J_tile_off = tid * J_tile_vol + J_offset;
-        float3 * const __restrict__ tile_J = & J[ J_tile_off ];
-
-        // synchronize block (...)
-
-        yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
-        // synchronize block (...)
-
-        yeeJ_e( tile_E, tile_B, nx, ystride, tile_J, J_ystride, dt_dx, dt );
-        // synchronize block (...)
-
-        yee_b( tile_E, tile_B, nx, ystride, dt_dx_2 );
-        
-        // synchronize block (...)
-
-        // Copy data to global memory
-        for( unsigned i = 0; i < field_vol; i++ ) {
-            E->d_buffer[ tile_off + i ] = E_local[i];
-            B->d_buffer[ tile_off + i ] = B_local[i];
+    #pragma omp parallel for collapse(2) schedule(dynamic)
+    for( unsigned ty = 0; ty < ntiles.y; ty++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx++ ) {
+            uint2 tile_idx = make_uint2( tx, ty );
+            yeeJ( tile_idx, E -> view(), B -> view(), current.J -> cview(),
+                    dt_dx, dt, local_bc );
         }
     }
 
     // Update guard cells with new values
-    E -> copy_to_gc();
-    B -> copy_to_gc();
+    E -> copy_to_gc( );
+    B -> copy_to_gc( );
 
     // Do additional bc calculations if needed
-    // process_bc();
+    process_bc( );
 
     // Advance internal iteration number
     iter += 1;
 
     // Move simulation window if needed
-    if ( moving_window.active() ) move_window();
+    if ( mov_window.active() ) move_window( );
 }
-
 /**
  * @brief Save EMF data to diagnostic file
  * 
- * @param field     Field to save (0:E, 1:B)
- * @param fc        Field component to save (0, 1 or 2)
+ * @param quant     Field to save (emf::quantity::e or emf::quantity::b)
+ * @param fc        Field component to save (fcomp::x, fcomp::y or fcomp::z)
  */
-void EMF::save( const emf::field field, fcomp::cart const fc ) {
+void emf::save( const emf::quantity quant, const fcomp::cart fc ) const {
 
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
 
-    vec3grid<float3> * f;
+    grid::tiled_vec3<float> * f = nullptr;
 
-    switch (field ) {
-        case emf::e :
+    switch ( quant ) {
+        case quantity::e :
             f = E;
             vfname = "E";
             vflabel = "E_";
             break;
-        case emf::b :
+        case quantity::b :
             f = B;
             vfname = "B";
             vflabel = "B_";
             break;
         default:
-            std::cerr << "(*error*) Invalid field type selected, returning..." << std::endl;
-            return;
+            mpi::fatal( "Invalid quantity selected" );
     }
 
     switch ( fc ) {
@@ -624,20 +658,19 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             vflabel += 'z';
             break;
         default:
-            std::cerr << "(*error*) Invalid field component (fc) selected, returning..." << std::endl;
-            return;
+            mpi::fatal( "Invalid field component (fc) selected" );
     }
 
     zdf::grid_axis axis[2];
-    axis[0] = (zdf::grid_axis) {
+    axis[0] = zdf::grid_axis {
         .name = (char *) "x",
-        .min = 0.0 + moving_window.motion(),
-        .max = box.x + moving_window.motion(),
+        .min = mov_window.motion(),
+        .max = box.x + mov_window.motion(),
         .label = (char *) "x",
         .units = (char *) "c/\\omega_n"
     };
 
-    axis[1] = (zdf::grid_axis) {
+    axis[1] = zdf::grid_axis {
         .name = (char *) "y",
         .min = 0.0,
         .max = box.y,
@@ -662,59 +695,63 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
 }
 
 /**
- * @brief Get total field energy per field component
+ * @brief Get local field energy per field component
  * 
- * @param energy    Array that will hold energy values
+ * @warning This function will always recalculate the energy each time it is
+ *          called.
+ * 
+ * @param ene_E     Total E-field energy (per component)
+ * @param ene_B     Total B-field energy (per component)
  */
-void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
+void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
 
-    ene_E = make_double3(0,0,0);
-    ene_B = make_double3(0,0,0);
+    const uint2 ntiles          = E -> get_local_ntiles();
+    const uint2 tile_dims       = E -> tile_dims;
+    const unsigned int ystride  = E -> tile_ext_dims.x;
 
-    const uint2 ntiles          = E -> get_ntiles();
-    const unsigned int tile_vol = E -> tile_vol;
-    const uint2 nx              = E -> nx;
-    const unsigned int offset   = E -> offset;
-    const unsigned int ystride  = E -> ext_nx.x;
+    double ex, ey, ez, bx, by, bz;
+    ex = ey = ez = 0;
+    bx = by = bz = 0;
 
-    float3 * const __restrict__ d_E = E -> d_buffer;
-    float3 * const __restrict__ d_B = B -> d_buffer;
+    // Loop over all local tiles
+    #pragma omp parallel for \
+        reduction(+:ex,ey,ez) \
+        reduction(+:bx,by,bz)
+    for( unsigned tid = 0; tid < ntiles.y * ntiles.x; ++tid ) {
+        float3 * const __restrict__ d_E = E -> tile_data(tid);
+        float3 * const __restrict__ d_B = B -> tile_data(tid);
 
-    // Loop over tiles
-    for( unsigned ty = 0; ty < ntiles.y; ++ty ) {
-        for( unsigned tx = 0; tx < ntiles.x; ++tx ) {
+        double3 tile_ene_E = make_double3(0,0,0);
+        double3 tile_ene_B = make_double3(0,0,0);
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol + offset ;
+        // Loop over inner tile cells 
+        for( unsigned iy = 0; iy < tile_dims.y; ++iy ) {
+            for( unsigned ix = 0; ix < tile_dims.y; ++ix ) {
+                float3 const efld = d_E[ iy * ystride + ix ];
+                float3 const bfld = d_B[ iy * ystride + ix ];
 
-            auto tile_ene_E = make_double3(0,0,0);
-            auto tile_ene_B = make_double3(0,0,0);
+                tile_ene_E.x += efld.x * efld.x;
+                tile_ene_E.y += efld.y * efld.y;
+                tile_ene_E.z += efld.z * efld.z;
 
-            // Loop over cells
-            for( unsigned iy = 0; iy < nx.y; ++iy ) {
-                for( unsigned ix = 0; ix < nx.x; ++ix ) {
-                    float3 const efld = d_E[ tile_off + iy * ystride + ix ];
-                    float3 const bfld = d_B[ tile_off + iy * ystride + ix ];
-
-                    tile_ene_E.x += efld.x * efld.x;
-                    tile_ene_E.y += efld.y * efld.y;
-                    tile_ene_E.z += efld.z * efld.z;
-
-                    tile_ene_B.x += bfld.x * bfld.x;
-                    tile_ene_B.y += bfld.y * bfld.y;
-                    tile_ene_B.z += bfld.z * bfld.z;
-                }
+                tile_ene_B.x += bfld.x * bfld.x;
+                tile_ene_B.y += bfld.y * bfld.y;
+                tile_ene_B.z += bfld.z * bfld.z;
             }
-            
-            // reduce(add) data inside tile
-            
-            {   // Only 1 thread per tile does this
-                // Atomic ops
-                ene_E += tile_ene_E;
-                ene_B += tile_ene_B;
-            }
-
         }
+        
+        ex += tile_ene_E.x; ey += tile_ene_E.y; ez += tile_ene_E.z;
+        bx += tile_ene_B.x; by += tile_ene_B.y; bz += tile_ene_B.z;
     }
+
+    ene_E = make_double3(ex, ey, ez);
+    ene_B = make_double3(bx, by, bz);
+
+    ene_E.x *= 0.5 * dx.x * dx.y;
+    ene_E.y *= 0.5 * dx.x * dx.y;
+    ene_E.z *= 0.5 * dx.x * dx.y;
+
+    ene_B.x *= 0.5 * dx.x * dx.y;
+    ene_B.y *= 0.5 * dx.x * dx.y;
+    ene_B.z *= 0.5 * dx.x * dx.y;
 }

@@ -1,7 +1,15 @@
-#include "species.h"
-#include <iostream>
+#include "species.hpp"
 
-#include "simd/simd.h"
+#include <vector>
+#include <cstddef>
+#include <iostream>
+#include <string>
+
+#include "grid/tiled.hpp"
+#include "parallel/partition.hpp"
+#include "simd/simd.hpp"
+#include "util/math.hpp"
+
 
 /**
  * @brief Memory alignment of local buffers
@@ -38,7 +46,7 @@ inline float rgamma( const float3 u ) {
  * @param ix        Particle cell index
  * @param x         Particle postion inside cell
  * @param e[out]    E field at particle position
- * @param b[out]    B field at particleposition
+ * @param b[out]    B field at particle position
  */
 void interpolate_fld( 
     float3 const * const __restrict__ E, 
@@ -95,7 +103,7 @@ void interpolate_fld(
 /**
  * @brief Advance momentum using a relativistic Boris pusher.
  * 
- * The momemtum advance in this method is split into 3 parts:
+ * The momentum advance in this method is split into 3 parts:
  * 1. Perform half of E-field acceleration
  * 2. Perform full B-field rotation
  * 3. Perform half of E-field acceleration
@@ -179,7 +187,7 @@ float3 dudt_boris( const float alpha, float3 e, float3 b, float3 u, double & ene
 
 
 /**
- * @brief Advance memntum using a relativistic Boris pusher for high magnetic fields
+ * @brief Advance momentum using a relativistic Boris pusher for high magnetic fields
  * 
  * This is similar to the dudt_boris method above, but the rotation is done using
  * using an exact Euler-Rodriguez method.2
@@ -238,7 +246,7 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u,
 
         float const r31 = 2*ops::fma(rb,rd,ra*rc);
         float const r32 = 2*ops::fma(rc,rd,-ra*rb);
-        float const r33 =   ops::fma(ra,ra,rd*rd)-ops::fma(rb,rb,-rc*rc);
+        float const r33 =   ops::fma(ra,ra,rd*rd)-ops::fma(rb,rb,rc*rc);
 
         u.x = ops::fma( r11, ut.x, ops::fma( r21, ut.y , r31 * ut.z ));
         u.y = ops::fma( r12, ut.x, ops::fma( r22, ut.y , r32 * ut.z ));
@@ -436,6 +444,9 @@ inline void split2d(
 
 #ifdef SIMD
 
+// SIMD types and vec_*() functions (see simd/simd.hpp)
+using namespace simd;
+
 /**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
@@ -530,6 +541,94 @@ inline vfloat3 vdudt_boris( const vfloat alpha, vfloat3 e, vfloat3 b, vfloat3 u,
 }
 
 /**
+ * @brief Advance momentum using a relativistic Boris pusher for high magnetic
+ *        fields, with SIMD operations
+ *
+ * @note For details on the algorithm check `dudt_boris_euler()`. Unlike the
+ *       scalar version, the rotation quaternion is obtained directly from
+ *       \f$ |b|^2 \f$ (see `vcos_sinc()`), so no square root and no test on
+ *       \f$ |b| > 0 \f$ are required.
+ *
+ * @param alpha     (simd vector)
+ * @param e         (simd vector) E-field interpolated at the particle position
+ * @param b         (simd vector) B-field interpolated at the particle position
+ * @param u         (simd vector) generalized velocity
+ * @param energy    Total particle energy. The time centered energy of the particles
+ *                  will be added to this variable.
+ * @return vfloat3  (simd vector) Updated generalized velocity
+ */
+inline vfloat3 vdudt_boris_euler( const vfloat alpha, vfloat3 e, vfloat3 b, vfloat3 u, double & energy )
+{
+    // First half of acceleration
+    e.x = vec_mul( e.x, alpha );
+    e.y = vec_mul( e.y, alpha );
+    e.z = vec_mul( e.z, alpha );
+ 
+    vfloat3 ut {
+        vec_add( u.x, e.x ),
+        vec_add( u.y, e.y ),
+        vec_add( u.z, e.z )
+    };
+ 
+    {
+        const vfloat utsq  = vec_fmadd( ut.z, ut.z, vec_fmadd( ut.y, ut.y, vec_mul( ut.x, ut.x ) ) );
+        const vfloat gamma = vec_sqrt( vec_add( utsq, 1.0f ) );
+ 
+        // Get time centered energy
+        energy += vec_reduce_add( vec_div( utsq, vec_add( gamma, 1.0f ) ) );
+ 
+        // Time centered 2 * \alpha / \gamma
+        const vfloat alpha2_gamma = vec_div( vec_add( alpha, alpha ), gamma );
+ 
+        b.x = vec_mul( b.x, alpha2_gamma );
+        b.y = vec_mul( b.y, alpha2_gamma );
+        b.z = vec_mul( b.z, alpha2_gamma );
+    }
+ 
+    {
+        // Compute ||b||/2
+        const vfloat bnorm_2 = vec_mul( vec_sqrt(
+                vec_fmadd( b.z, b.z, vec_fmadd( b.y, b.y, vec_mul( b.x, b.x ) ) )
+            ), .5f );
+
+        // Compute cos( ||b||/2 ) and -sin( ||b||/2 ) / ||b||
+        vfloat ra, sinc;
+        vec_sinc_cos( bnorm_2, sinc, ra );
+        const vfloat s  = vec_mul( sinc, -0.5f );
+ 
+        const vfloat rb = vec_mul( b.x, s );
+        const vfloat rc = vec_mul( b.y, s );
+        const vfloat rd = vec_mul( b.z, s );
+  
+        const vfloat r11 = vec_sub( vec_fmadd( ra, ra, vec_mul( rb, rb ) ),
+                                    vec_fmadd( rc, rc, vec_mul( rd, rd ) ) );
+        const vfloat r12 = vec_mul( vec_fmadd(  rb, rc, vec_mul( ra, rd ) ), 2.f );
+        const vfloat r13 = vec_mul( vec_fnmadd( ra, rc, vec_mul( rb, rd ) ), 2.f );
+ 
+        const vfloat r21 = vec_mul( vec_fnmadd( ra, rd, vec_mul( rb, rc ) ), 2.f );
+        const vfloat r22 = vec_sub( vec_fmadd( ra, ra, vec_mul( rc, rc ) ),
+                                    vec_fmadd( rb, rb, vec_mul( rd, rd ) ) );
+        const vfloat r23 = vec_mul( vec_fmadd(  rc, rd, vec_mul( ra, rb ) ), 2.f );
+ 
+        const vfloat r31 = vec_mul( vec_fmadd(  rb, rd, vec_mul( ra, rc ) ), 2.f );
+        const vfloat r32 = vec_mul( vec_fnmadd( ra, rb, vec_mul( rc, rd ) ), 2.f );
+        const vfloat r33 = vec_sub( vec_fmadd( ra, ra, vec_mul( rd, rd ) ),
+                                    vec_fmadd( rb, rb, vec_mul( rc, rc ) ) );
+ 
+        u.x = vec_fmadd( r11, ut.x, vec_fmadd( r21, ut.y, vec_mul( r31, ut.z ) ) );
+        u.y = vec_fmadd( r12, ut.x, vec_fmadd( r22, ut.y, vec_mul( r32, ut.z ) ) );
+        u.z = vec_fmadd( r13, ut.x, vec_fmadd( r23, ut.y, vec_mul( r33, ut.z ) ) );
+    }
+ 
+    // Second half of acceleration
+    u.x = vec_add( u.x, e.x );
+    u.y = vec_add( u.y, e.y );
+    u.z = vec_add( u.z, e.z );
+ 
+    return u;
+}
+
+/**
  * @brief Deposit (charge conserving) current for 1 segment inside a cell (vector version)
  * 
  * @note Current will be deposited for all vector elements
@@ -569,41 +668,40 @@ void vdep_current_seg(
     vfloat wp21 = vec_mul( c1_2, vec_add(S0x1, S1x1) );
 
 
-    VecFloat_s a00x = vec_mul( wl1, wp10 );
-    VecFloat_s a00y = vec_mul( wl2, wp20 );
+    vfloat a00x = vec_mul( wl1, wp10 );
+    vfloat a00y = vec_mul( wl2, wp20 );
 
     // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f );
-    VecFloat_s a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmsub( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
+    vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmsub( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
 
-    VecFloat_s a01y = vec_mul( wl2, wp21 );
+    vfloat a01y = vec_mul( wl2, wp21 );
     // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f );
-    VecFloat_s a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmsub( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
+    vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmsub( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
 
-    VecFloat_s a10x = vec_mul( wl1, wp11 );
+    vfloat a10x = vec_mul( wl1, wp11 );
     // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f );
-    VecFloat_s a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmsub( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
+    vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmsub( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
     // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f );
-    VecFloat_s a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmsub( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
+    vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmsub( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
 
-    VecInt_s idx = vec_add( ix.x, vec_mul( ix.y, stride ) );
+    vint idx = vec_add( ix.x, vec_mul( ix.y, stride ) );
 
-    for ( int i = 0; i < vecwidth; i++ ) {
+    for ( int i = 0; i < simd::width; i++ ) {
 
-        float * __restrict__ Js = (float *) (&J[idx.extract(i)]);
+        float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
         int const stride3 = 3 * stride;
 
-        Js[       0 + 0 + 0 ] += a00x.extract(i);
-        Js[       0 + 0 + 1 ] += a00y.extract(i);
-        Js[       0 + 0 + 2 ] += a00z.extract(i);
+        Js[       0 + 0 + 0 ] += vec_extract( a00x, i );
+        Js[       0 + 0 + 1 ] += vec_extract( a00y, i );
+        Js[       0 + 0 + 2 ] += vec_extract( a00z, i );
 
-        Js[       0 + 3 + 1 ] += a01y.extract(i);
-        Js[       0 + 3 + 2 ] += a01z.extract(i);
+        Js[       0 + 3 + 1 ] += vec_extract( a01y, i );
+        Js[       0 + 3 + 2 ] += vec_extract( a01z, i );
 
-        Js[ stride3 + 0 + 0 ] += a10x.extract(i);
-        Js[ stride3 + 0 + 2 ] += a10z.extract(i);
+        Js[ stride3 + 0 + 0 ] += vec_extract( a10x, i );
+        Js[ stride3 + 0 + 2 ] += vec_extract( a10z, i );
 
-        Js[ stride3 + 3 + 2 ] += a11z.extract(i);
-
+        Js[ stride3 + 3 + 2 ] += vec_extract( a11z, i );
     }
 }
 
@@ -647,46 +745,42 @@ inline void vdep_current_seg(
         vfloat wp20 = vec_mul( c1_2, vec_add(S0x0, S1x0) );
         vfloat wp21 = vec_mul( c1_2, vec_add(S0x1, S1x1) );
 
-        VecFloat_s a00x = vec_mul( wl1, wp10 );
-        VecFloat_s a00y = vec_mul( wl2, wp20 );
+        vfloat a00x = vec_mul( wl1, wp10 );
+        vfloat a00y = vec_mul( wl2, wp20 );
 
         // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 - S1x0 * S0y0)/2.0f );
-        VecFloat_s a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmsub( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
+        vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmsub( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
 
-        VecFloat_s a01y = vec_mul( wl2, wp21 );
+        vfloat a01y = vec_mul( wl2, wp21 );
         // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 - S1x1 * S0y0)/2.0f );
-        VecFloat_s a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmsub( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
+        vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmsub( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
 
-        VecFloat_s a10x = vec_mul( wl1, wp11 );
+        vfloat a10x = vec_mul( wl1, wp11 );
         // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 - S1x0 * S0y1)/2.0f );
-        VecFloat_s a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmsub( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
+        vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmsub( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
         // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 - S1x1 * S0y1)/2.0f );
-        VecFloat_s a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmsub( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
+        vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmsub( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
 
-        VecInt_s idx = vec_add( ix.x, vec_mul( ix.y, stride) );
-        VecMask_s deposit = mask;
+        vint idx = vec_add( ix.x, vec_mul( ix.y, stride) );
+        vmask deposit = mask;
 
-        for ( int i = 0; i < vecwidth; i++ ) {
+        for ( int i = 0; i < simd::width; i++ ) {
             // Only deposit particles with active mask
-            if ( deposit.extract(i) ) {
-                float * __restrict__ const Js = (float *) (&J[idx.extract(i)]);
+            if ( vec_extract( deposit, i ) ) {
+                float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
                 int const stride3 = 3 * stride;
 
-                // Reorder for linear access
-                //                   y    x  fc
+                Js[       0 + 0 + 0 ] += vec_extract( a00x, i );
+                Js[       0 + 0 + 1 ] += vec_extract( a00y, i );
+                Js[       0 + 0 + 2 ] += vec_extract( a00z, i );
 
-                // When using more than 1 thread per tile all of these need to be atomic
-                Js[       0 + 0 + 0 ] += a00x.extract(i);
-                Js[       0 + 0 + 1 ] += a00y.extract(i);
-                Js[       0 + 0 + 2 ] += a00z.extract(i);
+                Js[       0 + 3 + 1 ] += vec_extract( a01y, i );
+                Js[       0 + 3 + 2 ] += vec_extract( a01z, i );
 
-                Js[       0 + 3 + 1 ] += a01y.extract(i);
-                Js[       0 + 3 + 2 ] += a01z.extract(i);
+                Js[ stride3 + 0 + 0 ] += vec_extract( a10x, i );
+                Js[ stride3 + 0 + 2 ] += vec_extract( a10z, i );
 
-                Js[ stride3 + 0 + 0 ] += a10x.extract(i);
-                Js[ stride3 + 0 + 2 ] += a10z.extract(i);
-
-                Js[ stride3 + 3 + 2 ] += a11z.extract(i);
+                Js[ stride3 + 3 + 2 ] += vec_extract( a11z, i );
             }
         }
     }
@@ -861,198 +955,26 @@ inline void vsplit2d(
  */
 void move_deposit_kernel(
     uint2 const tile_idx,
-    ParticleData const part,
-    float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
-    float2 const dt_dx, float const q, float2 const qnx ) 
-{
-    const uint2 ntiles  = part.ntiles;
-
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
-
-    // The alignment also avoids some optimization related segfaults
-    alignas(local_align) float3 _move_deposit_buffer[ tile_size ];
-
-
-    // Zero local current buffer
-    for( auto i = 0; i < tile_size; i++ ) 
-        _move_deposit_buffer[i] = make_float3(0,0,0);
-
-    // sync
-
-    // Move particles and deposit current
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    float3 * J = _move_deposit_buffer + current_offset;
-    const int ystride = ext_nx.x;
-
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
-    int2   * __restrict__ ix = &part.ix[ part_offset ];
-    float2 * __restrict__ x  = &part.x[ part_offset ];
-    float3 * __restrict__ u  = &part.u[ part_offset ];
-
-    const vfloat2 vqnx = {
-        vec_float( qnx.x ),
-        vec_float( qnx.y )
-    };
-
-    const int np_vec = (np/vecwidth) * vecwidth;
-    for( int i = 0; i < np_vec; i+= vecwidth ) {
-        vfloat3 pu        = vec_load_s3( (float *) & u[i] );
-        vfloat2 const x0  = vec_load_s2( (float *) & x[i] );
-        vint2   const ix0 = vec_load_s2( (int *) & ix[i] );
-
-        // Get 1 / Lorentz gamma
-        vfloat const rg = rgamma( pu );
-
-        // Get particle motion
-        vfloat2 const delta = {
-            vec_mul( vec_mul( rg, pu.x ), dt_dx.x ),
-            vec_mul( vec_mul( rg, pu.y ), dt_dx.y )
-        };
-
-        vfloat qvz = vec_mul( vec_mul( pu.z, rg ), q * 0.5f );
-
-        // Advance position
-        vfloat2 x1 = {
-            vec_add( x0.x , delta.x ),
-            vec_add( x0.y , delta.y )
-        };
-
-        // Check for cell crossings and split trajectory
-        vint2 deltai; vmask2 cross;
-
-        vint2 v0_ix; vfloat2 v0_x0, v0_x1; vfloat v0_qvz;
-        vint2 v1_ix; vfloat2 v1_x0, v1_x1; vfloat v1_qvz;
-        vint2 v2_ix; vfloat2 v2_x0, v2_x1; vfloat v2_qvz;
-
-        vsplit2d( 
-            ix0, x0, x1, delta, qvz, 
-            deltai,
-            v0_ix, v0_x0, v0_x1, v0_qvz,
-            v1_ix, v1_x0, v1_x1, v1_qvz,
-            v2_ix, v2_x0, v2_x1, v2_qvz,
-            cross
-        );
-        
-        // Deposit current
-        vdep_current_seg( v0_ix, v0_x0, v0_x1, vqnx, v0_qvz, J, ystride );
-        vdep_current_seg( v1_ix, v1_x0, v1_x1, vqnx, v1_qvz, J, ystride, vec_or(  cross.x, cross.y ) );
-        vdep_current_seg( v2_ix, v2_x0, v2_x1, vqnx, v2_qvz, J, ystride, vec_and( cross.x, cross.y ) );
-
-        // Correct cell position and store
-        x1.x = vec_sub( x1.x, vec_float( deltai.x ) );
-        x1.y = vec_sub( x1.y, vec_float( deltai.y ) );
-        vec_store_s2( (float *) & x[i], x1 );
-
-        // Modify cell and store
-        vint2 ix1 = {
-            vec_add( ix0.x, deltai.x ),
-            vec_add( ix0.y, deltai.y )
-        };
-        vec_store_s2( (int *) & ix[i], ix1 );
-    }
-
-    // Process remaining particles using serial code
-    for( int i = np_vec; i < np; i += 1 ) {
-        float3 pu = u[i];
-        float2 const x0 = x[i];
-        int2   const ix0 =ix[i];
-
-        // Get 1 / Lorentz gamma
-        float const rg = rgamma( pu );
-
-        // Get particle motion
-        float2 const delta = make_float2(
-            dt_dx.x * rg * pu.x,
-            dt_dx.y * rg * pu.y
-        );
-
-        float qvz = q * pu.z * rg * 0.5f;
-
-        // Advance position
-        float2 x1 = make_float2(
-            x0.x + delta.x,
-            x0.y + delta.y
-        );
-
-        // Check for cell crossings and split trajectory
-        int2 deltai, cross;
-
-        int2 v0_ix; float2 v0_x0, v0_x1; float v0_qvz;
-        int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
-        int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
-
-        split2d( ix0, x0, x1, delta, qvz, deltai,
-            v0_ix, v0_x0, v0_x1, v0_qvz,
-            v1_ix, v1_x0, v1_x1, v1_qvz,
-            v2_ix, v2_x0, v2_x1, v2_qvz,
-            cross );
-        
-        // Deposit current
-                                  dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
-        if ( cross.x || cross.y ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
-        if ( cross.x && cross.y ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
-
-        // Correct cell position and store
-        x1.x -= deltai.x;
-        x1.y -= deltai.y;
-        x[i] = x1;
-
-        // Modify cell and store
-        int2 ix1 = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
-        );
-        ix[i] = ix1;
-    }
-
-    // Add current to global buffer
-    const int tile_off = tid * tile_size;
-
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
-        d_current[tile_off + i] += _move_deposit_buffer[i];
-    }
-}
-
-/**
- * @brief Move particles, deposit current and shift positions
- * 
- * @param tile_idx          Tile index
- * @param part              Particle data
- * @param d_current         Current grid (global)
- * @param current_offset    Offset to position [0,0] of the current grid
- * @param ext_nx            Current grid size (external)
- * @param dt_dx             Ratio between time step and cell size
- * @param q                 Particle charge
- * @param qnx               Current normalization 
- * @param shift             Position shift
- */
-void move_deposit_shift_kernel(
-    uint2 const tile_idx,
-    ParticleData const part,
-    float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
+    part::particles_view const part,
+    grid::tiled_view<float3> current,
     float2 const dt_dx, float const q, float2 const qnx, int2 const shift ) 
 {
-    const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const uint2 ntiles  = part.local_ntiles;
 
-    alignas(local_align) float3 _move_deposit_buffer[ tile_size ];
+    // The alignment also avoids some optimization related segfaults
+    alignas(local_align) float3 _current_buffer[ current.tile_vol ];
 
-    // Zero local current buffer
-    for( auto i = 0; i < tile_size; i++ ) 
-        _move_deposit_buffer[i] = make_float3(0,0,0);
-
-    // sync
+    // Zero local buffers
+    memory::zero( _current_buffer, current.tile_vol );
 
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J = & _move_deposit_buffer[ current_offset ];
-    const int ystride = ext_nx.x;
+    float3 * __restrict__ J =  & _current_buffer[ current.inner_offset ];
+    const int ystride = current.tile_ystride();
 
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
+    const int part_offset    = part.tile_offset[ tid ];
+    const int np             = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
@@ -1062,13 +984,10 @@ void move_deposit_shift_kernel(
         vec_float( qnx.y )
     };
 
-    const vint2 vshift = {
-        vec_int( shift.x ),
-        vec_int( shift.y )
-    };
-
-    const int np_vec = (np/vecwidth) * vecwidth;
-    for( int i = 0; i < np_vec; i+= vecwidth ) {
+    const vint2 vshift = { vec_int( shift.x ), vec_int ( shift.y ) };
+   
+    const int np_vec = (np/simd::width) * simd::width;
+    for( int i = 0; i < np_vec; i+= simd::width ) {
         vfloat3 pu        = vec_load_s3( (float *) & u[i] );
         vfloat2 const x0  = vec_load_s2( (float *) & x[i] );
         vint2   const ix0 = vec_load_s2( (int *) & ix[i] );
@@ -1107,7 +1026,6 @@ void move_deposit_shift_kernel(
         );
         
         // Deposit current
-
         vdep_current_seg( v0_ix, v0_x0, v0_x1, vqnx, v0_qvz, J, ystride );
         vdep_current_seg( v1_ix, v1_x0, v1_x1, vqnx, v1_qvz, J, ystride, vec_or(  cross.x, cross.y ) );
         vdep_current_seg( v2_ix, v2_x0, v2_x1, vqnx, v2_qvz, J, ystride, vec_and( cross.x, cross.y ) );
@@ -1117,7 +1035,7 @@ void move_deposit_shift_kernel(
         x1.y = vec_sub( x1.y, vec_float( deltai.y ) );
         vec_store_s2( (float *) & x[i], x1 );
 
-        // Modify cell and store
+        // Modify cell, add shift, and store
         vint2 ix1 = {
             vec_add( vec_add( ix0.x, deltai.x ), vshift.x ),
             vec_add( vec_add( ix0.y, deltai.y ), vshift.y )
@@ -1171,7 +1089,7 @@ void move_deposit_shift_kernel(
         x1.y -= deltai.y;
         x[i] = x1;
 
-        // Modify cell and store
+        // Modify cell, add shift, and store
         int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
             ix0.y + deltai.y + shift.y
@@ -1179,12 +1097,10 @@ void move_deposit_shift_kernel(
         ix[i] = ix1;
     }
 
-    // Add current to global buffer
-    const int tile_off = tid * tile_size;
-
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
-         d_current[tile_off + i] += _move_deposit_buffer[i];
-    }
+    // Add current to global buffer using explicit SIMD code
+    vec_memadd( reinterpret_cast<float*>(current.tile_buffer(tid)), 
+                reinterpret_cast<const float*>(_current_buffer),
+                3 * current.tile_vol );
 }
 
 /**
@@ -1311,47 +1227,39 @@ inline void vinterpolate_fld(
 template < species::pusher type >
 void push_kernel ( 
     uint2 const tile_idx,
-    ParticleData const part,
-    float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
-    unsigned int const field_offset, uint2 const ext_nx,
+    part::particles_view const part,
+    grid::tiled_view<float3> const E_grid, grid::tiled_view<float3> const B_grid,
     float const alpha, double * __restrict__ d_energy )
 {
-    const uint2 ntiles  = part.ntiles;
-
-    // Tile ID
+    const uint2 ntiles  = part.local_ntiles;
     const int tid =  tile_idx.y * ntiles.x + tile_idx.x;
 
-    int const field_vol = roundup4( ext_nx.x * ext_nx.y );
-    int const tile_off = tid * field_vol;
-
     // Copy E and B into shared memory
-    alignas(local_align) float3 E_local[ field_vol ];
-    alignas(local_align) float3 B_local[ field_vol ];
+    alignas(local_align) float3 E_local[ E_grid.tile_vol ];
+    alignas(local_align) float3 B_local[ B_grid.tile_vol ];
 
-    for( auto i = 0; i < field_vol; i++ ) {
-        E_local[i] = d_E[tile_off + i];
-        B_local[i] = d_B[tile_off + i];
-    }
+    memory::memcpy(E_local, E_grid.tile_buffer(tid), E_grid.tile_vol);
+    memory::memcpy(B_local, B_grid.tile_buffer(tid), B_grid.tile_vol);
 
-    float3 const * const __restrict__ E = & E_local[ field_offset ];
-    float3 const * const __restrict__ B = & B_local[ field_offset ];
+    float3 const * const __restrict__ E = & E_local[ E_grid.inner_offset ];
+    float3 const * const __restrict__ B = & B_local[ B_grid.inner_offset ];
 
     // Push particles
-    const int part_offset = part.offset[ tid ];
-    const int np          = part.np[ tid ];
+    const int part_offset = part.tile_offset[ tid ];
+    const int np          = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
 
     double energy = 0;
 
-    const int ystride = ext_nx.x;
+    const int ystride = E_grid.tile_ystride();
 
     const vfloat valpha = vec_float( alpha );
 
-    const int np_vec = (np/vecwidth) * vecwidth;
+    const int np_vec = (np/simd::width) * simd::width;
 
-    for( int i = 0; i < np_vec; i += vecwidth ) {
+    for( int i = 0; i < np_vec; i += simd::width ) {
         vfloat3 e, b;
 
         const vint2   vix = vec_load_s2( (int *) & ix[i] );
@@ -1360,7 +1268,12 @@ void push_kernel (
         vinterpolate_fld( E, B, ystride, vix, vx, e, b );
 
         vfloat3 pu = vec_load_s3( (float *) & u[i] );
-        pu = vdudt_boris( valpha, e, b, pu, energy );
+        
+        if constexpr ( type == species::pusher::boris )
+            pu = vdudt_boris( valpha, e, b, pu, energy );
+        if constexpr ( type == species::pusher::euler ) 
+            pu = vdudt_boris_euler( valpha, e, b, pu, energy );
+
         vec_store_s3( (float *) & u[i], pu );
     }
 
@@ -1374,8 +1287,9 @@ void push_kernel (
         interpolate_fld( E, B, ystride, pix, px, e, b );
 
         float3 pu = u[i];
-        pu = dudt_boris( alpha, e, b, pu, energy );
-        u[i] = pu;
+
+        if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
+        if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
     }
 
     // Add up energy from all particles
@@ -1399,30 +1313,25 @@ void push_kernel (
  */
 void move_deposit_kernel(
     uint2 const tile_idx,
-    ParticleData const part,
-    float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
-    float2 const dt_dx, float const q, float2 const qnx ) 
+    part::particles_view const part,
+    grid::tiled_view<float3> current,
+    float2 const dt_dx, float const q, float2 const qnx, int2 const shift ) 
 {
-    const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const uint2 ntiles  = part.local_ntiles;
 
-    // This is usually in block shared memeory
-    alignas(local_align) float3 _move_deposit_buffer[tile_size];
+    alignas(local_align) float3 _current_buffer[ current.tile_vol ];
 
     // Zero local current buffer
-    for( auto i = 0; i < tile_size; i++ ) 
-        _move_deposit_buffer[i] = make_float3(0,0,0);
-
-    // sync
+    memory::zero( _current_buffer, current.tile_vol );
 
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    float3 * J = _move_deposit_buffer + current_offset;
-    const int ystride = ext_nx.x;
+    float3 * J   = & _current_buffer[ current.inner_offset ];
+    const int ystride = current.tile_ystride();
 
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
+    const int part_offset    = part.tile_offset[ tid ];
+    const int np             = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
@@ -1477,138 +1386,18 @@ void move_deposit_kernel(
 
         // Modify cell and store
         int2 ix1 = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
-        );
-        ix[i] = ix1;
-
-    }
-
-    // Add current to global buffer
-    const int tile_off = tid * tile_size;
-
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
-        d_current[tile_off + i] += _move_deposit_buffer[i];
-    }
-}
-
-/**
- * @brief Move particles, deposit current and shift positions
- * 
- * @param tile_idx          Tile index
- * @param part              Particle data
- * @param d_current         Current grid (global)
- * @param current_offset    Offset to position [0,0] of the current grid
- * @param ext_nx            Current grid size (external)
- * @param dt_dx             Ratio between time step and cell size
- * @param q                 Particle charge
- * @param qnx               Current normalization 
- * @param shift             Position shift
- */
-void move_deposit_shift_kernel(
-    uint2 const tile_idx,
-    ParticleData const part,
-    float3 * const __restrict__ d_current, unsigned int const current_offset, uint2 const ext_nx,
-    float2 const dt_dx, float const q, float2 const qnx, int2 const shift ) 
-{
-    const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
-
-    // This is usually in block shared memeory
-    alignas(local_align) float3 _move_deposit_buffer[tile_size];
-
-    // Zero local current buffer
-    for( auto i = 0; i < tile_size; i++ ) 
-        _move_deposit_buffer[i] = make_float3(0,0,0);
-
-    // Move particles and deposit current
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    float3 * J = & _move_deposit_buffer[ current_offset ];
-    const int ystride = ext_nx.x;
-
-    const int part_offset     = part.offset[ tid ];
-    const int np              = part.np[ tid ];
-    int2   * __restrict__ ix  = &part.ix[ part_offset ];
-    float2 * __restrict__ x   = &part.x[ part_offset ];
-    float3 * __restrict__ u   = &part.u[ part_offset ];
-
-    for( int i = 0; i < np; i++ ) {
-        float3 pu = u[i];
-        float2 const x0 = x[i];
-        int2   const ix0 =ix[i];
-
-        // Get 1 / Lorentz gamma
-        float const rg = rgamma( pu );
-
-        // Get particle motion
-        float2 const delta = make_float2(
-            dt_dx.x * rg * pu.x,
-            dt_dx.y * rg * pu.y
-        );
-
-        float qvz = q * pu.z * rg * 0.5f;
-
-        // Advance position
-        float2 x1 = make_float2(
-            x0.x + delta.x,
-            x0.y + delta.y
-        );
-
-        // Check for cell crossings and split trajectory
-        int2 deltai, cross;
-
-        int2 v0_ix; float2 v0_x0, v0_x1; float v0_qvz;
-        int2 v1_ix; float2 v1_x0, v1_x1; float v1_qvz;
-        int2 v2_ix; float2 v2_x0, v2_x1; float v2_qvz;
-
-        split2d( 
-            ix0, x0, x1, delta, qvz, deltai,
-            v0_ix, v0_x0, v0_x1, v0_qvz,
-            v1_ix, v1_x0, v1_x1, v1_qvz,
-            v2_ix, v2_x0, v2_x1, v2_qvz,
-            cross
-        );
-        
-        // Deposit current
-                                  dep_current_seg( v0_ix, v0_x0, v0_x1, qnx, v0_qvz, J, ystride );
-        if ( cross.x || cross.y ) dep_current_seg( v1_ix, v1_x0, v1_x1, qnx, v1_qvz, J, ystride );
-        if ( cross.x && cross.y ) dep_current_seg( v2_ix, v2_x0, v2_x1, qnx, v2_qvz, J, ystride );
-
-        // Correct cell position and store
-        x1.x -= deltai.x;
-        x1.y -= deltai.y;
-        x[i] = x1;
-
-        // Modify cell and store
-        int2 ix1 = make_int2(
             ix0.x + deltai.x + shift.x,
             ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
+
     }
 
     // Add current to global buffer
-    const int tile_off = tid * tile_size;
-
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i++ ) {
-        d_current[tile_off + i] += _move_deposit_buffer[i];
-    }
+    float3 * __restrict__ J_buffer = current.tile_buffer( tid );
+    for( unsigned int i = 0; i < current.tile_vol; i++ )
+        J_buffer[i] += _current_buffer[i];
 }
-
-/**
- * @brief Kernel for pushing particles
- * 
- * @param d_tiles       Particle tile information
- * @param d_ix          Particle data (cells)
- * @param d_x           Particle data (positions)
- * @param d_u           Particle data (momenta)
- * @param d_E           E field grid
- * @param d_B           B field grid
- * @param field_offset  Tile offset to field position (0,0)
- * @param ext_nx        E,B tile grid external size
- * @param alpha         Force normalization ( 0.5 * q / m * dt )
- */
 
 /**
  * @brief Advance particle velocities
@@ -1626,42 +1415,35 @@ void move_deposit_shift_kernel(
 template < species::pusher type >
 void push_kernel ( 
     uint2 const tile_idx,
-    ParticleData const part,
-    float3 * __restrict__ d_E, float3 * __restrict__ d_B, 
-    unsigned int const field_offset, uint2 const ext_nx,
+    part::particles_view const part,
+    grid::tiled_view<float3> E_grid, grid::tiled_view<float3> B_grid,
     float const alpha, double * __restrict__ d_energy )
 {
-    const uint2 ntiles  = part.ntiles;
+    const uint2 ntiles  = part.local_ntiles;
 
     // Tile ID
     const int tid =  tile_idx.y * ntiles.x + tile_idx.x;
 
-    int const field_vol = roundup4( ext_nx.x * ext_nx.y );
-    int const tile_off = tid * field_vol;
-
     // Copy E and B into shared memory
+    alignas(local_align) float3 E_local[ E_grid.tile_vol ];
+    alignas(local_align) float3 B_local[ B_grid.tile_vol ];
 
-    alignas(local_align) float3 E_local[ field_vol ];
-    alignas(local_align) float3 B_local[ field_vol ];
+    memory::memcpy(E_local, E_grid.tile_buffer(tid), E_grid.tile_vol);
+    memory::memcpy(B_local, B_grid.tile_buffer(tid), B_grid.tile_vol);
 
-    for( auto i = 0; i < field_vol; i++ ) {
-        E_local[i] = d_E[tile_off + i];
-        B_local[i] = d_B[tile_off + i];
-    }
-
-    float3 const * const __restrict__ E = & E_local[ field_offset ];
-    float3 const * const __restrict__ B = & B_local[ field_offset ];
+    float3 const * const __restrict__ E = & E_local[ E_grid.inner_offset ];
+    float3 const * const __restrict__ B = & B_local[ B_grid.inner_offset ];
 
     // Push particles
-    const int part_offset = part.offset[ tid ];
-    const int np          = part.np[ tid ];
+    const int part_offset = part.tile_offset[ tid ];
+    const int np          = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
 
     double energy = 0;
 
-    const int ystride = ext_nx.x;
+    const int ystride = E_grid.tile_ystride();
 
     for( int i = 0; i < np; i++ ) {
 
@@ -1672,8 +1454,8 @@ void push_kernel (
         // Advance momentum
         float3 pu = u[i];
         
-        if constexpr ( type == species::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
-        if constexpr ( type == species::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
+        if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, e, b, pu, energy );
+        if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, e, b, pu, energy );
     }
 
     // Add up energy from all particles
@@ -1684,52 +1466,17 @@ void push_kernel (
 #endif
 
 /**
- * @brief Construct a new Species object
- * 
- * @param name  Name for the species object (used for diagnostics)
- * @param m_q   Mass over charge ratio
- * @param ppc   Number of particles per cell
- */
-Species::Species( std::string const name, float const m_q, uint2 const ppc ):
-    ppc(ppc), name(name), m_q(m_q)
-{
-
-    // Validate parameters
-    if ( m_q == 0 ) {
-        std::cerr << "(*error*) Invalid m_q value, must be not 0, aborting...\n";
-        exit(1);
-    }
-
-    if ( ppc.x < 1 || ppc.y < 1 ) {
-        std::cerr << "(*error*) Invalid ppc value, must be >= 1 in all directions\n";
-        exit(1);
-    }
-
-    // Set default parameters
-    density   = new Density::Uniform( 1.0 );
-    udist     = new UDistribution::None();
-    bc        = species::bc_type (species::bc::periodic);
-    push_type = species::boris;
-
-    // Nullify pointers to data structures
-    particles = nullptr;
-    tmp = nullptr;
-    sort = nullptr;
-}
-
-
-/**
  * @brief Initialize data structures and inject initial particle distribution
  * 
  * @param box_              Global simulation box size
  * @param global_ntiles     Global number of tiles
- * @param nx                Individutal tile grid size
+ * @param tile_dims         Individutal tile grid size
  * @param dt_               Time step
  * @param id_               Species unique identifier
  * @param parallel          Parallel configuration
  */
-void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 const nx,
-    float const dt_, int const id_, Partition & parallel ) {
+void species::initialize( float2 const box_, uint2 const global_ntiles, uint2 const tile_dims,
+    double const dt_, int const id_, mpi::cart2d & parallel ) {
     
     // Store simulation box size
     box = box_;
@@ -1744,47 +1491,51 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     q = copysign( density->n0 , m_q ) / (ppc.x * ppc.y);
        
     // Get global grid size
-    auto  gnx = nx * global_ntiles;
+    auto  global_dims = tile_dims * global_ntiles;
 
     // Set cell size
-    dx.x = box.x / (gnx.x);
-    dx.y = box.y / (gnx.y);
+    dx.x = box.x / (global_dims.x);
+    dx.y = box.y / (global_dims.y);
 
     /// @brief Number of tiles in local parallel node
-    uint2 ntiles = parallel.grid_size( global_ntiles );
+    uint2 local_ntiles = parallel.grid_size( global_ntiles );
 
     /// @brief Local parallel node grid size
-    auto  lnx = nx * ntiles;
+    uint2  local_dims = tile_dims * local_ntiles;
 
     // Reference number maximum number of particles
-    unsigned int max_part = 1.2 * lnx.x * lnx.y * ppc.x * ppc.y;
+    unsigned int max_part = 1.2 * local_dims.x * local_dims.y * ppc.x * ppc.y;
 
-    // Create particle data structure
-    particles = new Particles( global_ntiles, nx, max_part, parallel );
+    // Periodic parallel domains override open (default) boundaries
+    if ( parallel.periodic.x ) {
+        if ( global_bc.x.lower == bc::open ) global_bc.x.lower = bc::periodic;
+        if ( global_bc.x.upper == bc::open ) global_bc.x.upper = bc::periodic;
+    }
 
-    // Disable periodic boundaries if parallel partition does not support it
-    if ( ! parallel.periodic.x ) {
-        if ( bc.x.lower == species::bc::periodic ) {
-            bc.x.lower = species::bc::open;
-        }
-    };
-    
-    // Set periodic boundaries
-    int2 periodic = {
-        ( bc.x.lower == species::bc::periodic ),
-        ( bc.y.lower == species::bc::periodic )
-    };
-    particles -> set_periodic( periodic );
+    if ( parallel.periodic.y ) {
+        if ( global_bc.y.lower == bc::open ) global_bc.y.lower = bc::periodic;
+        if ( global_bc.y.upper == bc::open ) global_bc.y.upper = bc::periodic;
+    }
 
-    tmp = new Particles( global_ntiles, nx, max_part, parallel );
-    sort = new ParticleSort( ntiles, max_part, parallel );
-    np_inj = memory::malloc<int>( ntiles.x * ntiles.y );
+    // Validate boundary conditions against the parallel partition
+    validate_bc( global_bc, parallel );
+
+    // Compute local_bc
+    // (part, tmp and sort are still null here, they get the periodic flags on construction)
+    update_bc( parallel );
+
+    // Create particle data structures 
+    int2 const periodic = global_periodic();
+    particles = new part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
+    tmp = new part::particles( global_ntiles, tile_dims, max_part, parallel, periodic );
+    sort = new part::particle_sort( local_ntiles, max_part, parallel, periodic );
+    np_inj = memory::malloc<int>( local_ntiles.x * local_ntiles.y );
 
     // Initialize energy diagnostic
-    d_energy = 0;
+    energy = 0;
 
     // Initialize particle move counter
-    d_nmove = 0;
+    nmove = 0;
 
     // Reset iteration numbers
     iter = 0;
@@ -1795,10 +1546,21 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     np_inject( particles -> local_range(), np_inj );
 
     // Do an exclusive scan to get the required offsets
-    uint32_t off = 0;
-    for( unsigned i = 0; i < ntiles.x * ntiles.y; i ++ ) {
-        particles -> offset[i] = off;
-        off += np_inj[i];
+    uint32_t num_part = 0;
+    auto tile_offset = particles -> get_tile_offset();
+    for( unsigned i = 0; i < local_ntiles.x * local_ntiles.y; i ++ ) {
+        tile_offset[i] = num_part;
+        num_part += np_inj[i];
+    }
+
+    // In case the reference maximum number of particles was too small, grow
+    // the buffers. Note: this is just a safeguard, it should never happen
+    if ( static_cast<unsigned int>(num_part) > max_part ) {
+        mpi::cout << "(*warning*) Particle buffer too small for initial injection,"
+                     " growing buffer\n";
+        particles -> grow_buffer(num_part);
+        tmp -> grow_buffer(num_part );
+        sort -> check_buffer(num_part);
     }
 
     // Inject the particles
@@ -1808,87 +1570,33 @@ void Species::initialize( float2 const box_, uint2 const global_ntiles, uint2 co
     udist -> set( *particles, id );
 }
 
-/**
- * @brief Destroy the Species object
- * 
- */
-Species::~Species() {
-    memory::free( np_inj );
-    delete( tmp );
-    delete( sort );
-    delete( particles );
-    delete( density );
-    delete( udist );
-};
-
-
-/**
- * @brief Inject particles in the complete simulation box
- * 
- */
-void Species::inject( ) {
-
-    float2 ref = make_float2( moving_window.motion(), 0 );
-
-    density -> inject( *particles, ppc, dx, ref, particles -> local_range() );
-}
-
-/**
- * @brief Inject particles in a specific cell range
- * 
- */
-void Species::inject( bnd<unsigned int> range ) {
-
-    float2 ref = make_float2( moving_window.motion(), 0 );
-
-    density -> inject( *particles, ppc, dx, ref, range );
-}
-
-/**
- * @brief Gets the number of particles that would be injected in a specific cell range
- * 
- * Although the routine only considers injection in a specific range, the
- * number of particles to be injected is calculated on all tiles (returning
- * zero on those, as expected)
- * 
- * @param range 
- * @param np        (device pointer) Number of particles to inject in each tile
- */
-void Species::np_inject( bnd<unsigned int> range, int * np ) {
-
-    /// @brief position of lower corner of local grid in simulation units
-    float2 ref = make_float2( moving_window.motion(), 0 );
-
-    density -> np_inject( *particles, ppc, dx, ref, range, np );
-}
 
 /**
  * @brief Physical boundary conditions for the x direction 
  * 
- * @param ntiles    Number of tiles
- * @param tile_idx  Tile index
- * @param tiles     Particle tile information
- * @param data      Particle data
- * @param nx        Tile grid size
- * @param bc        Boundary condition
+ * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_y    Tile index along y direction
+ * @param part          Particle
+ * @param bc            Boundary condition
  */
 void species_bcx(
-    uint2 const tile_idx,
-    ParticleData const part,
+    int bnd_x, int const tile_idx_y,
+    part::particles_view const part,
     species::bc_type const bc ) 
 {
-    const uint2 ntiles  = part.ntiles;
-    const int nx = part.nx.x;
+    const uint2 ntiles  = part.local_ntiles;
+    const int nx = part.tile_dims.x;
     
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
+    const int tile_idx_x = (bnd_x==0)?0 : ntiles.x - 1;
+    const int tid = tile_idx_y * ntiles.x + tile_idx_x;
 
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
+    const int part_offset    = part.tile_offset[ tid ];
+    const int np             = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
 
-    if ( tile_idx.x == 0 ) {
+    if ( bnd_x == 0 ) {
         // Lower boundary
         switch( bc.x.lower ) {
         case( species::bc::reflecting ) :
@@ -1925,30 +1633,29 @@ void species_bcx(
 /**
  * @brief Physical boundary conditions for the y direction 
  * 
- * @param ntiles    Number of tiles
- * @param tile_idx  Tile index
- * @param tiles     Particle tile information
- * @param data      Particle data
- * @param nx        Tile grid size
- * @param bc        Boundary condition
+ * @param bnd_y         Y Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_x    Tile index along x direction
+ * @param part          Particle
+ * @param bc            Boundary condition
  */
 void species_bcy(
-    uint2 const tile_idx,
-    ParticleData const part,
+    int bnd_y, int tile_idx_x,
+    part::particles_view const part,
     species::bc_type const bc ) 
 {
-    const uint2 ntiles  = part.ntiles;
-    const int ny = part.nx.y;
+    const uint2 ntiles  = part.local_ntiles;
+    const int ny = part.tile_dims.y;
 
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
+    const int tile_idx_y = (bnd_y==0)? 0 : ntiles.y - 1;
+    const int tid = tile_idx_y * ntiles.x + tile_idx_x;
 
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
+    const int part_offset    = part.tile_offset[ tid ];
+    const int np             = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
 
-    if ( tile_idx.y == 0 ) {
+    if ( bnd_y == 0 ) {
         // Lower boundary
         switch( bc.y.lower ) {
         case( species::bc::reflecting ) :
@@ -1984,182 +1691,28 @@ void species_bcy(
 /**
  * @brief Processes "physical" boundary conditions
  * 
+ * @note open and periodic boundaries are processed elsehwere
  */
-void Species::process_bc() {
-
-    std::cout << "(*error*) Species::process_bc() have not been implemented yet,"
-              << " aborting.\n";
-    exit(1);
+void species::process_bc() {
+    
     // x boundaries
-    if ( bc.x.lower > species::bc::periodic || bc.x.upper > species::bc::periodic ) {
-        
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx : { 0u, particles -> ntiles.x-1 } ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                species_bcx ( tile_idx, *particles, bc );
-            }
+    if ( local_bc.x.lower > species::bc::periodic || local_bc.x.upper > species::bc::periodic ) {
+        #pragma omp parallel for collapse(2) schedule(dynamic)
+        for( unsigned ty = 0; ty < particles -> get_local_ntiles().y; ty ++ ) {
+            for( unsigned bnd_x : { 0, 1 } ) 
+                species_bcx ( bnd_x, ty, particles -> view(), local_bc );
         }
     }
 
     // y boundaries
-    if ( bc.y.lower > species::bc::periodic || bc.y.upper > species::bc::periodic ) {
-        for( unsigned ty : { 0u, particles -> ntiles.y-1 } ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                species_bcy ( tile_idx, *particles, bc );
-            }
+    if ( local_bc.y.lower > species::bc::periodic || local_bc.y.upper > species::bc::periodic ) {
+       #pragma omp parallel for collapse(2) schedule(dynamic)
+        for( unsigned bnd_y : { 0, 1 } ) {
+            for( unsigned tx = 0; tx < particles -> get_local_ntiles().x; tx ++ )
+                species_bcy ( bnd_y, tx, particles -> view(), local_bc );
         }
     }
 }
-
-/**
- * @brief Free stream particles 1 iteration
- * 
- * @note No acceleration or current deposition is performed. Used for debug purposes.
- * 
- */
-void Species::advance( ) {
-
-    // Advance positions
-    move( );
-
-    // Process physical boundary conditions
-    process_bc();
-    
-    // Sort particles according to tile
-    particles -> tile_sort( *tmp, *sort );
-
-    // Increase internal iteration number
-    iter++;
-}
-
-/**
- * @brief Free-stream particles 1 iteration
- * 
- * This routine will:
- * 1. Advance positions and deposit current
- * 2. Process boundary conditions
- * 3. Sort particles according to tiles
- * 
- * @param emf       EM fields
- * @param current   Electric durrent density
- */
-void Species::advance( Current &current ) {
-
-    // Advance positions and deposit current
-    move( current.J );
-
-    // Process physical boundary conditions
-    process_bc();
-
-    // Increase internal iteration number
-    iter++;
-    
-    // Sort particles according to tile
-    particles -> tile_sort( *tmp, *sort );
-
-}
-
-/**
- * @brief Advance particles 1 iteration
- * 
- * This routine will:
- * 1. Advance momenta
- * 2. Advance positions and deposit current
- * 3. Process boundary conditions
- * 4. Sort particles according to tiles
- * 
- * @param emf       EM fields
- * @param current   Electric durrent density
- */
-void Species::advance( EMF const &emf, Current &current ) {
-
-    // Advance momenta
-    push( emf.E, emf.B );
-
-    // Advance positions and deposit current
-    move( current.J );
-
-    // Process physical boundary conditions
-    // process_bc();
-
-    // Increase internal iteration number
-    iter++;
-    
-    // Sort particles according to tile
-    particles -> tile_sort( *tmp, *sort );
-
-}
-
-/**
- * @brief Advance particles 1 iteration
- * 
- * This routine will:
- * 1. Advance momenta
- * 2. Advance positions and deposit current
- * 3. Process boundary conditions
- * 4. Handle moving window algorith,
- * 5. Sort particles according to tiles
- * 
- * @param emf       EM fields
- * @param current   Electric durrent density
- */
-void Species::advance_mov_window( EMF const &emf, Current &current ) {
-
-    // Advance momenta
-    push( emf.E, emf.B );
-
-    if ( moving_window.needs_move( (iter+1) * dt ) ) {
-
-        // Advance positions, deposit current and shift particles
-        move( current.J, make_int2(-1,0) );
-
-        // Process boundary conditions
-        // process_bc();
-
-        if ( particles->parallel.get_coords().x == particles->parallel.dims.x - 1 ) {
-            // Edge node needs to inject new particles
-
-            // Find range where new particles need to be injected
-            uint2 local_nx = particles -> get_local_nx();
-            bnd<unsigned int> range;
-            range.x = pair<unsigned int>( local_nx.x - 1, local_nx.x - 1 );
-            range.y = pair<unsigned int>(              0, local_nx.y - 1 );
-
-            // Count new particles to be injected
-            np_inject( range, np_inj );
-
-            // Sort particles over tiles, leaving room for new particles to be injected
-            particles -> tile_sort( *tmp, *sort, np_inj );
-
-            // Inject new particles
-            inject( range );
-
-        } else {
-
-            // Remaining nodes just do a standard tile_sort
-            particles -> tile_sort( *tmp, *sort );
-        }
-
-        // Advance moving window
-        moving_window.advance();
-
-    } else {
-        
-        // Advance positions and deposit current
-        move( current.J );
-
-        // Process boundary conditions
-        // process_bc();
-
-        // Sort particles over tiles
-        particles -> tile_sort( *tmp, *sort );
-    }
-
-    // Increase internal iteration number
-    iter++;
-}
-
 
 /**
  * @brief Moves particles and deposit current
@@ -2168,7 +1721,7 @@ void Species::advance_mov_window( EMF const &emf, Current &current ) {
  * 
  * @param current   Current grid
  */
-void Species::move( vec3grid<float3> * J )
+void species::move( grid::tiled_vec3<float> & current, const int2 shift )
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -2180,55 +1733,22 @@ void Species::move( vec3grid<float3> * J )
         q * dx.y / dt
     );
 
-    #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        
-        const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-        move_deposit_kernel(
-            tile_idx, *particles,
-            J -> d_buffer, J -> offset, J -> ext_nx, dt_dx, q, qnx
-        );
+    uint64_t _nmove = 0;
+    auto data = particles -> view();
+    auto ntiles = particles -> get_local_ntiles();
+
+    #pragma omp parallel for collapse(2) schedule(dynamic) reduction(+:_nmove)
+    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+            uint2 tile_idx = make_uint2( tx, ty );
+            move_deposit_kernel(tile_idx, data, current.view(), dt_dx, q, qnx, shift);
+            _nmove += data.tile_np[ ty * ntiles.x + tx ];
+        }
     }
 
-    // This avoids the reduction overhead
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        d_nmove += particles -> np[tid];
-    }
+    nmove += _nmove;
 }
 
-/**
- * @brief Moves particles and deposit current
- * 
- * Current will be accumulated on existing data
- * 
- * @param current   Current grid
- */
-void Species::move( vec3grid<float3> * J, const int2 shift )
-{
-    const float2 dt_dx = make_float2(
-        dt / dx.x,
-        dt / dx.y
-    );
-
-    const float2 qnx = make_float2(
-        q * dx.x / dt,
-        q * dx.y / dt
-    );
-
-    #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-        move_deposit_shift_kernel ( 
-            tile_idx, *particles,
-            J -> d_buffer, J -> offset, J -> ext_nx, dt_dx, q, qnx, shift
-        );
-    }
-
-    // This avoids the reduction overhead
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        d_nmove += particles -> np[tid];
-    }
-}
 
 /**
  * @brief kernel for moving particles
@@ -2241,16 +1761,16 @@ void Species::move( vec3grid<float3> * J, const int2 shift )
  */
 void move_kernel(
     uint2 const tile_idx,
-    ParticleData const part,
-    float2 const dt_dx ) 
+    part::particles_view const part,
+    float2 const dt_dx, const int2 shift ) 
 {
-    const uint2 ntiles  = part.ntiles;
+    const uint2 ntiles  = part.local_ntiles;
 
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    const int part_offset    = part.offset[ tid ];
-    const int np             = part.np[ tid ];
+    const int part_offset    = part.tile_offset[ tid ];
+    const int np             = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
@@ -2289,8 +1809,8 @@ void move_kernel(
 
         // Modify cell and store
         int2 ix1 = make_int2(
-            ix0.x + deltai.x,
-            ix0.y + deltai.y
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
         );
         ix[i] = ix1;
     }
@@ -2298,73 +1818,83 @@ void move_kernel(
 
 
 /**
- * @brief Moves particles (no current deposition)
+ * @brief Moves particles (no current/charge deposition)
  * 
  * This is usually used for test species: species that do not self-consistently
  * influence the simulation
  * 
- * @param current   Current grid
+ * @param current   current grid
  */
-void Species::move( )
+void species::move( const int2 shift )
 {
     const float2 dt_dx = make_float2(
         dt / dx.x,
         dt / dx.y
     );
 
-    #pragma omp parallel for schedule(dynamic)
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
+    uint64_t _nmove = 0;
+
+    auto data = particles -> view();
+
+    #pragma omp parallel for schedule(dynamic) reduction(+:_nmove)
+    for( unsigned tid = 0; tid < data.local_ntiles.y * data.local_ntiles.x; tid ++ ) {
         
-        const auto tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-        move_kernel ( tile_idx, *particles, dt_dx );
+        const auto tile_idx = make_uint2( tid % data.local_ntiles.x, tid / data.local_ntiles.x );
+        move_kernel ( tile_idx, data, dt_dx, shift );
+
+        _nmove += data.tile_np[tid];
     }
 
-    // This avoids the reduction overhead
-    for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {
-        d_nmove += particles -> np[tid];
-    }
-
+    nmove += _nmove;
 }
 
 /**
- * @brief       Accelerates particles using a Boris pusher
+ * @brief       Accelerates particles using a Boris / Euler pusher
  * 
  * @param E     Electric field
  * @param B     Magnetic field
  */
-void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
+void species::push( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B )
 {
-    uint2 ext_nx = E -> ext_nx;
     const float alpha = 0.5 * dt / m_q;
-    d_energy = 0;
+    
+    double _energy = 0;
+
+    auto data = particles -> view();
 
     switch( push_type ) {
-    case( species :: euler ):
-
-        #pragma omp parallel for schedule(dynamic) reduction(+:d_energy)
-        for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {    
-            const uint2 tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            push_kernel <species::euler> (
-                tile_idx, *particles,
-                E -> d_buffer, B -> d_buffer, E -> offset, ext_nx, alpha,
-                &d_energy
-            );
+    case( species::pusher::euler ):
+        #pragma omp parallel for schedule(dynamic) \
+                reduction(+:_energy) \
+                collapse(2)
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
+                push_kernel <species::pusher::euler> (
+                    make_uint2(tx,ty), data,
+                    E.view(), B.view(), alpha,
+                    &_energy
+                );
+            }
         }
         break;
 
-    case( species :: boris ):
-
-        #pragma omp parallel for schedule(dynamic) reduction(+:d_energy)
-        for( unsigned tid = 0; tid < particles -> ntiles.y * particles -> ntiles.x; tid ++ ) {    
-            const uint2 tile_idx = make_uint2( tid % particles -> ntiles.x, tid / particles -> ntiles.x );
-            push_kernel <species::boris> (
-                tile_idx, *particles,
-                E -> d_buffer, B -> d_buffer, E -> offset, ext_nx, alpha,
-                &d_energy
-            );
+    case( species::pusher::boris ):
+        #pragma omp parallel for schedule(dynamic) \
+                reduction(+:_energy) \
+                collapse(2)
+        for( unsigned ty = 0; ty < data.local_ntiles.y; ty++ ) {
+            for( unsigned tx = 0; tx < data.local_ntiles.x; tx++ ) {
+                push_kernel <species::pusher::boris> (
+                    make_uint2(tx,ty), data,
+                    E.view(), B.view(), alpha,
+                    &_energy
+                );
+            }
         }
         break;
     }
+
+    energy = _energy;
 }
 
 /**
@@ -2380,29 +1910,28 @@ void Species::push( vec3grid<float3> * const E, vec3grid<float3> * const B )
  */
 void dep_charge_kernel(
     uint2 const tile_idx,
-    ParticleData const part, const float q, 
-    float * const __restrict__ d_charge, int offset, uint2 ext_nx )
+    part::particles_view const part, const float q, 
+    grid::tiled_view<float> charge )
 {
-    const uint2 ntiles  = part.ntiles;
-    const int tile_size = roundup4( ext_nx.x * ext_nx.y );
+    const uint2 ntiles  = part.local_ntiles;
  
-    float _dep_charge_buffer[tile_size];
+    float _charge_buffer[ charge.tile_vol ];
 
     // Zero shared memory and sync.
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i ++ ) {
-        _dep_charge_buffer[i] = 0;
+    for( unsigned i = 0; i < charge.tile_vol; i ++ ) {
+        _charge_buffer[i] = 0;
     }
 
-    float *charge = &_dep_charge_buffer[ offset ];
+    float * __restrict__ rho = & _charge_buffer[ charge.inner_offset ];
 
     // sync;
 
     const int tid      = tile_idx.y * ntiles.x + tile_idx.x;
-    const int part_off = part.offset[ tid ];
-    const int np       = part.np[ tid ];
+    const int part_off = part.tile_offset[ tid ];
+    const int np       = part.tile_np[ tid ];
     int2   const * __restrict__ const ix = &part.ix[ part_off ];
     float2 const * __restrict__ const x  = &part.x[ part_off ];
-    const int ystride = ext_nx.x;
+    const int ystride = charge.tile_ystride();
 
     for( int i = 0; i < np; i ++ ) {
         const int idx = ix[i].y * ystride + ix[i].x;
@@ -2411,20 +1940,17 @@ void dep_charge_kernel(
         const float s0y = 0.5f - x[i].y;
         const float s1y = 0.5f + x[i].y;
 
-        // When use more thatn 1 thread per tile, these need to be atomic inside tile
-        charge[ idx               ] += s0y * s0x * q;
-        charge[ idx + 1           ] += s0y * s1x * q;
-        charge[ idx     + ystride ] += s1y * s0x * q;
-        charge[ idx + 1 + ystride ] += s1y * s1x * q;
+        // When use more than 1 thread per tile, these need to be atomic inside tile
+        rho[ idx               ] += s0y * s0x * q;
+        rho[ idx + 1           ] += s0y * s1x * q;
+        rho[ idx     + ystride ] += s1y * s0x * q;
+        rho[ idx + 1 + ystride ] += s1y * s1x * q;
     }
 
-    // sync
-
     // Copy data to global memory
-    const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
-    for( unsigned i = 0; i < ext_nx.x * ext_nx.y; i ++ ) {
-        d_charge[tile_off + i] += _dep_charge_buffer[i];
-    } 
+    float * __restrict__ tgt = charge.tile_buffer(tid);
+    for( unsigned i = 0; i < charge.tile_vol; i ++ )
+        tgt[i] += _charge_buffer[i];
 }
 
 /**
@@ -2432,28 +1958,116 @@ void dep_charge_kernel(
  * 
  * @param charge    Charge density grid
  */
-void Species::deposit_charge( grid<float> &charge ) const {
+void species::deposit_charge( grid::tiled<float> &charge ) const {
 
-    for( unsigned ty = 0; ty < particles -> ntiles.y; ++ty ) {
-        for( unsigned tx = 0; tx < particles -> ntiles.x; ++tx ) {
-            const auto tile_idx = make_uint2( tx, ty );
-            dep_charge_kernel ( tile_idx, *particles, q, charge.d_buffer, charge.offset, charge.ext_nx );
+    auto data = particles -> view();
+
+    #pragma omp parallel for collapse(2) schedule(dynamic)
+    for( unsigned ty = 0; ty < data.local_ntiles.y; ++ty ) {
+        for( unsigned tx = 0; tx < data.local_ntiles.x; ++tx ) {
+            dep_charge_kernel ( 
+                make_uint2( tx, ty ), data, q, 
+                charge.view() );
         }
     }
 }
 
+/**
+ * @brief Gather particle data, scaling values
+ * 
+ * @warning This expects the particle buffer to be compact, it will fail if 
+ *          called with a non-compact buffer.
+ *
+ * @note Data (val) will be returned as `scale.x * val + scale.y`
+ * 
+ * @tparam quant    Quantity to gather
+ * @param part      Particle data
+ * @param d_data    Scaled output data
+ * @param scale     Scale factor for data
+ */
+template < part::quantity quant >
+void gather_quant( 
+    part::particles_view src,
+    float * const __restrict__ d_data,
+    const float2 scale )
+{
+    const int2 ntiles = make_int2( src.local_ntiles.x, src.local_ntiles.y );
+
+    #pragma omp parallel for schedule(dynamic)
+    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
+
+        auto tx = tid % ntiles.x;
+        auto ty = tid / ntiles.x;
+
+        // Global spatial offsets of local tile
+        const int offx = (src.local_tile_start.x + tx) * src.tile_dims.x;
+        const int offy = (src.local_tile_start.y + ty) * src.tile_dims.y;
+
+        const auto offset = src.tile_offset[tid];
+        const auto np     = src.tile_np[tid];
+
+        int2   const * __restrict__ const ix = &src.ix[ offset ];
+        float2 const * __restrict__ const x  = &src.x[ offset ];
+        float3 const * __restrict__ const u  = &src.u[ offset ];
+        
+        for( int idx = 0; idx < np; idx ++ ) {
+            float val;
+            if constexpr ( quant == part::quantity::x )  val = ( offx + ix[idx].x) + (0.5f + x[idx].x);
+            if constexpr ( quant == part::quantity::y )  val = ( offy + ix[idx].y) + (0.5f + x[idx].y);
+            if constexpr ( quant == part::quantity::ux ) val = u[idx].x;
+            if constexpr ( quant == part::quantity::uy ) val = u[idx].y;
+            if constexpr ( quant == part::quantity::uz ) val = u[idx].z;
+            d_data[ offset + idx ] = ops::fma( scale.x, val, scale.y );
+        }
+    }
+};
+
+/**
+ * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+ * 
+ * @warning This expects the particle buffer to be compact, it will fail if 
+ *          called with a non-compact buffer.
+ *
+ * @param quant     Quantity to gather
+ * @param d_data    Output data buffer, assumed to have size >= np
+ * @param scale     Scale factor for data
+ */
+void species::gather( part::quantity quant, float * const __restrict__ data, 
+    const float2 scale ) const
+{
+    auto view = particles -> view();
+
+    switch (quant) {
+    case part::quantity::x : 
+        gather_quant<part::quantity::x> ( view, data, scale );
+        break; 
+    case part::quantity::y: 
+        gather_quant<part::quantity::y> ( view, data, scale );
+        break; 
+    case part::quantity::ux: 
+        gather_quant<part::quantity::ux>( view, data, scale );
+        break; 
+    case part::quantity::uy: 
+        gather_quant<part::quantity::uy>( view, data, scale );
+        break; 
+    case part::quantity::uz: 
+        gather_quant<part::quantity::uz>( view, data, scale );
+        break;
+    }
+
+}
 
 /**
  * @brief Save particle data to file
  * 
  */
-void Species::save() const {
+void species::save() const {
 
     const std::string path = "PARTICLES";
 
-    const part::quant quants[] = {
-        part::quant::x, part::quant::y,
-        part::quant::ux, part::quant::uy, part::quant::uz
+    const part::quantity quants[] = {
+        part::quantity::x, part::quantity::y,
+        part::quantity::ux, part::quantity::uy, part::quantity::uz
     };
 
     const char * qnames[] = {
@@ -2472,6 +2086,7 @@ void Species::save() const {
     };
 
     zdf::iteration iter_info = {
+        .name = (char*) "ITERATION",
         .n = iter,
         .t = iter * dt,
         .time_units = (char *) "1/\\omega_n"
@@ -2479,7 +2094,7 @@ void Species::save() const {
 
     // Omit number of particles, this will be filled in later
     zdf::part_info info = {
-        .name = (char *) name.c_str(),
+        .name = name.c_str(),
         .label = (char *) name.c_str(),
         .nquants = 5,
         .quants = (char **) qnames,
@@ -2488,7 +2103,7 @@ void Species::save() const {
     };
 
     // Get total number of particles to save
-    uint64_t local = np_local();
+    uint64_t local = local_np();
     uint64_t global = 0;
 
     particles -> parallel.allreduce( &local, &global, 1, mpi::sum );
@@ -2514,7 +2129,8 @@ void Species::save() const {
             zdf::open_part_file( part_file, info, iter_info, path+"/"+info.name, comm );
 
             // create the datasets
-            zdf::dataset dsets[ info.nquants ];
+            // zdf::dataset dsets[ info.nquants ];
+            std::vector<zdf::dataset> dsets( info.nquants );
 
             for( uint32_t i = 0; i < info.nquants; i++ ) {
                 dsets[i].name      = info.quants[i];
@@ -2524,8 +2140,9 @@ void Species::save() const {
                 dsets[i].count[0]  = global; 
 
                 if ( !zdf::start_cdset( part_file, dsets[i] ) ) {
-                    std::cerr << "Particles::save() - Unable to create chunked dataset " << info.quants[i] << '\n';
-                    exit(1);
+                    mpi::fatal( 
+                        "part::particles::save() - Unable to create chunked dataset " + 
+                        std::string(dsets[i].name) );
                 }
             }
 
@@ -2547,17 +2164,17 @@ void Species::save() const {
             float2 scale;
             
             // x and y quantities are scaled before saving to file
-            scale = make_float2( dx.x, moving_window.motion() );
-            particles -> gather( part::quant::x, scale, data );
+            scale = make_float2( dx.x, 0 );
+            gather( part::quantity::x, data, scale );
             zdf::write_cdset( part_file, dsets[0], chunk, file_off );
 
             scale = make_float2( dx.y, 0 );
-            particles -> gather( part::quant::y, scale, data );
+            gather( part::quantity::y, data, scale );
             zdf::write_cdset( part_file, dsets[1], chunk, file_off );
 
             // Remaining quantities are saved "as is"
             for( uint32_t i = 2; i < info.nquants; i++ ) {
-                particles -> gather( quants[i], data );
+                gather( quants[i], data );
                 zdf::write_cdset( part_file, dsets[i], chunk, file_off );
             }
 
@@ -2595,15 +2212,15 @@ void Species::save() const {
  * The routine will create a new charge grid, deposit the charge and save the grid
  * 
  */
-void Species::save_charge() const {
+void species::save_charge() const {
 
     // For linear interpolation we only require 1 guard cell at the upper boundary
-    bnd<unsigned int> gc;
+    bounds_2d<unsigned int> gc;
     gc.x = {0,1};
     gc.y = {0,1};
 
-    // Deposit charge on device
-    grid<float> charge( particles -> global_ntiles, particles -> nx, gc, particles -> parallel );
+    // Deposit charge
+    grid::tiled<float> charge( particles -> get_global_ntiles(), particles -> get_tile_dims(), gc, particles -> parallel );
 
     charge.zero();
 
@@ -2615,8 +2232,8 @@ void Species::save_charge() const {
     zdf::grid_axis axis[2];
     axis[0] = (zdf::grid_axis) {
         .name = (char *) "x",
-        .min = 0. + moving_window.motion(),
-        .max = box.x + moving_window.motion(),
+        .min = 0.,
+        .max = box.x,
         .label = (char *) "x",
         .units = (char *) "c/\\omega_n"
     };
@@ -2652,61 +2269,142 @@ void Species::save_charge() const {
     charge.save( info, iter_info, path );
 }
 
-/**
- * @brief kernel for depositing 1d phasespace
- * 
- * @tparam quant    Phasespace quantity
- * @param d_data    Output data
- * @param range     Phasespace value range
- * @param size      Phasespace grid size
- * @param tile_nx   Size of tile grid
- * @param norm      Normalization factor
- * @param d_tiles   Particle tile information
- * @param d_ix      Particle data (cell)
- * @param d_x       Particle data (pos)
- * @param d_u       Particle data (generalized momenta)
- */
-template < phasespace::quant quant >
-void dep_pha1_kernel(
+namespace phasespace {
+
+template < phasespace::quantity quant >
+float value ( int const i, int const shiftx, int const shifty,
+    int2 const * const __restrict__ ix, float2 const * const __restrict__ x,
+    float3 const * const __restrict__ u )
+{
+    if constexpr ( quant == quantity::x  ) return ( shiftx + ix[i].x ) + ( x[i].x + 0.5f );
+    if constexpr ( quant == quantity::y  ) return ( shifty + ix[i].y ) + ( x[i].y + 0.5f );
+    if constexpr ( quant == quantity::ux ) return u[i].x;
+    if constexpr ( quant == quantity::uy ) return u[i].y;
+    if constexpr ( quant == quantity::uz ) return u[i].z;
+}
+
+template < phasespace::quantity quant >
+void dep_pha1(
     uint2 const tile_idx,
     float * const __restrict__ d_data, float2 const range, int const size,
     float const norm, 
-    ParticleData const part )
+    part::particles_view const part )
 {
-    const uint2 ntiles  = part.ntiles;
-    const uint2 tile_nx = part.nx;
+    const uint2 ntiles    = part.local_ntiles;
+    const uint2 tile_dims = part.tile_dims;
 
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
-    const int part_offset = part.offset[ tid ];
-    const int np          = part.np[ tid ];
+    const int part_offset = part.tile_offset[ tid ];
+    const int np          = part.tile_np[ tid ];
     int2   * __restrict__ ix = &part.ix[ part_offset ];
     float2 * __restrict__ x  = &part.x[ part_offset ];
     float3 * __restrict__ u  = &part.u[ part_offset ];
 
     float const pha_rdx = size / (range.y - range.x);
 
-    const int shiftx = (part.tile_off.x + tile_idx.x) * tile_nx.x;
-    const int shifty = (part.tile_off.y + tile_idx.y) * tile_nx.y;
+    const int shiftx = (part.local_tile_start.x + tile_idx.x) * tile_dims.x;
+    const int shifty = (part.local_tile_start.y + tile_idx.y) * tile_dims.y;
 
     for( int i = 0; i < np; i++ ) {
-        float d;
-        if constexpr ( quant == phasespace:: x  ) d = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
-        if constexpr ( quant == phasespace:: y  ) d = ( shifty + ix[i].y) + (x[i].y + 0.5f);
-        if constexpr ( quant == phasespace:: ux ) d = u[i].x;
-        if constexpr ( quant == phasespace:: uy ) d = u[i].y;
-        if constexpr ( quant == phasespace:: uz ) d = u[i].z;
+        float d = phasespace::value<quant>( i, shiftx, shifty, ix, x, u );
 
         float n =  (d - range.x ) * pha_rdx - 0.5f;
         int   k = int( n + 1 ) - 1;
         float w = n - k;
 
         // When using multi-threading these need to be atomic accross tiles
-        if ((k   >= 0) && (k   < size-1)) d_data[k  ] += (1-w) * norm;
-        if ((k+1 >= 0) && (k+1 < size-1)) d_data[k+1] +=    w  * norm;
+        if ((k   >= 0) && (k   < size)) d_data[k  ] += (1-w) * norm;
+        if ((k+1 >= 0) && (k+1 < size)) d_data[k+1] +=    w  * norm;
     }
 }
 
+template < phasespace::quantity quant0, phasespace::quantity quant1 >
+void dep_pha2(
+    uint2 const tile_idx,
+    float * const __restrict__ d_data, 
+    float2 const range0, int const size0,
+    float2 const range1, int const size1,
+    float const norm, 
+    part::particles_view const part )
+{
+    static_assert( quant1 > quant0, "quant1 must be > quant0" );
+    
+    const uint2 ntiles  = part.local_ntiles;
+    const auto tile_dims  = part.tile_dims;
+
+    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
+
+    const int part_offset = part.tile_offset[ tid ];
+    const int np          = part.tile_np[ tid ];
+    int2   * __restrict__ ix  = &part.ix[ part_offset ];
+    float2 * __restrict__ x   = &part.x[ part_offset ];
+    float3 * __restrict__ u   = &part.u[ part_offset ];
+
+    float const pha_rdx0 = size0 / (range0.y - range0.x);
+    float const pha_rdx1 = size1 / (range1.y - range1.x);
+
+    const int shiftx = (part.local_tile_start.x + tile_idx.x) * tile_dims.x;
+    const int shifty = (part.local_tile_start.y + tile_idx.y) * tile_dims.y;
+
+    for( int i = 0; i < np; i++ ) {
+        float d0 = phasespace::value<quant0>( i, shiftx, shifty, ix, x, u );;
+
+        float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
+        int   k0 = int( n0 + 1 ) - 1;
+        float w0 = n0 - k0;
+
+        float d1 = phasespace::value<quant1>( i, shiftx, shifty, ix, x, u );;
+
+        float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
+        int   k1 = int( n1 + 1 ) - 1;
+        float w1 = n1 - k1;
+
+        // Most common case, particle inside grid for all deposits
+        if ( k0 >= 0 && k0+1 < size0 && k1 >= 0 && k1+1 < size1 ) {
+            d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
+            d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
+            d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
+            d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
+        } else {
+            // corner cases
+            if ((k1   >= 0) && (k1   < size1)) {
+                if ((k0   >= 0) && (k0   < size0)) d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
+                if ((k0+1 >= 0) && (k0+1 < size0)) d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
+            }
+            if ((k1+1 >= 0) && (k1+1 < size1)) {
+                if ((k0   >= 0) && (k0   < size0)) d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
+                if ((k0+1 >= 0) && (k0+1 < size0)) d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Helper function to dispatch the appropriate template phasespace deposition
+ * 
+ * @note 
+ * The lambda function should be declared as [&] ( auto qc ), and start with
+ *     constexpr auto quant = decltype(qc)::value;
+ * The dep_pha kernel can then be called using:
+ *     dep_pha1<quant>(...)
+ *
+ * @tparam F    Generic lambda function type
+ * @param q     Phasespace quantity to deposit
+ * @param f     lambda function that calls the dep_pha* kernel
+ */
+template < typename F >
+inline void dispatch( quantity q, F && f ) {
+    switch( q ) {
+    case quantity::x : f( std::integral_constant< quantity, quantity::x >{} ); break;
+    case quantity::y : f( std::integral_constant< quantity, quantity::y >{} ); break;
+    case quantity::ux: f( std::integral_constant< quantity, quantity::ux>{} ); break;
+    case quantity::uy: f( std::integral_constant< quantity, quantity::uy>{} ); break;
+    case quantity::uz: f( std::integral_constant< quantity, quantity::uz>{} ); break;
+    }
+}
+
+}
 
 /**
  * @brief Deposit 1D phasespace
@@ -2718,8 +2416,8 @@ void dep_pha1_kernel(
  * @param range     Phasespace value range
  * @param size      Phasespace grid size
  */
-void Species::dep_phasespace( float * const d_data, phasespace::quant quant, 
-    float2 range, unsigned const size ) const
+void species::dep_phasespace( float * const d_data, const phasespace::quantity quant, 
+    float2 range, const int size ) const
 {
     // Zero device memory
     memory::zero( d_data, size );
@@ -2728,74 +2426,84 @@ void Species::dep_phasespace( float * const d_data, phasespace::quant quant,
     float norm = fabs(q) * ( dx.x * dx.y ) *
                  size / (range.y - range.x) ;
 
-    switch(quant) {
-    case( phasespace::x ):
-        range.y /= dx.x;
-        range.x /= dx.x;
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                dep_pha1_kernel<phasespace::x>  (
-                    tile_idx, 
-                    d_data, range, size, norm, 
-                    *particles
-                );
-            }
-        }
+    auto local_ntiles = particles ->get_local_ntiles();
 
-        break;
-    case( phasespace:: y ):
-        range.y /= dx.y;
-        range.x /= dx.y;
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                dep_pha1_kernel<phasespace::y>  (
-                    tile_idx, 
+    // Launch the appropriate phasespace deposition kernel
+    phasespace::dispatch(quant, [&] ( auto quant_c ) {
+        constexpr auto quant = decltype(quant_c)::value;
+        
+        // Normalize range to cell sizes, if required
+        if constexpr ( quant == phasespace::quantity::x ) { range.x /= dx.x; range.y /= dx.x; }
+        if constexpr ( quant == phasespace::quantity::y ) { range.x /= dx.y; range.y /= dx.y; }
+        
+        for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
+            for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
+                phasespace::dep_pha1<quant> (
+                    make_uint2( tx, ty ), 
                     d_data, range, size, norm, 
-                    *particles
+                    particles -> view()
                 );
             }
         }
-        break;
-    case( phasespace:: ux ):
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                dep_pha1_kernel<phasespace::ux>  (
-                    tile_idx, 
-                    d_data, range, size, norm, 
-                    *particles
-                );
-            }
-        }
-        break;
-    case( phasespace:: uy ):
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                dep_pha1_kernel<phasespace::uy>  (
-                    tile_idx, 
-                    d_data, range, size, norm, 
-                    *particles
-                );
-            }
-        }
-        break;
-    case( phasespace:: uz ):
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                dep_pha1_kernel<phasespace::uz>  (
-                    tile_idx, 
-                    d_data, range, size, norm, 
-                    *particles
-                );
-            }
-        }
-        break;
-    };
+    });
 }
+
+/**
+ * @brief Deposits a 2D phasespace in a device buffer
+ * 
+ * @param d_data    Pointer to device buffer
+ * @param quant0    Quantity 0
+ * @param range0    Range of values of quantity 0
+ * @param size0     Phasespace grid size for quantity 0
+ * @param quant0    Quantity 1
+ * @param range1    Range of values of quantity 1
+ * @param size1     Phasespace grid size for quantity 1
+ */
+void species::dep_phasespace( 
+    float * const d_data,
+    const phasespace::quantity quant0, float2 range0, const int size0,
+    const phasespace::quantity quant1, float2 range1, const int size1 ) const
+{
+    // Zero device memory
+    memory::zero( d_data, size0 * size1 );
+
+    // In OSIRIS we don't take the absolute value of q
+    float norm = fabs(q) * ( dx.x * dx.y ) *
+                          ( size0 / (range0.y - range0.x) ) *
+                          ( size1 / (range1.y - range1.x) );
+
+    auto local_ntiles = particles ->get_local_ntiles();
+
+    // Launch the appropriate phasespace deposition kernel
+    phasespace::dispatch(quant0, [&] ( auto qc0 ) {
+    phasespace::dispatch(quant1, [&] ( auto qc1 ) {
+
+        constexpr auto quant0 = decltype(qc0)::value;
+        constexpr auto quant1 = decltype(qc1)::value;
+        
+        // Don't generate code for quant1 <= quant0
+        if constexpr ( quant1 > quant0 ) {
+
+            // Normalize range to cell sizes, if required
+            if constexpr ( quant0 == phasespace::quantity::x ) { range0.x /= dx.x; range0.y /= dx.x; }
+            if constexpr ( quant0 == phasespace::quantity::y ) { range0.x /= dx.y; range0.y /= dx.y; }
+            if constexpr ( quant1 == phasespace::quantity::x ) { range1.x /= dx.x; range1.y /= dx.x; }
+            if constexpr ( quant1 == phasespace::quantity::y ) { range1.x /= dx.y; range1.y /= dx.y; }
+            
+            for( unsigned ty = 0; ty < local_ntiles.y; ty ++ ) {
+                for( unsigned tx = 0; tx < local_ntiles.x; tx ++ ) {
+                    phasespace::dep_pha2<quant0,quant1> (
+                        make_uint2( tx, ty ), 
+                        d_data, range0, size0, range1, size1, norm, 
+                        particles -> view()
+                    );
+                }
+            }
+        }
+    });
+    });
+}
+
 
 /**
  * @brief Save 1D phasespace
@@ -2804,11 +2512,11 @@ void Species::dep_phasespace( float * const d_data, phasespace::quant quant,
  * @param range     Phasespace range
  * @param size      Phasespace grid size
  */
-void Species::save_phasespace( phasespace::quant quant, float2 const range, 
+void species::save_phasespace( phasespace::quantity quant, float2 const range, 
     int const size ) const
 {
+    // Get metadata for quantity
     std::string qname, qlabel, qunits;
-
     phasespace::qinfo( quant, qname, qlabel, qunits );
     
     // Prepare file info
@@ -2819,11 +2527,6 @@ void Species::save_phasespace( phasespace::quant quant, float2 const range,
         .label = (char *) qlabel.c_str(),
         .units = (char *) qunits.c_str()
     };
-
-    if ( quant == phasespace::x ) {
-        axis.min += moving_window.motion();
-        axis.max += moving_window.motion();
-    }
 
     std::string pha_name  = name + "-" + qname;
     std::string pha_label = name + "\\,(" + qlabel+")";
@@ -2862,263 +2565,6 @@ void Species::save_phasespace( phasespace::quant quant, float2 const range,
 }
 
 /**
- * @brief CUDA kernel for depositing 2D phasespace
- * 
- * @tparam q0       Quantity 0
- * @tparam q1       Quantity 1
- * @param d_data    Ouput data
- * @param range0    Range of values of quantity 0
- * @param size0     Phasespace grid size for quantity 0
- * @param range1    Range of values of quantity 1
- * @param size1     Range of values of quantity 1
- * @param tile_nx   Size of tile grid
- * @param norm      Normalization factor
- * @param d_tiles   Particle tile information
- * @param d_ix      Particle data (cell)
- * @param d_x       Particle data (pos)
- * @param d_u       Particle data (generalized momenta)
- */
-template < phasespace::quant quant0, phasespace::quant quant1 >
-void dep_pha2_kernel(
-    uint2 const tile_idx,
-    float * const __restrict__ d_data, 
-    float2 const range0, int const size0,
-    float2 const range1, int const size1,
-    float const norm, 
-    ParticleData const part )
-{
-    static_assert( quant1 > quant0, "quant1 must be > quant0" );
-    
-    const uint2 ntiles  = part.ntiles;
-    const auto tile_nx  = part.nx;
-
-    const int tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    const int part_offset = part.offset[ tid ];
-    const int np          = part.np[ tid ];
-    int2   * __restrict__ ix  = &part.ix[ part_offset ];
-    float2 * __restrict__ x   = &part.x[ part_offset ];
-    float3 * __restrict__ u   = &part.u[ part_offset ];
-
-    float const pha_rdx0 = size0 / (range0.y - range0.x);
-    float const pha_rdx1 = size1 / (range1.y - range1.x);
-
-    const int shiftx = (part.tile_off.x + tile_idx.x) * tile_nx.x;
-    const int shifty = (part.tile_off.y + tile_idx.y) * tile_nx.y;
-
-    for( int i = 0; i < np; i++ ) {
-        float d0;
-        if constexpr ( quant0 == phasespace:: x )  d0 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
-        if constexpr ( quant0 == phasespace:: y )  d0 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
-        if constexpr ( quant0 == phasespace:: ux ) d0 = u[i].x;
-        if constexpr ( quant0 == phasespace:: uy ) d0 = u[i].y;
-        if constexpr ( quant0 == phasespace:: uz ) d0 = u[i].z;
-
-        float n0 =  (d0 - range0.x ) * pha_rdx0 - 0.5f;
-        int   k0 = int( n0 + 1 ) - 1;
-        float w0 = n0 - k0;
-
-        float d1;
-        // if constexpr ( quant1 == phasespace:: x )  d1 = ( shiftx + ix[i].x) + (x[i].x + 0.5f);
-        if constexpr ( quant1 == phasespace:: y )  d1 = ( shifty + ix[i].y) + (x[i].y + 0.5f);
-        if constexpr ( quant1 == phasespace:: ux ) d1 = u[i].x;
-        if constexpr ( quant1 == phasespace:: uy ) d1 = u[i].y;
-        if constexpr ( quant1 == phasespace:: uz ) d1 = u[i].z;
-
-        float n1 =  (d1 - range1.x ) * pha_rdx1 - 0.5f;
-        int   k1 = int( n1 + 1 ) - 1;
-        float w1 = n1 - k1;
-
-        // When using multi-threading these need to atomic accross tiles
-        if ((k0   >= 0) && (k0   < size0-1) && (k1   >= 0) && (k1   < size1-1))
-            d_data[(k1  )*size0 + k0  ] += (1-w0) * (1-w1) * norm;
-        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1   >= 0) && (k1   < size1-1))
-            d_data[(k1  )*size0 + k0+1] +=    w0  * (1-w1) * norm;
-        if ((k0   >= 0) && (k0   < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
-            d_data[(k1+1)*size0 + k0  ] += (1-w0) *    w1  * norm;
-        if ((k0+1 >= 0) && (k0+1 < size0-1) && (k1+1 >= 0) && (k1+1 < size1-1))
-            d_data[(k1+1)*size0 + k0+1] +=    w0  *    w1  * norm;
-    }
-}
-
-
-/**
- * @brief Deposits a 2D phasespace in a device buffer
- * 
- * @param d_data    Pointer to device buffer
- * @param quant0    Quantity 0
- * @param range0    Range of values of quantity 0
- * @param size0     Phasespace grid size for quantity 0
- * @param quant0    Quantity 1
- * @param range1    Range of values of quantity 1
- * @param size1     Phasespace grid size for quantity 1
- */
-void Species::dep_phasespace( 
-    float * const d_data,
-    phasespace::quant quant0, float2 range0, unsigned const size0,
-    phasespace::quant quant1, float2 range1, unsigned const size1 ) const
-{
-
-    // Zero device memory
-    memory::zero( d_data, size0 * size1 );
-
-    // In OSIRIS we don't take the absolute value of q
-    float norm = fabs(q) * ( dx.x * dx.y ) *
-                          ( size0 / (range0.y - range0.x) ) *
-                          ( size1 / (range1.y - range1.x) );
-
-    switch(quant0) {
-    case( phasespace::x ):
-        range0.y /= dx.x;
-        range0.x /= dx.x;
-        switch(quant1) {
-        case( phasespace::y ):
-            range1.y /= dx.y;
-            range1.x /= dx.y;
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::x,phasespace::y> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        case( phasespace::ux ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::x,phasespace::ux> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        case( phasespace::uy ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::x,phasespace::uy> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        case( phasespace::uz ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::x,phasespace::uz> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        default:
-            break;
-        }
-        break;
-    case( phasespace:: y ):
-        range0.y /= dx.y;
-        range0.x /= dx.y;
-        switch(quant1) {
-        case( phasespace::ux ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::y,phasespace::ux> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        case( phasespace::uy ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::y,phasespace::uy> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        case( phasespace::uz ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::y,phasespace::uz> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        default:
-            break;
-        }
-        break;
-    case( phasespace:: ux ):
-        switch(quant1) {
-        case( phasespace::uy ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::ux,phasespace::uy> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        case( phasespace::uz ):
-            for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-                for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                    const auto tile_idx = make_uint2( tx, ty );
-                    dep_pha2_kernel<phasespace::ux,phasespace::uz> (
-                        tile_idx, 
-                        d_data, range0, size0, range1, size1, norm, 
-                        *particles
-                    );
-                }
-            }
-            break;
-        default:
-            break;
-        }
-        break;
-    case( phasespace:: uy ):
-        for( unsigned ty = 0; ty < particles -> ntiles.y; ty ++ ) {
-            for( unsigned tx = 0; tx < particles -> ntiles.x; tx ++ ) {
-                const auto tile_idx = make_uint2( tx, ty );
-                dep_pha2_kernel<phasespace::uy,phasespace::uz> (
-                    tile_idx, 
-                    d_data, range0, size0, range1, size1, norm, 
-                    *particles
-                );
-            }
-        }
-        break;
-    default:
-        break;
-    };
-}
-
-
-/**
  * @brief Save 2D phasespace
  * 
  * @param quant0    Quantity 0
@@ -3128,9 +2574,9 @@ void Species::dep_phasespace(
  * @param range1    Range of values of quantity 1
  * @param size1     Phasespace grid size for quantity 0
  */
-void Species::save_phasespace( 
-    phasespace::quant quant0, float2 const range0, int const size0,
-    phasespace::quant quant1, float2 const range1, int const size1 )
+void species::save_phasespace( 
+    phasespace::quantity quant0, float2 const range0, int const size0,
+    phasespace::quantity quant1, float2 const range1, int const size1 )
     const
 {
 
@@ -3162,12 +2608,6 @@ void Species::save_phasespace(
             .units = (char *) qunits1.c_str()
         }
     };
-
-    if ( quant0 == phasespace::x ) {
-        axis[0].min += moving_window.motion();
-        axis[0].max += moving_window.motion();
-    }
-
 
     std::string pha_name  = name + "-" + qname0 + qname1;
     std::string pha_label = name + " \\,(" + qlabel0 + "\\rm{-}" + qlabel1+")";
@@ -3203,5 +2643,3 @@ void Species::save_phasespace(
 
     memory::free( d_data );
 }
-
-

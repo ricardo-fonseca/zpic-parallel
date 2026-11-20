@@ -5,6 +5,9 @@
 
 namespace grid {
 
+template< typename S >
+using tiled_vec3_view = grid::tiled_view< vec3<S> >;
+
 template < typename S > 
 class tiled_vec3 : public grid::tiled< vec3<S> >
 {
@@ -33,7 +36,6 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
 
     using grid::tiled< V > :: tile_vol;
 
-    // Is this necessary?
     using grid::tiled< V > :: tiled;
 
     using grid::tiled< V > :: set;
@@ -47,7 +49,10 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
     using grid::tiled< V > :: buffer;
     using grid::tiled< V > :: tile_data;
     using grid::tiled< V > :: tile_buffer;
-    
+
+    using grid::tiled< V > :: view;
+    using grid::tiled< V > :: cview;
+
     /**
      * @brief Gather specific field component values from all tiles
      * 

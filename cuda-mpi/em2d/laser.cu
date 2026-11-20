@@ -481,16 +481,17 @@ inline float gauss_phase( const gaussian_params & p, const float z, const float 
  * @param p                 Gaussian beam parameters
  * @param E_fld             E field grid
  * @param B_fld             B field grid
- * @param local_tile_start  Tile start position on global tile grid
  * @param dx                Cell size
  */
 __global__
 void gaussian( 
     gaussian_params const p, 
     grid::tiled_vec3_view<float> E_fld, grid::tiled_vec3_view<float> B_fld, 
-    uint2 const local_tile_start, float2 const dx )
+    float2 const dx )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
+
+    uint2 local_tile_start = E_fld.local_tile_start;
 
     float3 * const __restrict__ E = E_fld.tile_data( tile_idx );
     float3 * const __restrict__ B = B_fld.tile_data( tile_idx );
@@ -566,16 +567,6 @@ int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>
 
     return 0;
 }
-
-
-namespace laser {
-namespace kernel {
-
-
-
-} // namespace kernel
-} // namespace laser
-
 
 /**
  * @brief Sets the longitudinal field components of E and B to ensure 0

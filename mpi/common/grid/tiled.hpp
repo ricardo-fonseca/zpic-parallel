@@ -52,6 +52,9 @@ struct tiled_view {
     /// @brief Tile volume (may be larger than tile_ext_dim.x * tile_ext_dim.y for alignment)
     const std::size_t tile_vol;
 
+    /// @brief Start position of local tiles in global tile grid
+    uint2 local_tile_start;
+
     /**
      * @brief Buffer size
      * 
@@ -422,7 +425,8 @@ class tiled {
             tile_ext_dims, 
             inner_offset, 
             gc,
-            tile_vol };
+            tile_vol,
+            local_tile_start };
     }
 
     /**
@@ -442,7 +446,8 @@ class tiled {
             tile_ext_dims, 
             inner_offset, 
             gc,
-            tile_vol };
+            tile_vol,
+            local_tile_start };
     }
 
     /**
@@ -1528,105 +1533,193 @@ class tiled {
     /**
      * @brief Perform a convolution with a 3 point kernel [a,b,c] along x
      * 
-     * @param a     Kernel value a
-     * @param b     Kernel value b
-     * @param c     Kernel value c
+     * @note Guard cells must be up to date on entry. Guard cells are updated
+     *       on exit.
+     * 
+     * @param a             Kernel value a
+     * @param b             Kernel value b
+     * @param c             Kernel value c
+     * @param upper_ext     (optional) Also compute the result on the first
+     *                      upper x guard column and first upper y guard row,
+     *                      see kernel::kernel3_x(). Requires gc.x.upper >= 2
+     *                      and gc.y.upper >= 1
      */
     template < typename S >
-    void kernel3_x( S const a, S const b, S const c ) {
+    void kernel3_x( S const a, S const b, S const c, bool const upper_ext = false ) {
 
-        if (( gc.x.lower > 0) && (gc.x.upper > 0)) {
-
-            const int ystride = tile_ext_dims.x;
-
-            // Loop over tiles
-            #pragma omp parallel for
-            for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
-
-                // On a GPU these would be on block shared memory
-                T A[ tile_vol ];
-                T B[ tile_vol ];
-
-                T * __restrict__ buffer = tile_buffer( tid );
-
-                // Copy data from tile buffer
-                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) {
-                    A[i] = B[i] = buffer[i];
-                }
-
-                // Apply kernel locally
-                for( int iy = 0; iy < static_cast<int>(tile_ext_dims.y); iy++ ) {
-                    for( int ix = gc.x.lower; ix < static_cast<int>(gc.x.lower + tile_dims.x); ix ++) {
-                        B[ iy * ystride + ix ] = A[ iy * ystride + (ix-1) ] * a +
-                                                 A[ iy * ystride +  ix    ] * b +
-                                                 A[ iy * ystride + (ix+1) ] * c;
-                    }
-                }
-
-                // Copy data back to tile buffer
-                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) buffer[i] = B[i];
-            }
-
-            // Update guard cells
-            copy_to_gc_x();
-
-        } else {
+        if (( gc.x.lower < 1 ) || ( gc.x.upper < 1 )) {
             mpi::fatal( "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries." );
         }
 
+        if ( upper_ext && ( gc.x.upper < 2 || gc.y.upper < 1 ) ) {
+            mpi::fatal( "kernel3_x() with upper_ext requires at least 2 upper x guard cells"
+                        " and 1 upper y guard cell." );
+        }
+
+        const int ext = ( upper_ext ) ? 1 : 0;
+        const int ystride = tile_ext_dims.x;
+        const int nx      = tile_dims.x + ext;
+        const int ny      = tile_dims.y + ext;
+        const int offset  = inner_offset;
+
+        // Loop over tiles
+        #pragma omp parallel for
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
+
+            // On a GPU these would be on block shared memory
+            T A[ tile_vol ];
+
+            T * __restrict__ buffer = tile_buffer( tid );
+
+            // Apply kernel, written directly to the tile buffer
+            for( int idx = 0; idx < ny * nx; idx ++ ) {
+                const int iy = idx / nx;
+                const int ix = idx % nx;
+                const int k  = iy * ystride + ix + offset;
+                buffer[ k ] = A[ k - 1 ] * a +
+                              A[ k     ] * b +
+                              A[ k + 1 ] * c;
+            }
+        }
+
+        // Update guard cells
+        copy_to_gc_x();
     }
 
     /**
      * @brief Perform a convolution with a 3 point kernel [a,b,c] along y
      * 
-     * @param a     Kernel value a
-     * @param b     Kernel value b
-     * @param c     Kernel value c
+     * @note Guard cells must be up to date on entry. Guard cells are updated
+     *       on exit.
+     * 
+     * @param a             Kernel value a
+     * @param b             Kernel value b
+     * @param c             Kernel value c
+     * @param upper_ext     (optional) Also compute the result on the first
+     *                      upper x guard column and first upper y guard row,
+     *                      see kernel::kernel3_y(). Requires gc.y.upper >= 2
+     *                      and gc.x.upper >= 1
      */
     template < typename S >
-    void kernel3_y( S const a, S const b, S const c ) {
+    void kernel3_y( S const a, S const b, S const c, bool const upper_ext = false ) {
 
-        if (( gc.y.lower > 0) && (gc.y.upper > 0)) {
-
-            const int ystride = tile_ext_dims.x;
-
-            // Loop over tiles
-            #pragma omp parallel for
-            for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
-
-                // On a GPU these would be on block shared memory
-                T A[ tile_vol ];
-                T B[ tile_vol ];
-
-                auto * __restrict__ buffer = tile_buffer( tid );
-
-                // Copy data from tile buffer
-                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) {
-                    A[i] = B[i] = buffer[i];
-                }
-
-                // Apply kernel locally
-                for( int iy = gc.y.lower; iy < static_cast<int>(tile_dims.y + gc.y.lower); iy++ ) {
-                    for( int ix = 0; ix < static_cast<int>(tile_ext_dims.x); ix ++) {
-                        B [ iy * ystride + ix ] = A[ (iy-1) * ystride + ix ] * a +
-                                                  A[    iy  * ystride + ix ] * b +
-                                                  A[ (iy+1) * ystride + ix ] * c;
-                    }
-                }
-
-                // Copy data back to tile buffer
-                for( int i = 0; i < static_cast<int>(tile_vol); i++ ) buffer[i] = B[i];
-            }
-
-            // Update guard cells
-            copy_to_gc_y();
-
-        } else {
+        if (( gc.y.lower < 1 ) || ( gc.y.upper < 1 )) {
             mpi::fatal( "kernel3_y() requires at least 1 guard cell at both the lower and upper y boundaries." );
         }
 
+        if ( upper_ext && ( gc.y.upper < 2 || gc.x.upper < 1 ) ) {
+            mpi::fatal( "kernel3_y() with upper_ext requires at least 2 upper y guard cells"
+                        " and 1 upper x guard cell." );
+        }
+
+        const int ext     = ( upper_ext ) ? 1 : 0;
+        const int ystride = tile_ext_dims.x;
+        const int nx      = tile_dims.x + ext;
+        const int ny      = tile_dims.y + ext;
+        const int offset  = inner_offset;
+
+        // Loop over tiles
+        #pragma omp parallel for
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
+
+            // On a GPU these would be on block shared memory
+            T A[ tile_vol ];
+
+            auto * __restrict__ buffer = tile_buffer( tid );
+
+            // Copy data from tile buffer
+            std::memcpy( A, buffer, tile_vol * sizeof(T) );
+
+            // Apply kernel, written directly to the tile buffer
+            for( int idx = 0; idx < ny * nx; idx ++ ) {
+                const int iy = idx / nx;
+                const int ix = idx % nx;
+                const int k  = iy * ystride + ix + offset;
+                buffer[ k ] = A[ k - ystride ] * a +
+                              A[ k           ] * b +
+                              A[ k + ystride ] * c;
+            }
+        }
+
+        // Update guard cells
+        copy_to_gc_y();
     }
-    
+
+    /**
+     * @brief Perform a separable 2D convolution with a 3 point kernel [a,b,c]
+     *        along x and y
+     * 
+     * @note Equivalent to kernel3_x( a, b, c ) followed by kernel3_y( a, b, c ),
+     *       i.e. a 3x3 kernel [a,b,c] ⊗ [a,b,c], but with a single kernel
+     *       launch and a single guard cell update.
+     * 
+     * @note Guard cells (including corners) must be up to date on entry, as
+     *       with kernel3_x() / kernel3_y(). Guard cells are updated on exit.
+     * 
+     * @param a             Kernel value a
+     * @param b             Kernel value b
+     * @param c             Kernel value c
+     * @param upper_ext     (optional) Also compute the result on the first
+     *                      upper x guard column and first upper y guard row,
+     *                      see kernel::kernel3_xy(). Requires gc.x.upper >= 2
+     *                      and gc.y.upper >= 2
+     */
+    template < typename S >
+    void kernel3_xy( S const a, S const b, S const c, bool const upper_ext = false ) {
+
+        if (( gc.x.lower < 1 ) || (gc.x.upper < 1 ) || 
+            ( gc.y.lower < 1 ) || (gc.y.upper < 1 )) {
+            mpi::fatal( "kernel3_xy() requires at least 1 guard cell at all x and y boundaries." );
+        }
+
+        if ( upper_ext && ( gc.x.upper < 2 || gc.y.upper < 2 ) ) {
+            mpi::fatal( "kernel3_xy() with upper_ext requires at least 2 upper x and y guard cells." );
+        }
+
+        const int ext     = ( upper_ext ) ? 1 : 0;
+        const int ystride = tile_ext_dims.x;
+        const int nx      = tile_dims.x + ext;
+        const int ny      = tile_dims.y + ext;
+        const int offset  = inner_offset;
+
+        // Loop over tiles
+        #pragma omp parallel for
+        for( int tid = 0; tid < static_cast<int>(local_ntiles.y * local_ntiles.x); tid++ ) {
+
+            // On a GPU these would be on block shared memory
+            T A[ tile_vol ];
+            T B[ tile_vol ];
+
+            auto * __restrict__ buffer = tile_buffer( tid );
+
+            // Copy data from tile buffer
+            std::memcpy( A, buffer, tile_vol * sizeof(T) );
+
+            // x pass, rows -1 to ny (inclusive)
+            for( int idx = 0; idx < ( ny + 2 ) * nx; idx ++ ) {
+                const int iy = idx / nx - 1;
+                const int ix = idx % nx;
+                const int k  = iy * ystride + ix + offset;
+                B[ k ] = A[ k - 1 ] * a +
+                        A[ k     ] * b +
+                        A[ k + 1 ] * c;
+            }
+
+            // y pass, written directly to the tile buffer
+            for( int idx = 0; idx < ny * nx; idx ++ ) {
+                const int iy = idx / nx;
+                const int ix = idx % nx;
+                const int k  = iy * ystride + ix + offset;
+                buffer[ k ] = B[ k - ystride ] * a +
+                              B[ k           ] * b +
+                              B[ k + ystride ] * c;
+            }
+        }
+
+        // Update guard cells
+        copy_to_gc();
+    }
+
     /**
      * @brief Save grid values to disk with full metadata
      *

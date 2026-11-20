@@ -1,18 +1,96 @@
-#ifndef SIMULATION_H_
-#define SIMULATION_H_
+#pragma once
 
-#include "zpic.h"
-
-#include "parallel.h"
-#include "emf.h"
-#include "current.h"
-#include "species.h"
-
-#include "timer.h"
-
+#include <cmath>
 #include <vector>
 
-class Simulation {
+#include "core/vec_types.hpp"
+#include "parallel/mpi.hpp"
+#include "parallel/partition.hpp"
+#include "parallel/omp.hpp"
+#include "simd/simd.hpp"
+
+#include "emf.hpp"
+#include "current.hpp"
+#include "species.hpp"
+
+namespace zpic {
+
+/**
+ * @brief Print out system information
+ *
+ * @note Only root node prints any information
+ * 
+ */
+inline void sys_info() {
+    if ( mpi::root() ) {
+
+        std::cout << "MPI running on " << mpi::size() << " processes\n";
+
+        #ifdef SIMD
+            std::cout << "SIMD support enabled\n";
+            std::cout << "  vector unit : " << simd::name << '\n';
+            std::cout << "  vector width: " << simd::width <<'\n';
+        #else
+            std::cout << "SIMD support not enabled\n";
+        #endif
+        
+        #ifdef _OPENMP
+            std::cout << "OpenMP enabled\n";
+            std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
+            std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
+            #pragma omp parallel
+            {
+                if ( omp_get_thread_num() == 0 )
+                    std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
+            }
+        #else
+            std::cout << "OpenMP support not enabled\n";
+        #endif
+
+    }
+}
+
+/**
+ * @brief CFL time limit from cell size
+ * 
+ * @param dx        Cell size
+ * @return float    CFL time limit
+ */
+inline float courant( const float2 dx ) {
+    return std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+}
+
+/**
+ * @brief CFL time limit number cells and box size 
+ * 
+ * @param gnx       Global number of cells
+ * @param box       Simulation box size (global)
+ * @return float    CFL time limit
+ */
+inline float courant( const uint2 gnx, const float2 box  ) {
+    float2 dx = make_float2( box.x/gnx.x, box.y/gnx.y);
+    return courant(dx);
+}
+
+/**
+ * @brief CFL time limit from number of tiles, tile size and simulation box size
+ * 
+ * @param ntiles    Number of tiles
+ * @param nx        Number of cells per tile
+ * @param box       Simulation box size (global)
+ * @return float    CFL time limit
+ */
+inline float courant( const uint2 ntiles, const uint2 nx, const float2 box ) {
+    float2 dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
+    return courant(dx);
+}
+
+
+/**
+ * @brief EM2Ds simulation
+ * 
+ */
+class simulation {
 
     private:
 
@@ -22,27 +100,26 @@ class Simulation {
 
     /// @brief Global number of tiles
     const uint2 global_ntiles;
-    /// @brief Tile grid size
-    const uint2 nx;
+    /// @brief Tile grid dimensions
+    const uint2 tile_dims;
     /// @brief Global simulation box size
     const float2 box;
     /// @brief Time step
     const float dt;
 
     /// @brief MPI parallel partition
-    Partition parallel;
+    mpi::cart2d parallel;
 
     /// @brief EM fields
-    EMF emf;
-
-    /// @brief Current density
-    Current current;
-
+    emf emf;
+    /// @brief Electric current density
+    current current;
+ 
     /// @brief Vector of particle species
-    std::vector <Species*> species;
+    std::vector <species*> species;
 
     /**
-     * @brief Construct a new Simulation object
+     * @brief Construct a new simulation object
      * 
      * @note Global periodic boundaries are set to true
      * 
@@ -52,16 +129,17 @@ class Simulation {
      * @param dt                Time step
      * @param partition         Parallel partition (number of parallel nodes in each direction)
      */
-    Simulation( uint2 const global_ntiles, uint2 const nx, float2 const box, float const dt, uint2 partition ):
+    simulation( const uint2 global_ntiles, const uint2 tile_dims, const float2 box, const float dt, 
+        const uint2 partition ):
         iter(0), 
-        global_ntiles( global_ntiles ), nx( nx ), box( box ), dt( dt ), 
+        global_ntiles( global_ntiles ), tile_dims( tile_dims ), box( box ), dt( dt ), 
         parallel( partition ),
-        emf( global_ntiles, nx, box, dt, parallel ),
-        current( global_ntiles, nx, box, dt, parallel ) {
+        emf( global_ntiles, tile_dims, box, dt, parallel ),
+        current( global_ntiles, tile_dims, box, dt, parallel ) {
     }
 
     /**
-     * @brief Construct a new Simulation object
+     * @brief Construct a new simulation object
      * 
      * @param global_ntiles     Global number of tiles
      * @param nx                Individual tile grid size
@@ -70,20 +148,32 @@ class Simulation {
      * @param partition         Parallel partition (number of parallel nodes in each direction)
      * @param periodic          Global periodic boundaries
      */
-    Simulation( uint2 const global_ntiles, uint2 const nx, float2 const box, float const dt, 
-        uint2 const partition, int2 const periodic ):
+    simulation( const uint2 global_ntiles, const uint2 tile_dims, const float2 box, const float dt, 
+        const uint2 partition, const int2 periodic ):
         iter(0), 
-        global_ntiles( global_ntiles ), nx( nx ), box( box ), dt( dt ), 
+        global_ntiles( global_ntiles ), tile_dims( tile_dims ), box( box ), dt( dt ), 
         parallel( partition, periodic ),
-        emf( global_ntiles, nx, box, dt, parallel ),
-        current( global_ntiles, nx, box, dt, parallel ) {
+        emf( global_ntiles, tile_dims, box, dt, parallel ),
+        current( global_ntiles, tile_dims, box, dt, parallel ) {
     }
 
     /**
-     * @brief Destroy the Simulation object
+     * @brief Copy constructor
      * 
      */
-    ~Simulation() {
+    simulation( const simulation & ) = delete;
+    
+    /**
+     * @brief Move constructor
+     * 
+     */
+    simulation( simulation && ) = delete;
+
+    /**
+     * @brief Destroy the simulation object
+     * 
+     */
+    ~simulation() {
     };
 
     /**
@@ -95,8 +185,7 @@ class Simulation {
     void set_moving_window() {
         
         if ( parallel.periodic.x ) {
-            std::cerr << "(*error*) Simulation::set_moving_window() - Unable to set_moving_window() with periodic x partition\n";
-            exit(1); 
+            mpi::fatal( "Unable to set_moving_window() with periodic x partition" );
         }
         
         emf.set_moving_window();
@@ -112,18 +201,18 @@ class Simulation {
      *
      * @param s     Particle species 
      */
-    void add_species( Species & s ) {
+    inline void add_species( class species & s ) {
         species.push_back( &s );
-        s.initialize( box, global_ntiles, nx, dt, species.size(), parallel );
+        s.initialize( box, global_ntiles, tile_dims, dt, species.size(), parallel );
     }
 
     /**
      * @brief Gets a pointer to a specific species object
      * 
-     * @param name                Species name
-     * @return Species const* 
+     * @param name                species name
+     * @return species const* 
      */
-    Species * get_species( std::string name ) {
+    inline class species * get_species( const std::string & name ) {
         unsigned id = 0;
         for( id = 0; id < species.size(); id++ )
             if ( (species[id])->name == name ) break;
@@ -134,10 +223,10 @@ class Simulation {
      * @brief Advance simulation 1 iteration
      * 
      */
-    void advance() {
+    inline void advance( ) {
 
-        // Zero global current
-        current.zero();
+        // Zero global current and charge
+        current.zero( );
 
         // Advance all species
         for ( auto & sp : species ) {
@@ -145,8 +234,8 @@ class Simulation {
         }
 
         // Update current edge values and guard cells
-        current.advance();
-        
+        current.advance( );
+
         // Advance EM fields
         emf.advance( current );
 
@@ -181,20 +270,20 @@ class Simulation {
      * 
      * @return unsigned int     Iteration
      */
-    unsigned int get_iter() { return iter; };
+    inline unsigned int get_iter() const { return iter; };
 
     /**
      * @brief Get current simulation time
      * 
-     * @return double   Simulation time
+     * @return double   simulation time
      */
-    double get_t() { return iter * double(dt); };
+    inline double get_t() const { return iter * double(dt); };
 
     /**
      * @brief Print global energy diagnostic
      * @note must be called by all MPI nodes
      */
-    void energy_info() {
+    inline void energy_info() {
         if ( parallel.root() ) {
             std::cout << "(*info*) Energy at n = " << iter << ", t = " << iter * double(dt)  << '\n';
         }
@@ -257,4 +346,4 @@ class Simulation {
 };
 
 
-#endif
+}
