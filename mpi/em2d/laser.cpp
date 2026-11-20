@@ -69,6 +69,8 @@ struct gaussian_params {
  * @param z         Position
  * @return float    Laser envelope
  */
+namespace {
+
 inline float lon_env( const laser::envelope & env, const float z ) {
 
     if ( z > env.start ) {
@@ -92,6 +94,8 @@ inline float lon_env( const laser::envelope & env, const float z ) {
     // Before laser
     return 0.0f;
 }
+
+} // anonymous namespace
 
 
 namespace laser {
@@ -174,12 +178,12 @@ void lon_x_sum (
 
     const int ystride = E_grid.tile_ystride();
 
-    for( int tile_idx_x = 0; tile_idx_x < E_grid.local_ntiles.x; tile_idx_x++ ) {
+    for( int tile_idx_x = 0; tile_idx_x < static_cast<int>(E_grid.local_ntiles.x); tile_idx_x++ ) {
 
         float3 * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
         float3 * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
 
-        for( int ix = 0; ix < E_grid.tile_dims.x; ix ++ ) {
+        for( int ix = 0; ix < static_cast<int>(E_grid.tile_dims.x); ix ++ ) {
             tile_E[ ix + iy * ystride ].x += divEx;
             tile_B[ ix + iy * ystride ].x += divBx;
         }
@@ -372,8 +376,8 @@ int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<floa
     auto ntiles = E.get_local_ntiles();
 
     #pragma omp parallel for collapse(2)
-    for( int ty = 0; ty < ntiles.y; ty ++ ) {
-        for( int tx = 0; tx < ntiles.x; tx ++ ) {
+    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
             uint2 tile_idx = make_uint2( tx, ty );
             kernel::plane_wave ( tile_idx, p, E.view(), B.view(), dx );
         }
@@ -511,8 +515,8 @@ int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>
     auto ntiles = E.get_local_ntiles();
 
     #pragma omp parallel for collapse(2)
-    for( int ty = 0; ty < ntiles.y; ty ++ ) {
-        for( int tx = 0; tx < ntiles.x; tx ++ ) {
+    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
             uint2 tile_idx = make_uint2( tx, ty );
             kernel::gaussian ( tile_idx, p, E.view(), B.view(), dx );
         }
@@ -526,27 +530,6 @@ int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>
     return 0;
 }
 
-
-/**
- * @brief Returns local phase for a gaussian beamn
- * 
- * @param omega0    Beam frequency
- * @param W0        Beam waist
- * @param z         Position along focal line (focal plane at z = 0)
- * @param r         Position transverse to focal line (focal line at r = 0)
- * @return          Local field value
- */
-inline float gauss_phase( const float omega0, const float W0, const float z, const float r ) {
-    const float z0   = omega0 * ( W0 * W0 ) / 2;
-    const float rho2 = r*r;
-    const float curv = 0.5 * rho2 * z / (z0*z0 + z*z);
-    const float rWl2 = (z0*z0)/(z0*z0 + z*z);
-    const float gouy_shift = atan2( z, z0 );
-
-    return std::sqrt( std::sqrt(rWl2) ) * 
-        std::exp( - rho2 * rWl2/( W0 * W0 ) ) * 
-        std::cos( omega0*( z + curv ) - gouy_shift );
-}
 
 /**
  * @brief Sets the longitudinal field components of E and B to ensure 0
@@ -569,7 +552,7 @@ int laser::gaussian::lon_x( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
     const double dx_dy = (double) dx.x / (double) dx.y;
 
     #pragma omp parallel for
-    for( int j = 0; j < E.local_dims.y; j++ ) {
+    for( int j = 0; j < static_cast<int>(E.local_dims.y); j++ ) {
         laser::kernel::lon_x_scan( j, E.view(), B.view(), dx_dy, sendbuf );
     }
 
@@ -585,7 +568,6 @@ int laser::gaussian::lon_x( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
         MPI_Comm_split( E.part.get_comm(), color, key, &newcomm );
         
         // Add contribution from all nodes to the right
-        // Note: device buffers, requires CUDA-aware MPI
         MPI_Exscan( sendbuf, recvbuf, 2 * E.local_dims.y, MPI_DOUBLE, MPI_SUM, newcomm );
 
         // Add result to local grid
@@ -593,8 +575,8 @@ int laser::gaussian::lon_x( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
         // i.e. not necessarily 0
         if ( key > 0 ) {
             #pragma omp parallel for
-            for( int j = 0; j < E.local_dims.y; j++ ) {
-                laser::kernel::lon_x_sum( j, E.view(), B.view(), sendbuf );
+            for( int j = 0; j < static_cast<int>(E.local_dims.y); j++ ) {
+                laser::kernel::lon_x_sum( j, E.view(), B.view(), recvbuf );
             }
         }
 

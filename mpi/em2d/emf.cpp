@@ -4,6 +4,8 @@
 #include <ostream>
 #include <sstream>
 
+namespace {
+
 /**
  * @brief B advance for Yee algorithm
  * 
@@ -163,6 +165,8 @@ void yee(
     memory::memcpy( B_grid.tile_buffer(tile_id), B_local, B_grid.tile_vol );
 }
 
+} // namespace
+
 /**
  * @brief Move simulation window
  * 
@@ -218,15 +222,16 @@ void emf::advance() {
 }
 
 
+namespace {
+
 /**
  * @brief Physical boundary conditions for the x direction
  * 
- * @param tile_idx      Tile position on grid
- * @param E         Tile E field
- * @param B         Tile B field
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_y    Tile row
+ * @param E_grid        View of tiled electric field grid
+ * @param B_grid        View of tiled magnetic field grid
+ * @param local_bc      Local rank boundary conditions
  */
 void emf_bcx( 
     unsigned bnd_x, unsigned tile_idx_y,
@@ -348,12 +353,13 @@ void emf_bcx(
 /**
  * @brief Physical boundary conditions for the y direction
  * 
- * @param tile      Tile position on grid
- * @param E         Tile E field
- * @param B         Tile B field
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @note Must run after emf_bcx() for correct corner values
+ * 
+ * @param tile_idx_x    Tile column
+ * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
+ * @param E_grid        View of tiled electric field grid
+ * @param B_grid        View of tiled magnetic field grid
+ * @param local_bc      Local rank boundary conditions
  */
 void emf_bcy( 
     unsigned tile_idx_x, unsigned bnd_y,
@@ -465,6 +471,8 @@ void emf_bcy(
 }
 
 
+} // namespace
+
 /**
  * @brief Processes "physical" boundary conditions
  * 
@@ -491,11 +499,13 @@ void emf::process_bc() {
         #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-                emf_bcx(tx, bnd_y, E -> view(), B->view(), local_bc);
+                emf_bcy(tx, bnd_y, E -> view(), B->view(), local_bc);
             }
         }
     }
 }
+
+namespace {
 
 /**
  * @brief E advance for Yee algorithm including current
@@ -583,6 +593,8 @@ void yeeJ(
     memory::memcpy( E_grid.tile_buffer(tile_id), E_local, E_grid.tile_vol );
     memory::memcpy( B_grid.tile_buffer(tile_id), B_local, B_grid.tile_vol );
 }
+
+} // namespace
 
 /**
  * @brief Advance EM fields 1 time step including current
@@ -726,17 +738,17 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
 
         // Loop over inner tile cells 
         for( unsigned iy = 0; iy < tile_dims.y; ++iy ) {
-            for( unsigned ix = 0; ix < tile_dims.y; ++ix ) {
+            for( unsigned ix = 0; ix < tile_dims.x; ++ix ) {
                 float3 const efld = d_E[ iy * ystride + ix ];
                 float3 const bfld = d_B[ iy * ystride + ix ];
 
-                tile_ene_E.x += efld.x * efld.x;
-                tile_ene_E.y += efld.y * efld.y;
-                tile_ene_E.z += efld.z * efld.z;
+                tile_ene_E.x += static_cast<double>(efld.x) * efld.x;
+                tile_ene_E.y += static_cast<double>(efld.y) * efld.y;
+                tile_ene_E.z += static_cast<double>(efld.z) * efld.z;
 
-                tile_ene_B.x += bfld.x * bfld.x;
-                tile_ene_B.y += bfld.y * bfld.y;
-                tile_ene_B.z += bfld.z * bfld.z;
+                tile_ene_B.x += static_cast<double>(bfld.x) * bfld.x;
+                tile_ene_B.y += static_cast<double>(bfld.y) * bfld.y;
+                tile_ene_B.z += static_cast<double>(bfld.z) * bfld.z;
             }
         }
         

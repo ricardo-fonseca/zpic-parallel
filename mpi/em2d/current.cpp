@@ -1,5 +1,8 @@
 #include "current.hpp"
-#include <iostream>
+
+#include <string>
+
+namespace {
 
 namespace current_bc {
 
@@ -22,11 +25,11 @@ template<> struct comp< coord::y > {
 };
 
 /**
-* @brief Check if boundary condition is a conducting wall
-* 
-* @param t     Boundary condition type
-* @return      True if t is PEC, PMC or PEC (absorbing), false otherwise
-*/
+ * @brief Check if boundary condition is a conducting wall
+ * 
+ * @param t     Boundary condition type
+ * @return      True if t is PEC, PMC or PEC (absorbing), false otherwise
+ */
 inline bool is_conducting( current::bc::type t ) {
     return t == current::bc::pec || t == current::bc::pmc || t == current::bc::pec_absorbing;
 }
@@ -101,7 +104,7 @@ void lower_conducting( float3 * const p, int const s, current::bc::type const ty
  *  p[  0]  normal: n+1/2 (guard) tangential: wall node (guard)
  *  p[ +s]  normal: n+3/2 (guard) tangential: n+1 (guard)
  * 
- * See lower() for the fold / image rules.
+ * See lower_conducting() for the fold / image rules.
  * 
  * @param p     Pointer to the wall node
  * @param s     Stride along the line normal to the wall (1 or ystride)
@@ -145,14 +148,31 @@ void upper_conducting( float3 * const p, int const s, current::bc::type const ty
 
 } // namespace current_bc
 
-
 /**
- * @brief Physical boundary conditions for the x direction 
+ * @brief Wall (pec / pmc) boundary conditions for the current density along x
+ * 
+ * Staggered grid: Jx is defined at (i+1/2, j), Jy at (i, j+1/2) and Jz at
+ * (i, j). The walls sit on nodes ix = 0 (lower) and ix = nx (upper, first
+ * upper guard cell).
+ * 
+ * @note All extended rows (including y guard rows) are processed; together
+ *       with current_bcy() running afterwards this gives the correct corner
+ *       values (all operations are linear and act identically on every row /
+ *       column, so the x and y operations commute where they overlap). The
+ *       y guard rows of internal tiles are copies of neighbour tile / node
+ *       data that receive the exact same operations, so they remain
+ *       consistent.
+ * 
+ * @note Requires tile_dims.x >= 4 and gc.x.upper >= 2 (checked in
+ *       current::validate_bc()), so that the lower and upper boundaries of a
+ *       single tile never touch the same cells and can be processed
+ *       concurrently.
  * 
  * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
  * @param tile_idx_y    Tile index along y direction
- * @param current       View of tiled current grid
- * @param local_bc            Boundary condition
+ * @param J_grid        View of tiled current grid
+ * @param local_bc      Local rank boundary conditions
+ * @param fold          See current::process_bc()
  */
 void current_bcx(
     unsigned bnd_x, unsigned tile_idx_y,
@@ -194,12 +214,22 @@ void current_bcx(
 }
 
 /**
- * @brief Physical boundary conditions for the y direction 
+ * @brief Wall (pec / pmc) boundary conditions for the current density along y
+ * 
+ * As current_bcx() with the roles of x and y exchanged. The walls sit on
+ * nodes iy = 0 (lower) and iy = ny (upper, first upper guard row).
+ * 
+ * @note All extended columns (including x guard columns) are processed. Must
+ *       run after current_bcx(), see notes there.
+ * 
+ * @note Requires tile_dims.y >= 4 and gc.y.upper >= 2 (checked in
+ *       current::validate_bc()).
  * 
  * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
  * @param tile_idx_x    Tile index along x direction
- * @param current       View of tiled current grid
- * @param local_bc      Boundary condition
+ * @param J_grid        View of tiled current grid
+ * @param local_bc      Local rank boundary conditions
+ * @param fold          See current::process_bc()
  */
 void current_bcy( 
     unsigned bnd_y, unsigned tile_idx_x,
@@ -240,17 +270,32 @@ void current_bcy(
     }
 }
 
+} // namespace
+
 /**
  * @brief Processes "physical" boundary conditions
  * 
+ * @note Physical boundaries are only applied on ranks that sit on the
+ *       corresponding edge of the global domain; internal partition
+ *       boundaries are handled by add_from_gc() / copy_to_gc()
+ * 
+ * @note Relies on add_from_gc() and copy_to_gc() leaving the guard cells on
+ *       non-periodic physical edges untouched, so that after deposition they
+ *       still hold the current deposited beyond the wall.
+ * 
+ * @note The x and y boundaries are processed in separate parallel regions;
+ *       the implicit barrier between them provides the x-before-y ordering
+ *       required for the corner values (see current_bcx()). Do not merge
+ *       them into a single parallel region.
+ * 
+ * @param fold  See current.hpp
  */
 void current::process_bc( const bool fold ) {
 
-    const uint2 ntiles          = J -> get_local_ntiles();
+    const uint2 ntiles = J -> get_local_ntiles();
 
     // x boundaries
-    if ( local_bc.x.lower > current::bc::periodic || local_bc.x.upper > current::bc::periodic ) {
-        #pragma omp parallel for collapse(2)
+    if ( current_bc::is_conducting( local_bc.x.lower ) || current_bc::is_conducting( local_bc.x.upper ) ) {
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
             for( unsigned bnd_x : {0,1} ) {
                 current_bcx( bnd_x, ty, J -> view(), local_bc, fold );
@@ -258,9 +303,8 @@ void current::process_bc( const bool fold ) {
         }
     }
 
-    // y boundaries
-    if ( local_bc.y.lower > current::bc::periodic || local_bc.y.upper > current::bc::periodic ) {
-        #pragma omp parallel for collapse(2)
+    // y boundaries (must run after x boundaries, see current_bcx() notes)
+    if ( current_bc::is_conducting( local_bc.y.lower ) || current_bc::is_conducting( local_bc.y.upper ) ) {
         for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
                 current_bcy( bnd_y, tx, J -> view(), local_bc, fold );
@@ -273,12 +317,13 @@ void current::process_bc( const bool fold ) {
 /**
  * @brief Advance electric current to next iteration
  * 
- * Adds up current deposited on guard cells and (optionally) applies digital filtering
+ * Adds up current deposited on guard cells, applies physical boundary
+ * conditions and filters the result.
  * 
  */
 void current::advance() {
 
-    // Add up current deposited on guard cells
+    // Add up current deposited on guard cells, then update guard cells
     J -> add_from_gc( );
     J -> copy_to_gc( );
 
