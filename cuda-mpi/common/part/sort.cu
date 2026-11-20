@@ -78,6 +78,9 @@ void part::particle_sort::exchange_np() {
             MPI_Irecv( &recv.buffer[start], size, MPI_INT, neighbor[dir],
                     source_tag(dir), comm, &recv.requests[dir] );
         } else {
+            // No incoming particles from this direction. Clear stale values
+            // in case neighbors have changed (see update_neighbors())
+            if ( size > 0 ) gpu::device::zero( &recv.buffer[start], size );
             recv.requests[dir] = MPI_REQUEST_NULL;
         }
     }

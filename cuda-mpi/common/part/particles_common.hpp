@@ -1,5 +1,5 @@
 /**
- * @file particles.hpp
+ * @file particles_common.hpp
  * @brief Generic tiled particle buffer (common implementation)
  *
  * @details This file is not meant to be included directly. Each particle
@@ -14,13 +14,13 @@
  *                  X( float3, u,  "Generalized velocity" ) \
  *                  X( float,  q,  "Individual particle charge" ) \
  *                  X( float2, th, "Angular position { cos(θ), sin(θ) }" )
- *              #include "../common/particles.hpp"
+ *              #include "part/particles_common.hpp"
  *
  *          and a local source file (e.g. `cyl_part/particles.cu`):
  *
  *              #include "particles.hpp"
  *              #define PARTICLES_NAMESPACE cyl_part
- *              #include "../common/particles_template.cu"
+ *              #include "part/particles_impl.cuh"
  *
  *          The cell index `int2 ix` is always present and must not be listed.
  *          Each entry is `X( type, name, description )`; `description` is
@@ -47,12 +47,14 @@
  */
 
 #ifndef PARTICLES_NAMESPACE
-#error "PARTICLES_NAMESPACE must be defined before including common/particles.hpp"
+#error "PARTICLES_NAMESPACE must be defined before including common/part/particles_common.hpp"
 #endif
 
 #ifndef PARTICLES_QUANTITIES
-#error "PARTICLES_QUANTITIES must be defined before including common/particles.hpp"
+#error "PARTICLES_QUANTITIES must be defined before including common/part/particles_common.hpp"
 #endif
+
+#include <type_traits>
 
 #include "../parallel/partition.hpp"
 #include "../core/vec_types.cuh"
@@ -165,6 +167,45 @@ struct has_y : std::false_type {};
 
 template< class T >
 struct has_y< T, std::void_t< decltype( std::declval< T & >().y ) > > : std::true_type {};
+
+/**
+ * @brief Checks the position inside the cell, if a quantity named `x` exists
+ * 
+ * @details Checks that the .x / .y components of `p.x` (when present) are in
+ *          [-0.5, 0.5). This must be a template so that the `if constexpr`
+ *          branches are discarded when `x` (or its components) do not exist;
+ *          in a non-template function the discarded branches would still be
+ *          compiled.
+ * 
+ * @param p         Particle values
+ * @param i         Particle index inside tile (for error message)
+ * @param rank      MPI rank (for error message)
+ * @param tile_idx  Tile index (for error message)
+ * @return int      1 if the position is invalid, 0 otherwise
+ */
+template< class P >
+__device__
+inline int check_cell_position( P const & p, int const i, int const rank, int2 const tile_idx ) {
+    int err = 0;
+    if constexpr ( has_x< P >::value ) {
+        using X = std::remove_cv_t< decltype( p.x ) >;
+        if constexpr ( has_x< X >::value ) {
+            if ( p.x.x < -0.5f || p.x.x >= 0.5f ) {
+                printf( "[%d] [%d,%d] Invalid x[%d].x position (%f), range = [-0.5,0.5[\n",
+                    rank, tile_idx.x, tile_idx.y, i, double( p.x.x ) );
+                err = 1;
+            }
+        }
+        if constexpr ( has_y< X >::value ) {
+            if ( p.x.y < -0.5f || p.x.y >= 0.5f ) {
+                printf( "[%d] [%d,%d] Invalid x[%d].y position (%f), range = [-0.5,0.5[\n",
+                    rank, tile_idx.x, tile_idx.y, i, double( p.x.y ) );
+                err = 1;
+            }
+        }
+    }
+    return err;
+}
 
 } // namespace particle_detail
 
@@ -405,10 +446,10 @@ class particles {
      */
     particles( const uint2 global_ntiles, const uint2 tile_dims, const uint32_t max_part, mpi::cart2d & parallel, const int2 periodic ) :
         global_ntiles( global_ntiles ), tile_dims( tile_dims ), max_part( max_part ),
+        periodic( periodic ),
         send( parallel, periodic ),
         recv( parallel, periodic ),
-        parallel( parallel ),
-        periodic( periodic )
+        parallel( parallel )
     {
         // Validade parameters
 
@@ -802,7 +843,7 @@ class particles {
      */
     void tile_sort( const int * __restrict__ extra = nullptr ){
         // Create temporary buffers
-        particles    tmp( global_ntiles, tile_dims, max_part, parallel );
+        particles    tmp( global_ntiles, tile_dims, max_part, parallel, periodic );
         part::particle_sort sort( local_ntiles, max_part, parallel, periodic );
         
         // Call sort routine
