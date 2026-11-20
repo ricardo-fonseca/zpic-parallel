@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <string>
 #include <cstddef>
+#include <cstring>
 
 #include "../core/vec_types.hpp"
 #include "../core/bounds.hpp"
@@ -1548,7 +1549,7 @@ class tiled {
     void kernel3_x( S const a, S const b, S const c, bool const upper_ext = false ) {
 
         if (( gc.x.lower < 1 ) || ( gc.x.upper < 1 )) {
-            mpi::fatal( "kernel_x3() requires at least 1 guard cell at both the lower and upper x boundaries." );
+            mpi::fatal( "kernel3_x() requires at least 1 guard cell at both the lower and upper x boundaries." );
         }
 
         if ( upper_ext && ( gc.x.upper < 2 || gc.y.upper < 1 ) ) {
@@ -1571,6 +1572,9 @@ class tiled {
 
             T * __restrict__ buffer = tile_buffer( tid );
 
+            // Copy data from tile buffer
+            std::memcpy( A, buffer, tile_vol * sizeof(T) );
+
             // Apply kernel, written directly to the tile buffer
             for( int idx = 0; idx < ny * nx; idx ++ ) {
                 const int iy = idx / nx;
@@ -1582,8 +1586,9 @@ class tiled {
             }
         }
 
-        // Update guard cells
-        copy_to_gc_x();
+        // Update guard cells (both directions: only the tile interior, plus
+        // the optional upper extension, was written)
+        copy_to_gc();
     }
 
     /**
@@ -1641,8 +1646,9 @@ class tiled {
             }
         }
 
-        // Update guard cells
-        copy_to_gc_y();
+        // Update guard cells (both directions: only the tile interior, plus
+        // the optional upper extension, was written)
+        copy_to_gc();
     }
 
     /**
