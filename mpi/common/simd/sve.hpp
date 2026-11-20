@@ -996,6 +996,18 @@ inline int vec_any( const vec_mask mask ) {
 }
 
 /**
+ * @brief Extract a single logical value from a mask
+ * 
+ * @param mask      Input mask
+ * @param i         Element index
+ * @return int      Selected value (0 or 1)
+ */
+inline int vec_extract( const vec_mask mask, int i ) {
+    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
+    return svlastb_s32( svwhilele_b32( 0, i ), v );
+}
+
+/**
  * @brief Returns a mask of all true values
  * 
  * @return vec_mask 

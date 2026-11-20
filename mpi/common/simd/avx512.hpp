@@ -1189,11 +1189,31 @@ inline int vec_any( const __mmask16 mask ) {
     return mask != 0;
 }
 
+/**
+ * @brief Extract a single logical value from a mask
+ * 
+ * @param mask      Input mask
+ * @param i         Element index
+ * @return int      Selected value (0 or 1)
+ */
+inline int vec_extract( const __mmask16 mask, int i ) {
+    return ( mask >> ( i & 15 ) ) & 1;
+}
 
+/**
+ * @brief Returns a mask of all true values
+ * 
+ * @return vec_mask 
+ */
 inline __mmask16 vec_true() { 
     return -1;
 }
 
+/**
+ * @brief Returns a mask of all false values
+ * 
+ * @return vec_mask 
+ */
 inline __mmask16 vec_false() { 
     return 0;
 }
