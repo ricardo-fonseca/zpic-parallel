@@ -355,7 +355,7 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u,
 
     {
         float const bnorm = std::sqrt(ops::fma( b.x, b.x, ops::fma( b.y, b.y, b.z * b.z ) ));
-        float const s = -(( bnorm > 0 ) ? std::sin( bnorm / 2 ) / bnorm : 1 );
+        float const s = -(( bnorm > 0 ) ? std::sin( bnorm / 2 ) / bnorm : 0.5f );
 
         float const ra = std::cos( bnorm / 2 );
         float const rb = b.x * s;
@@ -372,7 +372,7 @@ inline float3 dudt_boris_euler( const float alpha, float3 e, float3 b, float3 u,
 
         float const r31 = 2*ops::fma(rb,rd,ra*rc);
         float const r32 = 2*ops::fma(rc,rd,-ra*rb);
-        float const r33 =   ops::fma(ra,ra,rd*rd)-ops::fma(rb,rb,-rc*rc);
+        float const r33 =   ops::fma(ra,ra,rd*rd)-ops::fma(rb,rb,rc*rc);
 
         u.x = ops::fma( r11, ut.x, ops::fma( r21, ut.y , r31 * ut.z ));
         u.y = ops::fma( r12, ut.x, ops::fma( r22, ut.y , r32 * ut.z ));
@@ -436,7 +436,9 @@ inline void dep_current_seg_0(
     const auto Δx  = t1.x - t0.x;
     const auto Δy  = t1.y - t0.y;
 
-    const auto jθ = q * ( ops::fma( - Δx , yif , Δy * xif ) ) / std::sqrt( ops::fma( xif, xif, yif*yif) );
+    // Azimuthal displacement (r Δθ, cell units) times charge. The 1/3 factor
+    // is the normalization of the Jθ weights below
+    const auto jθ = q * ( ops::fma( - Δx , yif , Δy * xif ) ) / ( 3 * std::sqrt( ops::fma( xif, xif, yif*yif) ) );
 
     int i = ix.x;
     int j = ix.y;
@@ -448,10 +450,13 @@ inline void dep_current_seg_0(
     J[ stride * j     + i     ].r += wl2 * wp20;
     J[ stride * j     + (i+1) ].r += wl2 * wp21;
 
-    J[ stride * j     + i     ].th += jθ * ( S0z0 * S0r0 + S1z0 * S1r0 + (S0z0 * S1r0 - S1z0 * S0r0)/2.0f );
-    J[ stride * j     + (i+1) ].th += jθ * ( S0z1 * S0r0 + S1z1 * S1r0 + (S0z1 * S1r0 - S1z1 * S0r0)/2.0f );
-    J[ stride * (j+1) + i     ].th += jθ * ( S0z0 * S0r1 + S1z0 * S1r1 + (S0z0 * S1r1 - S1z0 * S0r1)/2.0f );
-    J[ stride * (j+1) + (i+1) ].th += jθ * ( S0z1 * S0r1 + S1z1 * S1r1 + (S0z1 * S1r1 - S1z1 * S0r1)/2.0f );
+    // Jθ weights are the time average of Sz(t) Sr(t) along the segment:
+    //   (S0z S0r + S1z S1r)/3 + (S0z S1r + S1z S0r)/6
+    // The factor 1/3 is included in jθ
+    J[ stride * j     + i     ].th += jθ * ( S0z0 * S0r0 + S1z0 * S1r0 + (S0z0 * S1r0 + S1z0 * S0r0)/2.0f );
+    J[ stride * j     + (i+1) ].th += jθ * ( S0z1 * S0r0 + S1z1 * S1r0 + (S0z1 * S1r0 + S1z1 * S0r0)/2.0f );
+    J[ stride * (j+1) + i     ].th += jθ * ( S0z0 * S0r1 + S1z0 * S1r1 + (S0z0 * S1r1 + S1z0 * S0r1)/2.0f );
+    J[ stride * (j+1) + (i+1) ].th += jθ * ( S0z1 * S0r1 + S1z1 * S1r1 + (S0z1 * S1r1 + S1z1 * S0r1)/2.0f );
 }
 
 /**
