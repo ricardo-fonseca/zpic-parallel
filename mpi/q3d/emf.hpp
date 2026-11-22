@@ -140,7 +140,7 @@ class emf {
             mpi::fatal( "With a moving window both x boundaries must be emf::bc::none." );
         }
 
-        // Tile size / guard cells required by the axis and wall boundary code (see emf.cu)
+        // Tile size / guard cells required by the axis and wall boundary code (see emf.cpp)
         const auto tile_dims = E -> get_tile_dims();
         const auto gc        = E -> mode0().gc;
 

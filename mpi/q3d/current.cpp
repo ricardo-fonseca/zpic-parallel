@@ -207,7 +207,7 @@ struct tile_edges {
 /**
  * @brief Apply the wall / axis boundary conditions to one tile
  *
- * Two stages, separated by a block synchronization:
+ * Two stages, run in order:
  *
  *  1. z walls, on every extended row of the tile
  *  2. upper r wall and axis, on every extended column of the tile
@@ -215,14 +215,12 @@ struct tile_edges {
  * All operations are linear and act identically on every row / column, so
  * running the z stage first and then the r stage over the full extended
  * tile gives the correct corner values. Each tile's extended region
- * (including guard cells) is private to the tile, so different blocks never
- * touch the same memory.
+ * (including guard cells) is private to the tile, so different tiles can
+ * be processed concurrently.
  *
  * @note Within a stage, the lower and upper operations on a line are done
- *       by the same thread, so they never race even when a single tile
- *       holds both boundaries.
- *
- * @warning Must be called by all threads in the block
+ *       in the same loop iteration, so a single tile may hold both
+ *       boundaries.
  *
  * @param tile      Pointer to the start of the tile buffer (extended region)
  * @param view      Grid view
@@ -271,7 +269,7 @@ void tile_bc( cyl3<T> * const tile, const grid::tiled_cyl3_view<T> & view,
  * @brief Fold the current deposited beyond walls / axis and normalize for
  *        ring particles, mode m
  *
- * One block per tile:
+ * For each tile:
  *
  *  1. Tiles on a physical boundary fold the raw deposit beyond the wall /
  *     axis back into the domain (current_bc::tile_bc() with fold = true).
@@ -290,9 +288,8 @@ void tile_bc( cyl3<T> * const tile, const grid::tiled_cyl3_view<T> & view,
  *
  * with Jr on the axis set to 0.
  *
- * @note Launch with grid( local_ntiles.x, local_ntiles.y )
- *
- * @tparam T            float (m = 0) or util::complex64 (m > 0)
+ * @param tile_idx      Tile index
+ * @tparam T            float (m = 0) or std::complex<float> (m > 0)
  * @param J_grid        View of the mode m current grid
  * @param local_bc      Local rank boundary conditions
  * @param m             Mode number
@@ -355,8 +352,7 @@ void current_fold_norm(
  * Idempotent; used after copy_to_gc() on the normalized current and after
  * every filter pass. Tiles not on a physical boundary exit immediately.
  *
- * @note Launch with grid( local_ntiles.x, local_ntiles.y )
- *
+ * @param tile_idx      Tile index
  * @param J_grid        View of the mode m current grid
  * @param local_bc      Local rank boundary conditions
  * @param m             Mode number
@@ -370,7 +366,6 @@ void current_images(
 
     const current_bc::tile_edges edges( local_bc, tile_idx.x, tile_idx.y, J_grid.local_ntiles );
 
-    // Uniform across the block, so the early exit is safe
     if ( ! edges.z_walls() && ! edges.r_edges() ) return;
 
     current_bc::tile_bc( J_grid.tile_buffer( tile_idx ), J_grid, edges, m, false );

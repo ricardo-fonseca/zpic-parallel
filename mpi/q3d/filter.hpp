@@ -11,7 +11,7 @@
  * All filters are a sequence of 3-point kernel passes, applied with the
  * grid's kernel3_x() (z), kernel3_y() (r) and kernel3_xy() (z and r)
  * routines. Filtering along both z and r uses kernel3_xy(), a separable 3x3
- * kernel [a,b,c] ⊗ [a,b,c] applied with a single kernel launch and guard
+ * kernel [a,b,c] ⊗ [a,b,c] applied in a single grid sweep and guard
  * cell update per pass.
  *
  * A filter is a plain value (copyable, no virtual functions), so the same

@@ -5,7 +5,7 @@
 
 /**
  * @note The kernel:: functions process a single tile, mirroring the CUDA
- *       kernels (one thread block per tile) in cuda-mpi/em2ds/density.cu. The
+ *       kernels (one thread block per tile) in cuda-mpi/q3d/density.cu. The
  *       host methods loop over all local tiles using OpenMP.
  * 
  *       On the CPU each tile is processed serially, so particles are simply
@@ -203,7 +203,7 @@ void inject_uniform(
     
     if ( ppc.z > 1 ) {
         const float Δt = ( 2 * M_PI ) / ppc.z;
-        for( int i = 1; i < ppc.z; i ++) {
+        for( unsigned i = 1; i < ppc.z; i ++) {
             pos_th[i] = { std::cos( i * Δt ), std::sin( i * Δt ) };
         }
     }
@@ -221,9 +221,9 @@ void inject_uniform(
         r.vol -= r.row;
     }
 
-    // Particles are processed in flat loops, so that all threads are kept busy
-    // even when the injection range is small (e.g. a single cell column when
-    // a moving window advances). The flat index is n = ppc_idx * ncells + cell_idx,
+    // Particles are processed in flat loops (same as the CUDA version, where
+    // this keeps all threads busy even when the injection range is small).
+    // The flat index is n = ppc_idx * ncells + cell_idx,
     // i.e., the particle-in-cell index is the slowest, so that contiguous
     // particles are in different cells (same ordering as the original nested
     // loop version), with ppc_idx = ( ith * nr + ir ) * ppc.x + iz
@@ -447,9 +447,9 @@ struct sphere_mask {
  * @brief Kernel for injecting particles using a mask profile
  * 
  * @details All candidate particles in the tile (cells in range x particles per
- *          cell) are processed in a single flat loop, so that all threads are
- *          kept busy even when the injection range is small (e.g. a single
- *          cell column when a moving window advances).
+ *          cell) are processed in a single flat loop (in the CUDA version this
+ *          keeps all threads busy even when the injection range is small,
+ *          e.g. a single cell column when a moving window advances).
  * 
  *          The flat candidate index is `n = ppc_idx * vol + cell_idx`, with
  *          `ppc_idx = ( ith * ppc.y + ir ) * ppc.x + iz`, i.e. the
@@ -458,16 +458,12 @@ struct sphere_mask {
  * 
  *          Particle positions in the buffer are deterministic: each injected
  *          particle is stored at the position given by the number of injected
- *          candidates with a lower flat index. This is computed using a
- *          ballot-based block scan: each warp counts its injected particles
- *          with a ballot, warp totals are exchanged through shared memory,
- *          and each warp combines them with 2 warp reductions. Warp totals
- *          are double-buffered, so only 1 block sync per iteration is required.
- * 
- * @note Requires ppc.z * sizeof(float2) bytes of dynamic shared memory
- * @note Requires a 1D block with a whole number of warps.
+ *          candidates with a lower flat index. Here this is simply the
+ *          generation order; the CUDA version obtains the same order with a
+ *          ballot-based block scan.
  * 
  * @tparam mask_t       Mask type
+ * @param tile_idx      Tile index
  * @param mask          Injection mask
  * @param range         Cell range (local) to inject particles in
  * @param ppc           Number of particles per cell
@@ -507,7 +503,7 @@ void inject_mask(
 
     if ( ppc.z > 1 ) {
         const float Δt = ( 2 * M_PI ) / ppc.z;
-        for( int i = 1; i < ppc.z; i ++ ) {
+        for( unsigned i = 1; i < ppc.z; i ++ ) {
             pos_th[i] = { std::cos( i * Δt ), std::sin( i * Δt ) };
         }
     }

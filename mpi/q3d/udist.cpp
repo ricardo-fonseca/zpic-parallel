@@ -7,7 +7,7 @@
 
 /**
  * @note The kernel:: functions process a single tile, mirroring the CUDA
- *       kernels (one thread block per tile) in cuda-mpi/em2ds/udist.cu. They
+ *       kernels (one thread block per tile) in cuda-mpi/q3d/udist.cu. They
  *       have internal linkage (static) to avoid clashes with other kernel::
  *       functions in other translation units.
  */

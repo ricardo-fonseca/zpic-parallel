@@ -197,12 +197,12 @@ void lon_z_sum (
 
     const int ystride = E_grid.tile_ystride();
 
-    for( int tile_idx_x = 0; tile_idx_x < E_grid.local_ntiles.x; tile_idx_x++ ) {
+    for( int tile_idx_x = 0; tile_idx_x < static_cast<int>( E_grid.local_ntiles.x ); tile_idx_x++ ) {
 
         auto * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
         auto * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
 
-        for( int ix = 0; ix < E_grid.tile_dims.x; ix ++ ) {
+        for( int ix = 0; ix < static_cast<int>( E_grid.tile_dims.x ); ix ++ ) {
             tile_E[ ix + iy * ystride ].z += divEz;
             tile_B[ ix + iy * ystride ].z += divBz;
         }
@@ -298,7 +298,7 @@ void axial_m1(
 {
     if ( E.get_local_tile_start().y == 0 ) {
         #pragma omp parallel for
-        for( int tx = 0; tx < E.get_local_ntiles().x; tx++ ) {
+        for( int tx = 0; tx < static_cast<int>( E.get_local_ntiles().x ); tx++ ) {
             laser::kernel::axial_m1( tx, E.view(), B.view() );
         }
     }
@@ -675,7 +675,7 @@ int laser::gaussian::launch( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<co
     // Correct axial cell values, see field solver
     axial_m1( E, B );
 
-    // lon_x() reads neighboring cells across tile / node boundaries, so the
+    // lon_z() reads neighboring cells across tile / node boundaries, so the
     // guard cells must be valid first
     E.copy_to_gc();
     B.copy_to_gc();
@@ -722,7 +722,6 @@ int laser::gaussian::lon_z( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<com
         MPI_Comm_split( part.get_comm(), color, key, &newcomm );
 
         // Add contribution from all nodes to the right
-        // Note: device buffers, requires CUDA-aware MPI
         MPI_Exscan( sendbuf, recvbuf, 2 * local_dims.y, mpi::data_type<complex_double_t>(), MPI_SUM, newcomm );
 
         // Add result to local grid
@@ -745,7 +744,7 @@ int laser::gaussian::lon_z( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<com
     // Longitudinal components on the axial cell
     if ( E.get_local_tile_start().y == 0 ) {
         #pragma omp parallel for
-        for( int tx = 0; tx < E.get_local_ntiles().x; tx++ ) {
+        for( int tx = 0; tx < static_cast<int>( E.get_local_ntiles().x ); tx++ ) {
             laser::kernel::lon_z_axis( tx, E.view(), B.view() );
         }
     }

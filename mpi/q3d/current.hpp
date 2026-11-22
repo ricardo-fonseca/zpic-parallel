@@ -139,7 +139,7 @@ class current {
             mpi::fatal( "With a moving window both x boundaries must be current::bc::none." );
         }
 
-        // Tile size / guard cells required by the boundary kernels (see current.cu)
+        // Tile size / guard cells required by the boundary kernels (see current.cpp)
         const auto tile_dims = J -> get_tile_dims();
         const auto gc        = J -> mode0().gc;
 

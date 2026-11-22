@@ -11,7 +11,7 @@ using complex_double_t = std::complex<double>;
 /**
  * @brief Longitudinal laser envelope (resolved parameters)
  * 
- * @note Plain-data type, so it can be passed directly to CUDA kernels
+ * @note Plain-data type, passed by value to the kernel functions
  */
 struct envelope {
     /// @brief Front edge of the laser pulse

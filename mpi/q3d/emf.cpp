@@ -140,7 +140,7 @@ void yee0_e(
  *       components never sit on the wall node. Walls do not involve θ, so the
  *       same rule applies to every mode.
  * 
- * @param E             Pointer to 0,0 coordinate of E field (shared memory)
+ * @param E             Pointer to 0,0 coordinate of E field (local tile copy)
  * @param tile_idx      Tile index
  * @param local_ntiles  Local number of tiles
  * @param tile_dims     Tile dimensions
@@ -196,7 +196,7 @@ void pec_walls(
  * @note PEC walls require no in-step B correction (see pec_walls()). Walls do
  *       not involve θ, so the same rule applies to every mode.
  * 
- * @param B             Pointer to 0,0 coordinate of B field (shared memory)
+ * @param B             Pointer to 0,0 coordinate of B field (local tile copy)
  * @param tile_idx      Tile index
  * @param local_ntiles  Local number of tiles
  * @param tile_dims     Tile dimensions
@@ -245,7 +245,7 @@ void yee0(
     const int tile_id   = tile_idx.y * E_grid.local_ntiles.x + tile_idx.x;
     const uint2 tile_dims = E_grid.tile_dims;
 
-    // Copy E and B into shared memory
+    // Copy E and B into local (stack) tile buffers
     cyl3<float> E_local[ E_grid.tile_vol ];
     cyl3<float> B_local[ E_grid.tile_vol ];
 
@@ -454,7 +454,7 @@ void yeem(
     const int tile_id   = tile_idx.y * E_grid.local_ntiles.x + tile_idx.x;
     const uint2 tile_dims = E_grid.tile_dims;
 
-    // Copy E and B into shared memory
+    // Copy E and B into local (stack) tile buffers
     cyl3<complex_t> E_local[ E_grid.tile_vol ];
     cyl3<complex_t> B_local[ B_grid.tile_vol ];
 
@@ -574,8 +574,8 @@ namespace kernel {
 /**
  * @brief Physical boundary conditions for the z direction
  * 
- * @note Launch with grid( 2, local_ntiles.y ): blockIdx.x selects the
- *       boundary (0 - lower, 1 - upper), blockIdx.y the tile row
+ * @note Called for every ( boundary, tile row ) pair: bnd_x selects the
+ *       boundary (0 - lower, 1 - upper), tile_idx_y the tile row
  * 
  * @note All extended rows are processed; must run before emf_bcr() for
  *       correct corner values. Walls do not involve θ, so the same images
@@ -709,7 +709,7 @@ void emf_bcz(
 /**
  * @brief Physical boundary conditions for the r direction
  * 
- * @note Launch with grid( local_ntiles.x ): blockIdx.x selects the tile
+ * @note Called for every tile column: tile_idx_x selects the tile
  *       column. Only the upper r boundary is processed (the lower r boundary
  *       is the axis, handled inside the Yee kernels).
  * 
@@ -919,7 +919,7 @@ void yee0J(
     const int tile_id   = tile_idx.y * E_grid.local_ntiles.x + tile_idx.x;
     const uint2 tile_dims = E_grid.tile_dims;
 
-    // Copy E and B into shared memory
+    // Copy E and B into local (stack) tile buffers
     cyl_float3 E_local[ E_grid.tile_vol ];
     cyl_float3 B_local[ E_grid.tile_vol ];
 
@@ -1038,7 +1038,7 @@ void yeemJ(
     const int tile_id   = tile_idx.y * E_grid.local_ntiles.x + tile_idx.x;
     const uint2 tile_dims = E_grid.tile_dims;
 
-    // Copy E and B into shared memory
+    // Copy E and B into local (stack) tile buffers
     cyl_cfloat3 E_local[ E_grid.tile_vol ];
     cyl_cfloat3 B_local[ B_grid.tile_vol ];
 
@@ -1337,8 +1337,8 @@ void emf::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m ) co
         #pragma omp parallel for collapse(2)\
             reduction(+:ez,er,eth) \
             reduction(+:bz,br,bth)
-        for( int ty = 0; ty < ntiles.y; ty ++ ) {
-            for( int tx = 0; tx < ntiles.x; tx ++ ) {
+        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
                 cyl_double3 tile_ene_E, tile_ene_B;
                 kernel::get_energy ( make_uint2( tx, ty ), 
                     E0.view(), B0.view(), dx.x, dx.y, tile_ene_E, tile_ene_B
@@ -1354,8 +1354,8 @@ void emf::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m ) co
         #pragma omp parallel for collapse(2)\
             reduction(+:ez,er,eth) \
             reduction(+:bz,br,bth)
-        for( int ty = 0; ty < ntiles.y; ty ++ ) {
-            for( int tx = 0; tx < ntiles.x; tx ++ ) {
+        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+            for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
                 cyl_double3 tile_ene_E, tile_ene_B;
                 kernel::get_energy ( make_uint2( tx, ty ), 
                     Em.view(), Bm.view(), dx.x, dx.y, tile_ene_E, tile_ene_B
