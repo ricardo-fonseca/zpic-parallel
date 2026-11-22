@@ -979,12 +979,18 @@ class tiled {
         // Disable messages if only 1 node along  x direction
         if ( part.dims.x == 1 ) lnode = unode = -1;
 
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.x.upper > 0;
+        const bool send_upper = unode >= 0 && gc.x.lower > 0;
+        const bool recv_lower = lnode >= 0 && gc.x.lower > 0;
+        const bool recv_upper = unode >= 0 && gc.x.upper > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Send message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
                 T * __restrict__ local = tile_buffer( tx, ty );
@@ -1002,7 +1008,7 @@ class tiled {
         }
 
         // Send message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
             unsigned int tx = local_ntiles.x - 1;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
                 T * __restrict__ local = tile_buffer( tx, ty );
@@ -1023,7 +1029,7 @@ class tiled {
         local_copy_to_gc_x();
 
         // Receive message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( recv_lower ) {
             msg_recv.lower-> wait();
 
             unsigned int tx = 0;
@@ -1040,7 +1046,7 @@ class tiled {
         }
 
         // Receive message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( recv_upper ) {
             msg_recv.upper-> wait();
 
             unsigned int tx = local_ntiles.x-1;
@@ -1057,8 +1063,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     /**
@@ -1076,12 +1082,18 @@ class tiled {
         // Disable messages if only 1 node along y direction
         if ( part.dims.y == 1 ) lnode = unode = -1;
         
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.y.upper > 0;
+        const bool send_upper = unode >= 0 && gc.y.lower > 0;
+        const bool recv_lower = lnode >= 0 && gc.y.lower > 0;
+        const bool recv_upper = unode >= 0 && gc.y.upper > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Post message sends
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             unsigned int ty = 0;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
                 T * __restrict__ local = tile_buffer( tx, ty );
@@ -1098,7 +1110,7 @@ class tiled {
             msg_send.lower->isend( msg_size, lnode, dest::lower );
         }
 
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
             unsigned int ty = local_ntiles.y-1;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
                 T * __restrict__ local = tile_buffer( tx, ty );
@@ -1119,7 +1131,7 @@ class tiled {
         local_copy_to_gc_y();
 
         // Wait for receive messages to complete and copy data
-        if ( lnode >= 0 ) {
+        if ( recv_lower ) {
             msg_recv.lower-> wait();
 
             unsigned int ty = 0;
@@ -1135,7 +1147,7 @@ class tiled {
             }
         }
 
-        if ( unode >= 0 ) {
+        if ( recv_upper ) {
             msg_recv.upper-> wait();
 
             unsigned int ty = local_ntiles.y - 1;
@@ -1152,8 +1164,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     /**
@@ -1296,12 +1308,18 @@ class tiled {
         // Disable messages if only 1 node along  x direction
         if ( part.dims.x == 1 ) lnode = unode = -1;
 
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.x.lower > 0;
+        const bool send_upper = unode >= 0 && gc.x.upper > 0;
+        const bool recv_lower = lnode >= 0 && gc.x.upper > 0;
+        const bool recv_upper = unode >= 0 && gc.x.lower > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Send message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
 
             unsigned int tx = 0;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
@@ -1321,7 +1339,7 @@ class tiled {
         }
 
         // Send message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
 
             unsigned int tx = local_ntiles.x - 1;
             for( unsigned ty = 0; ty < local_ntiles.y; ty++ ) {
@@ -1343,7 +1361,7 @@ class tiled {
         local_add_from_gc_x();
 
         // Receive message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( recv_lower ) {
             msg_recv.lower-> wait();
 
             unsigned int tx = 0;
@@ -1360,7 +1378,7 @@ class tiled {
         }
 
         // Receive message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( recv_upper ) {
             msg_recv.upper-> wait();
 
             unsigned int tx = local_ntiles.x - 1;
@@ -1377,8 +1395,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     /**
@@ -1395,12 +1413,18 @@ class tiled {
         // Disable messages if only 1 node along y direction
         if ( part.dims.y == 1 ) lnode = unode = -1;
 
+        // Active messages
+        const bool send_lower = lnode >= 0 && gc.y.lower > 0;
+        const bool send_upper = unode >= 0 && gc.y.upper > 0;
+        const bool recv_lower = lnode >= 0 && gc.y.upper > 0;
+        const bool recv_upper = unode >= 0 && gc.y.lower > 0;
+
         // Post message receives
-        if ( lnode >= 0 ) msg_recv.lower->irecv( lnode, source::lower );
-        if ( unode >= 0 ) msg_recv.upper->irecv( unode, source::upper );
+        if ( recv_lower ) msg_recv.lower->irecv( lnode, source::lower );
+        if ( recv_upper ) msg_recv.upper->irecv( unode, source::upper );
 
         // Send message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( send_lower ) {
             unsigned int ty = 0;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
                 T * __restrict__ local = tile_buffer( tx, ty );
@@ -1418,7 +1442,7 @@ class tiled {
         }
 
         // Send message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( send_upper ) {
 
             unsigned int ty = local_ntiles.y-1;
             for( unsigned tx = 0; tx < local_ntiles.x; tx++ ) {
@@ -1440,7 +1464,7 @@ class tiled {
         local_add_from_gc_y();
 
         // Receive message - lower neighbor
-        if ( lnode >= 0 ) {
+        if ( recv_lower ) {
             msg_recv.lower-> wait();
 
             unsigned int ty = 0;
@@ -1457,7 +1481,7 @@ class tiled {
         }
 
         // Receive message - upper neighbor
-        if ( unode >= 0 ) {
+        if ( recv_upper ) {
             msg_recv.upper-> wait();
 
             unsigned int ty = local_ntiles.y - 1;
@@ -1474,8 +1498,8 @@ class tiled {
         }
 
         // Wait for send messages to complete
-        if ( lnode >= 0 ) msg_send.lower->wait( );
-        if ( unode >= 0 ) msg_send.upper->wait( );
+        if ( send_lower ) msg_send.lower->wait( );
+        if ( send_upper ) msg_send.upper->wait( );
     }
 
     public:
@@ -1518,7 +1542,7 @@ class tiled {
                         buffer[ ix + iy * ystride ] = buffer[ (ix + shift) + iy * ystride ]; 
                     }
                     for( int ix = tile_ext_dims.x - shift; ix < static_cast<int>(tile_ext_dims.x); ix++ ) {
-                        buffer[ ix + iy * ystride ] = T{0};
+                        buffer[ ix + iy * ystride ] = T{};
                     }
                 }
             }

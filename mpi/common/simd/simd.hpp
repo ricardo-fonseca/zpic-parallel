@@ -108,6 +108,16 @@ inline int init() {return 0;}
 
 #endif
 
+inline void info() {
+#ifdef SIMD
+    std::cout << "SIMD support enabled\n";
+    std::cout << "  vector unit : " << simd::name << '\n';
+    std::cout << "  vector width: " << simd::width <<'\n';
+#else
+    std::cout << "SIMD support not enabled\n";
+#endif
+}
+
 /**
  * Memory alignment routines
  */

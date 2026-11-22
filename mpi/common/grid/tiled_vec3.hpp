@@ -74,6 +74,9 @@ class tiled_vec3 : public grid::tiled< vec3<S> >
             stride = make_uint2( 1, local_dims.x );
         }
 
+        // Check that y stride is valid
+        assert(( stride.y > 0 ));
+
         if ( stride.x == 1 ) {
             // Optimized versions for x stride == 1
             switch( fc ) {
