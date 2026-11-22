@@ -56,7 +56,8 @@ template<> struct comp< coord::cyl::r > {
  * @param fold  Fold guard cell current and correct wall node (once per step)
  */
 template< coord::cyl dir, typename T >
-__device__ void lower_conducting( cyl3<T> * const p, int const s, current::bc::type const type, bool const fold ) {
+__device__ 
+void lower_conducting( cyl3<T> * const p, int const s, current::bc::type const type, bool const fold ) {
     using C = comp<dir>;
     const bool pec = ( type == current::bc::pec );
 
@@ -103,7 +104,8 @@ __device__ void lower_conducting( cyl3<T> * const p, int const s, current::bc::t
  * @param fold  Fold guard cell current and correct wall node (once per step)
  */
 template< coord::cyl dir, typename T >
-__device__ void upper_conducting( cyl3<T> * const p, int const s, current::bc::type const type, bool const fold ) {
+__device__ 
+void upper_conducting( cyl3<T> * const p, int const s, current::bc::type const type, bool const fold ) {
     using C = comp<dir>;
     const bool pec = ( type == current::bc::pec );
 
@@ -154,7 +156,8 @@ __device__ void upper_conducting( cyl3<T> * const p, int const s, current::bc::t
  *              domain, then set the images. `false`: only set the images.
  */
 template< typename T >
-__device__ void axial( cyl3<T> * const p, int const s, int const m, bool const fold ) {
+__device__ 
+void axial( cyl3<T> * const p, int const s, int const m, bool const fold ) {
 
     const float sz  = ( m & 1 ) ? -1.0f : +1.0f;    // z parity
     const float srt = -sz;                          // r, θ parity

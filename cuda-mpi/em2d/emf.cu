@@ -813,7 +813,7 @@ void get_energy(
 
 
 /**
- * @brief Get total field energy per field component
+ * @brief Get local field energy per field component
  * 
  * @warning This function will always recalculate the energy each time it is
  *          called.
@@ -837,9 +837,6 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
     double h_energy[6];
     gpu::device::memcpy_tohost( h_energy, d_energy, 6 );
 
-    // Sum over all parallel nodes
-    E -> get_part().allreduce( h_energy, 6, MPI_SUM );
-
     // Normalize
     ene_E.x = 0.5 * dx.x * dx.y * h_energy[0];
     ene_E.y = 0.5 * dx.x * dx.y * h_energy[1];
@@ -848,5 +845,4 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
     ene_B.x = 0.5 * dx.x * dx.y * h_energy[3];
     ene_B.y = 0.5 * dx.x * dx.y * h_energy[4];
     ene_B.z = 0.5 * dx.x * dx.y * h_energy[5];
-
 }

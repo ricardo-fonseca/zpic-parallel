@@ -942,7 +942,7 @@ inline void split2d_cyl(
     }
 }
 
-__global__
+
 /**
  * @brief Kernel for moving particles without depositing current
  * 
@@ -951,6 +951,7 @@ __global__
  * @param shift         Additional cell shift for particles
  * @param d_nmove       (out) Number of particles pushed (for performance metrics)
  */
+__global__
 void move(
     cyl_part::particles_view const part,
     float2 const dt_dx, int2 const shift,
@@ -1236,8 +1237,6 @@ void move_deposit_1(
     float2 const dt_dx, const int2 shift,
     unsigned long long * const __restrict__ d_nmove
 ) {
-    using complex_t = complex_t;
-    
     const uint2 tile_idx = { blockIdx.x, blockIdx.y };
     const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
     const int tile_np   = part.tile_np[ tile_id ];
@@ -2042,13 +2041,13 @@ void species_bcz(
     }
 }
 
-__global__
 /**
  * @brief Physical boundary conditions for the r direction 
  * 
  * @param part      Particle data
  * @param bc        Boundary condition
  */
+__global__
 void species_bcr(
     cyl_part::particles_view const part,
     species::bc_type const local_bc ) 
@@ -2129,13 +2128,10 @@ void dep_charge_0(
     auto * charge_local = gpu::block::shared_mem<float>();
 
     // Zero shared memory and sync.
-    for( auto i = gpu::block::thread_rank(); i < charge_m0.tile_vol; i += gpu::block::num_threads() ) {
-        charge_local[i] = 0;
-    }
+    gpu::block::zero( charge_local, charge_m0.tile_vol );
+    gpu::block::sync();
 
     float *charge = &charge_local[ charge_m0.inner_offset ];
-
-    gpu::block::sync();
 
     const int part_off = part.tile_offset[ tile_id ];
     auto const * __restrict__ const ix = &part.ix[ part_off ];
@@ -2211,13 +2207,10 @@ void dep_charge(
     auto * charge_local_m = gpu::block::shared_mem<complex_t>();
 
     // Zero shared memory and sync.
-    for( auto i = gpu::block::thread_rank(); i < charge_m.tile_vol; i += gpu::block::num_threads() ) {
-        charge_local_m[i] = 0;
-    }
+    gpu::block::zero( charge_local_m, charge_m.tile_vol );
+    gpu::block::sync();
 
     auto *charge = &charge_local_m[ charge_m.inner_offset ];
-
-    gpu::block::sync();
 
     const int part_off = part.tile_offset[ tile_id ];
     auto const * __restrict__ const ix = &part.ix[ part_off ];
@@ -2341,7 +2334,6 @@ void species::process_bc() {
  */
 void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
 {
-
     ///@brief timestep to cell size ratio
     const float2 dt_dx = make_float2(
         dt / dx.x,
@@ -2654,7 +2646,6 @@ void species::save_charge( const unsigned m ) const {
     }
 }
 
-
 namespace kernel {
 
 /**
@@ -2755,7 +2746,6 @@ void species::gather( cyl_part::quantity quant, float * const __restrict__ d_dat
         break;
     }
 }
-
 
 /**
  * @brief save particle data to file

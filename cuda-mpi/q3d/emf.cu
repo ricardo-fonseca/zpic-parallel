@@ -457,7 +457,8 @@ __device__ void yeem_e(
     }
 }
 
-__global__ __launch_bounds__(opt_yee_block) void yeem( 
+__global__ __launch_bounds__(opt_yee_block) 
+void yeem( 
     const int m,
     grid::tiled_cyl3_view<complex_t> E_grid,
     grid::tiled_cyl3_view<complex_t> B_grid,
@@ -926,7 +927,8 @@ __device__ void yee0J_e(
     }
 }
 
-__global__ __launch_bounds__(opt_yee_block) void yee0J( 
+__global__ __launch_bounds__(opt_yee_block) 
+void yee0J( 
     grid::tiled_cyl3_view<float> E_grid,
     grid::tiled_cyl3_view<float> B_grid,
     grid::tiled_view<const cyl3<float>> J_grid,
@@ -1053,7 +1055,8 @@ __device__ void yeemJ_e(
     }
 }
 
-__global__ __launch_bounds__(opt_yee_block) void yeemJ( 
+__global__ __launch_bounds__(opt_yee_block) 
+void yeemJ( 
     const int m,
     grid::tiled_cyl3_view<complex_t> E_grid,
     grid::tiled_cyl3_view<complex_t> B_grid,

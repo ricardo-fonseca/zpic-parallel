@@ -339,10 +339,9 @@ class emf {
     void save( const emf::quantity quant, const fcomp::cart fc ) const;
     
     /**
-     * @brief Get EM field energy
+     * @brief Get local EM field energy
      * 
      * @note The energy is recalculated each time this routine is called
-     * @warning Collective: values are summed over all parallel nodes
      * 
      * @param ene_E     Electric field energy (per component)
      * @param ene_B     Magnetic field energy (per component)

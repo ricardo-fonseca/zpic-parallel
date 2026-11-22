@@ -799,7 +799,7 @@ void density::slab::inject( cyl_part::particles & part, float const norm,
 }
 
 /**
- * Returns number of particles per tile that a slab profile would inject
+ * @brief Returns number of particles per tile that a slab profile would inject
  * 
  * @param part      Particle data object
  * @param ppc       Number of particles per cell

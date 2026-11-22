@@ -520,7 +520,7 @@ void plane_wave(
     auto * const __restrict__ E = E_fld.tile_data( tile_idx );
     auto * const __restrict__ B = B_fld.tile_data( tile_idx );
 
-    const int i0 = ( local_tile_start.x + tile_idx.x ) * E_fld.tile_dims.x;
+    const int i0 = ( E_fld.local_tile_start.x + tile_idx.x ) * E_fld.tile_dims.x;
     const int ystride = E_fld.tile_ystride();
 
     const auto nx = E_fld.tile_dims;
@@ -583,7 +583,7 @@ int laser::plane_wave::launch( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<
     dim3 grid( E.get_local_ntiles().x, E.get_local_ntiles().y );
 
     kernel::plane_wave <<< grid, block >>> (
-        p, E.view(), B.view(), E.get_local_tile_start(), dx
+        p, E.view(), B.view(), dx
     );
 
     // Correct axial cell values, see field solver
@@ -656,16 +656,17 @@ inline float gauss_phase( const gaussian_params & p, const float z, const float 
 __global__
 void gaussian( 
     gaussian_params const p, 
-    grid::tiled_cyl3_view<complex_t> E_fld, grid::tiled_cyl3_view<complex_t> B_fld, 
-    uint2 const local_tile_start, float2 const dx )
+    grid::tiled_cyl3_view<complex_t> E_fld,
+    grid::tiled_cyl3_view<complex_t> B_fld, 
+    float2 const dx )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
 
     auto * const __restrict__ E = E_fld.tile_data( tile_idx );
     auto * const __restrict__ B = B_fld.tile_data( tile_idx );
 
-    const int i0 = ( local_tile_start.x + tile_idx.x ) * E_fld.tile_dims.x;
-    const int j0 = ( local_tile_start.y + tile_idx.y ) * E_fld.tile_dims.y;
+    const int i0 = ( E_fld.local_tile_start.x + tile_idx.x ) * E_fld.tile_dims.x;
+    const int j0 = ( E_fld.local_tile_start.y + tile_idx.y ) * E_fld.tile_dims.y;
     const int jstride = E_fld.tile_ystride();
 
     const auto nx = E_fld.tile_dims;
@@ -728,7 +729,7 @@ int laser::gaussian::launch( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<co
     dim3 grid( E.get_local_ntiles().x, E.get_local_ntiles().y );
 
     kernel::gaussian <<< grid, block >>> (
-        p, E.view(), B.view(), E.get_local_tile_start(), dx
+        p, E.view(), B.view(), dx
     );
 
     // Correct axial cell values, see field solver

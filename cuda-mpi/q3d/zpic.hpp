@@ -155,9 +155,8 @@ class simulation {
     void set_moving_window() {
         emf.set_moving_window();
         current.set_moving_window();
-        for ( auto s : species ) {
-            s -> set_moving_window();
-        }
+        for ( auto sp : species )
+            sp->set_moving_window();
     }
 
     /**
@@ -174,13 +173,21 @@ class simulation {
      * @brief Gets a pointer to a specific species object
      * 
      * @param name                species name
-     * @return species const* 
+     * @return species* (nullptr if not found)
      */
     class species * get_species( const std::string & name ) {
-        unsigned id = 0;
-        for( id = 0; id < species.size(); id++ )
-            if ( (species[id])->name == name ) break;
-        return ( id < species.size() ) ? species[id] : nullptr;
+        auto it = std::find_if( species.begin(), species.end(),
+            [&name]( const auto & s ) { return s->name == name; } );
+        return ( it != species.end() ) ? *it : nullptr;
+    }
+
+    const class species * get_species( const std::string & name ) const {
+        auto it = std::find_if( species.begin(), species.end(),
+            [&name]( const auto & s ) { return s->name == name; } );
+        return ( it != species.end() ) ? *it : nullptr;
+    }
+
+    }
     }
 
     /**
