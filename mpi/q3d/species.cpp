@@ -512,8 +512,8 @@ inline void dep_current_seg(
     //const auto cr0 = (ir0 + j) + r0;
     //const auto cr1 = (ir0 + j) + r1;
 
-    const auto rcr0 = 1.0f / sqrt( fma( t0.x, t0.x, t0.y*t0.y ) );
-    const auto rcr1 = 1.0f / sqrt( fma( t1.x, t1.x, t1.y*t1.y ) );
+    const auto rcr0 = 1.0f / std::sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
+    const auto rcr1 = 1.0f / std::sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
 
     /// @brief Initial θ
     const auto th0 = make_float2( t0.x * rcr0, t0.y * rcr0 );
@@ -524,7 +524,7 @@ inline void dep_current_seg(
     const auto xif = t0.x + t1.x;
     const auto yif = t0.y + t1.y;
 
-    const auto rrm2 = 1.0f / sqrt( fma( xif, xif, yif*yif ) );
+    const auto rrm2 = 1.0f / std::sqrt( ops::fma( xif, xif, yif*yif ) );
     const auto thm = float2{ xif * rrm2, yif * rrm2 };
 
     // Complex coefficients for initial, mid and final angular positions.
@@ -574,6 +574,23 @@ inline void dep_current_seg(
 /**
  * @brief Split particle trajectory into segments fitting in a single cell
  * 
+ * The transverse motion is a straight line in (x,y), so r(ε) = |t0 + ε Δt| is
+ * not linear in ε. The split points are placed on the actual (curved) path:
+ * the r-split solves |t0 + ε Δt| = R for the cell edge R, and the radial
+ * position at a z-split is r(εz).
+ * 
+ * @note If the particle does not move radially (Δr == 0), the radial position
+ *       at a z-split is set to x0.y exactly. Otherwise roundoff in r(εz) gives
+ *       the two segments small, opposite radial displacements, depositing a
+ *       spurious Jr dipole on neighbouring z columns (charge is still
+ *       conserved, but the spurious currents drive spurious fields).
+ * 
+ * @note The curved path may dip outside the cell between the endpoints
+ *       without a crossing being detected (r(ε) is convex); the radial
+ *       position at a z-split can then lie slightly outside [-0.5, 0.5].
+ *       Charge conservation is not affected, since consecutive segments share
+ *       their end points.
+ * 
  * @param ix        Initial cell index (iz, ir)
  * @param x0        Initial position inside cell (z, r)
  * @param delta     Particle motion (Δz, Δr)
@@ -606,10 +623,10 @@ inline void split2d_cyl(
     int2 & cross
 ) {
     /// @brief final (z,r) position, indexed to original cell
-    float2 x1 = x0 + delta;
+    float2 x1 = make_float2( x0.x + delta.x, x0.y + delta.y );
 
     /// @brief final (x,y) transverse position
-    float2 t1 = t0 + tdelta;
+    float2 t1 = make_float2( t0.x + tdelta.x, t0.y + tdelta.y );
 
     // Get cell (iz,ir) motion
     deltai = make_int2(
@@ -630,7 +647,12 @@ inline void split2d_cyl(
     /// @brief r split fraction
     float εr;
 
-    // z-splitx
+
+#if 0
+    // Original code - keep for reference
+    #warning Using original split2d_cyl
+
+    // z-split
     float xz, yz, rz;
     if ( cross.x ) {
         εz = (zs - x0.x) / delta.x;
@@ -638,42 +660,78 @@ inline void split2d_cyl(
         // z-split positions
         xz = t0.x + εz * tdelta.x;
         yz = t0.y + εz * tdelta.y;
+
         rz = ( delta.y == 0 ) ? x0.y : std::sqrt( ops::fma( xz, xz, yz * yz ) ) - (ir0 + ix.y);
     }
 
     // r-split
     float xr, yr, zr;
     if ( cross.y ) {
-
-#if 0
-        // New splitter
-        // This has some roundoff issues
-        if ( x1.y == 0.5f ) { 
-            εr = 1;
-        } else {
-            auto a = ops::fma( tdelta.x, tdelta.x, tdelta.y * tdelta.y );
-            auto b = ops::fma( t0.x, tdelta.x, t0.y * tdelta.y );
-            auto c = ( x0.y - rs ) * ( 2 * (ir0 + ix.y) + x0.y + rs );
-
-            εr = - ( b + std::copysign( std::sqrt( ops::fma( b, b, - a*c )), b ) ) / a;
-            if ( εr < 0 || εr > 1 ) εr = c / (a * εr);
-        }
-
-        if ( εr < 0 || εr > 1) {
-            std::cerr << "(*error*) Invalid εr: "<< εr << '\n';
-            std::exit(1);
-        }
-
-#else
-        // Old splitter (OSIRIS)
         εr = (rs - x0.y) / delta.y;
-#endif
-
         // r-split positions
         xr = t0.x + εr * tdelta.x;
         yr = t0.y + εr * tdelta.y;
         zr = x0.x + εr * delta.x;
     }
+
+#else
+
+    /// @brief |Δt|², the transverse path satisfies |t0 + ε Δt|² = |t0|² + 2 b ε + a ε²
+    const float a = ops::fma( tdelta.x, tdelta.x, tdelta.y * tdelta.y );
+    /// @brief t0 · Δt
+    const float b = ops::fma( t0.x, tdelta.x, t0.y * tdelta.y );
+    /// @brief initial radial position (cell based, as in the move kernels)
+    const float r0 = ( ir0 + ix.y ) + x0.y;
+
+    // z-split
+    float xz, yz, rz;
+    if ( cross.x ) {
+        εz = (zs - x0.x) / delta.x;
+
+        // z-split positions
+        xz = ops::fma( εz, tdelta.x, t0.x );
+        yz = ops::fma( εz, tdelta.y, t0.y );
+
+        // Radial position at the z-split, relative to the initial cell. Uses
+        // r(ε) - r0 = ε ( 2 b + ε a ) / ( r(ε) + r0 ), which avoids the
+        // cancellation in sqrt( xz² + yz² ) - ( ir0 + ix.y ) at large radii.
+        // - delta.y == 0: no radial motion, keep rz = x0.y exactly so that no
+        //   (spurious) Jr is deposited
+        // - den == 0: particle exactly on axis and εz == 0, avoids 0/0
+        const float den = std::sqrt( ops::fma( xz, xz, yz * yz ) ) + r0;
+        rz = ( delta.y != 0 && den > 0 ) ? x0.y + εz * ops::fma( εz, a, 2 * b ) / den : x0.y;
+    }
+
+    // r-split
+    float xr, yr, zr;
+    if ( cross.y ) {
+        // Crossing of the curved path with the cell edge R = ir0 + ix.y + rs,
+        // i.e. the root of a ε² + 2 b ε + c = 0 with c = r0² - R², written as
+        // a product to avoid cancellation
+        const float c = ( x0.y - rs ) * ( 2 * (ir0 + ix.y) + x0.y + rs );
+
+        // Numerically stable roots q/a and c/q. Roundoff can make the
+        // discriminant slightly negative near tangency, so it is clamped to 0
+        const float q = - ( b + std::copysign( std::sqrt( std::fmax( ops::fma( b, b, - a * c ), 0.f ) ), b ) );
+        const float e1 = q / a;
+        const float e2 = c / q;
+
+        // First crossing: smallest root >= 0 (outward motion has one root of
+        // each sign, inward motion two positive roots)
+        const float lo = std::fmin( e1, e2 );
+        const float hi = std::fmax( e1, e2 );
+
+        // The crossing itself was decided from delta.y, so clamp to [0,1];
+        // fmaxf / fminf also map a NaN (q == 0) to a valid value
+        εr = std::fmin( std::fmax( ( lo >= 0 ) ? lo : hi, 0.f ), 1.f );
+
+        // r-split positions
+        xr = ops::fma( εr, tdelta.x, t0.x );
+        yr = ops::fma( εr, tdelta.y, t0.y );
+        zr = ops::fma( εr, delta.x, x0.x );
+    }
+
+#endif
 
     // Set 1st segment initial positions
     // This will be the same for any particle
@@ -711,8 +769,6 @@ inline void split2d_cyl(
     // crossing on 2 directions
     if ( cross.x && cross.y ) {
         if ( εz < εr ) {
-            // std::cout << "(*info*) z_cross 1st " << '\n';
-
             // z-cross first
             v0_x1 = make_float2( zs, rz );
             v0_t1 = make_float2( xz, yz );
@@ -726,8 +782,6 @@ inline void split2d_cyl(
             v2_x0 = make_float2( zr - deltai.x, -rs );
             v2_t0 = make_float2( xr, yr );
         } else {
-            // std::cout << "(*info*) r_cross 1st " << '\n';
-
             // r-cross first
             v0_x1 = make_float2( zr, rs );
             v0_t1 = make_float2( xr, yr );
