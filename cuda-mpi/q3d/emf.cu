@@ -1311,13 +1311,14 @@ void get_energy(
     tile_ene_B.z  = gpu::warp::reduce_add( tile_ene_B.z );
 
     if ( gpu::warp::thread_rank() == 0 ) {
-       gpu::device::atomic_fetch_add( &(d_energy[0]), tile_ene_E.r );
-       gpu::device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.th );
-       gpu::device::atomic_fetch_add( &(d_energy[2]), tile_ene_E.z );
+       // d_energy layout follows cyl3: (z, r, θ) for E, then (z, r, θ) for B
+       gpu::device::atomic_fetch_add( &(d_energy[0]), tile_ene_E.z );
+       gpu::device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.r );
+       gpu::device::atomic_fetch_add( &(d_energy[2]), tile_ene_E.th );
 
-       gpu::device::atomic_fetch_add( &(d_energy[3]), tile_ene_B.r );
-       gpu::device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.th );
-       gpu::device::atomic_fetch_add( &(d_energy[5]), tile_ene_B.z );
+       gpu::device::atomic_fetch_add( &(d_energy[3]), tile_ene_B.z );
+       gpu::device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.r );
+       gpu::device::atomic_fetch_add( &(d_energy[5]), tile_ene_B.th );
     }
 }
 
@@ -1374,13 +1375,14 @@ void get_energy(
     tile_ene_B.z  = gpu::warp::reduce_add( tile_ene_B.z );
 
     if ( gpu::warp::thread_rank() == 0 ) {
-        gpu::device::atomic_fetch_add( &(d_energy[0]), tile_ene_E.r );
-        gpu::device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.th );
-        gpu::device::atomic_fetch_add( &(d_energy[2]), tile_ene_E.z );
+        // d_energy layout follows cyl3: (z, r, θ) for E, then (z, r, θ) for B
+        gpu::device::atomic_fetch_add( &(d_energy[0]), tile_ene_E.z );
+        gpu::device::atomic_fetch_add( &(d_energy[1]), tile_ene_E.r );
+        gpu::device::atomic_fetch_add( &(d_energy[2]), tile_ene_E.th );
 
-        gpu::device::atomic_fetch_add( &(d_energy[3]), tile_ene_B.r );
-        gpu::device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.th );
-        gpu::device::atomic_fetch_add( &(d_energy[5]), tile_ene_B.z );
+        gpu::device::atomic_fetch_add( &(d_energy[3]), tile_ene_B.z );
+        gpu::device::atomic_fetch_add( &(d_energy[4]), tile_ene_B.r );
+        gpu::device::atomic_fetch_add( &(d_energy[5]), tile_ene_B.th );
     }
 }
 
@@ -1437,6 +1439,7 @@ void emf::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m ) co
     double h_energy[6];
     gpu::device::memcpy_tohost( h_energy, d_energy, 6 );
 
+    // h_energy holds (z, r, θ) for E, then (z, r, θ) for B (same order as cyl3)
     ene_E = cyl_double3{ h_energy[0], h_energy[1], h_energy[2] };
     ene_B = cyl_double3{ h_energy[3], h_energy[4], h_energy[5] };
 

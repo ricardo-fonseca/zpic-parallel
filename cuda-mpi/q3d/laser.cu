@@ -506,14 +506,13 @@ namespace kernel {
  * @param p                 Plane wave parameters
  * @param E_fld             E field grid
  * @param B_fld             B field grid
- * @param local_tile_start  Tile start position on global tile grid
  * @param dx                Cell size
  */
 __global__
 void plane_wave(
     plane_wave_params const p,
     grid::tiled_cyl3_view<complex_t> E_fld, grid::tiled_cyl3_view<complex_t> B_fld, 
-    uint2 const local_tile_start, float2 const dx )
+    float2 const dx )
 {
     const uint2  tile_idx = { blockIdx.x, blockIdx.y };
 
