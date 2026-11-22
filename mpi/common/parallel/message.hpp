@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mpi.h"
 #include "mpi.hpp"
 #include "../util/memory.hpp"
 
@@ -23,7 +24,7 @@ class message {
     const MPI_Comm comm;
 
     /// @brief Data buffer
-    T * buffer;
+    T * buffer = nullptr;
 
     /// @brief Maximum message size
     const int max_count;
@@ -65,15 +66,18 @@ class message {
      * @return int          Error code from MPI_Isend (MPI_SUCCESS on success)
      */
     int isend( int count, int recipient, int tag ) {
-        
+
+        if ( count <= 0 ) {
+            mpi::fatal( "Invalid message size: " + std::to_string( count ));
+        }
+
         if ( count > max_count ) {
-            std::cerr << "isend() - Message size too large\n";
-            mpi::abort(1);
+            mpi::fatal( "Message size too large " + std::to_string(count) +
+            " > " + std::to_string(max_count));
         }
 
         if ( active != none ) {
-            std::cerr << "isend() - Tried to send message before other message completes\n";
-            mpi::abort(1);
+            mpi::fatal("Tried to send message before other message completes");
         }
 
         int ierr = MPI_Isend( buffer, count, mpi::data_type<T>(), recipient, tag, comm, &request);
@@ -99,7 +103,7 @@ class message {
         }
 
         int ierr = MPI_Irecv( buffer, max_count, mpi::data_type<T>(), sender, tag, comm, &request);
-        active = ( ierr == MPI_SUCCESS) ? message::receive : message::none;
+        active = ( ierr == MPI_SUCCESS ) ? message::receive : message::none;
         return ierr;
     }
 
@@ -115,6 +119,7 @@ class message {
         }
         int ierr = MPI_Wait( &request, MPI_STATUS_IGNORE );
         active = message::none;
+        request = MPI_REQUEST_NULL;
         return ierr;
     }
 
@@ -136,6 +141,7 @@ class message {
         MPI_Get_count( &status, mpi::data_type<T>(), &count );
         
         active = message::none;
+        request = MPI_REQUEST_NULL;
         return ierr;
     }
 };

@@ -3,8 +3,24 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+#include <iostream>
 
 namespace omp {
+
+inline void info() {
+#ifdef _OPENMP
+    std::cout << "OpenMP enabled\n";
+    std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
+    std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
+    #pragma omp parallel
+    {
+        if ( omp_get_thread_num() == 0 )
+            std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
+    }
+#else
+    std::cout << "OpenMP support not enabled\n";
+#endif
+}
 
 /**
  * @brief Atomic fetch/add operation

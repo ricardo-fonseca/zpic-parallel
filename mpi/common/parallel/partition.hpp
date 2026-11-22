@@ -132,6 +132,36 @@ class cart2d {
         }; 
     };
 
+    /// @brief Tag type selecting the transposing constructor
+    struct transpose_t {};
+
+    /**
+     * @brief Construct a transposed copy of an existing partition
+     *
+     * @note Creates a new cartesian communicator with x and y swapped, keeping
+     *       the same MPI ranks. This is only possible if `src` is a 1D
+     *       partition (src.dims.x == 1 or src.dims.y == 1): MPI assigns
+     *       coordinates in row-major order, so for general 2D partitions the
+     *       transposed topology would require reordering ranks.
+     * @note Collective: must be called by all processes.
+     *
+     * @param src   Source partition
+     */
+    cart2d( const cart2d & src, transpose_t ) :
+        cart2d( transposed_dims( src ), make_int2( src.periodic.y, src.periodic.x ) )
+    {
+        // Sanity checks: same rank, transposed position in the parallel domain
+        if ( rank != src.rank ) {
+            mpi::fatal( "Transposed partition: rank mismatch (" + std::to_string( rank ) +
+                        " vs " + std::to_string( src.rank ) + ")" );
+        }
+
+        if ( coords.x != src.coords.y || coords.y != src.coords.x ) {
+            mpi::fatal( "Transposed partition: coordinates " + to_string( coords ) +
+                        " are not the transpose of " + to_string( src.coords ) );
+        }
+    }
+
     /**
      * @brief Delete the default copy constructor
      * 
@@ -217,7 +247,7 @@ class cart2d {
      * @param shifty    Shift along y direction, should be -1, 0 or +1
      * @return int      neighbor rank
      */
-    int get_neighbor( int shiftx, int shifty ) const {
+    int get_neighbor( int shiftx, int shifty ) const noexcept {
         return neighbor[ 1 + shifty ][ 1 + shiftx ];
     }
 
@@ -269,6 +299,21 @@ class cart2d {
     }
 
     private:
+
+    /**
+     * @brief Transposed partition dimensions, verifying that `src` is 1D
+     *
+     * @note Evaluated before the communicator is created, and gives the same
+     *       result on all ranks
+     */
+    static uint2 transposed_dims( const cart2d & src ) {
+        if ( src.dims.x != 1 && src.dims.y != 1 ) {
+            mpi::fatal( "Transposed partition requires a 1D partition (dims.x == 1 "
+                        "or dims.y == 1), got " + std::to_string( src.dims.x ) + " x " +
+                        std::to_string( src.dims.y ) );
+        }
+        return make_uint2( src.dims.y, src.dims.x );
+    }
 
     /**
      * @brief Checks whether given coordinates lie on the requested edge of
@@ -350,7 +395,7 @@ class cart2d {
      * @param root      Target node, defaults to 0
      */
     template< typename T >
-    void reduce( T * data, int count, MPI_Op op, int root = 0 ) {
+    void reduce( T * data, int count, MPI_Op op, int root = 0 ) const {
 
         void *sendbuf = ( rank == root ) ? MPI_IN_PLACE : data;
 
@@ -371,7 +416,7 @@ class cart2d {
      * @param op        Reduction operation
      */
     template< typename T >
-    void allreduce( const T * sendbuf, T * recvbuf, int count, MPI_Op op ) {
+    void allreduce( const T * sendbuf, T * recvbuf, int count, MPI_Op op ) const {
                 
         if ( MPI_Allreduce( sendbuf, recvbuf, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
             mpi::fatal( "Allreduce operation failed");
@@ -391,7 +436,7 @@ class cart2d {
      * @return int 
      */
     template< typename T >
-    void allreduce( T * data, int count, MPI_Op op ) {
+    void allreduce( T * data, int count, MPI_Op op ) const {
         if ( MPI_Allreduce( MPI_IN_PLACE, data, count, mpi::data_type<T>(), op, comm ) != MPI_SUCCESS ) {
             mpi::fatal( "Allreduce operation failed");
         }
