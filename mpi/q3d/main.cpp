@@ -1,36 +1,22 @@
+#include "cyl3/cyl3.hpp"
+#include "cyl3/tiled_cyl3.hpp"
+#include "cyl_modes/tiled_cyl3.hpp"
+#include "zpic.hpp"
+
 #include <iostream>
 
-#include "utils.h"
+#include "udist.hpp"
+#include "util/term.hpp"
+#include "util/timer.hpp"
 
-#include <complex>
-
-#include "vec_types.h"
-#include "cyl3.h"
-
-#include "cyl3grid.h"
-#include "cyl3modes.h"
-
-/**
- * OpenMP support
- */
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-/**
- * SIMD support
- */
-#include "simd/simd.h"
-
-/**
- * MPI support 
- */
-#include "parallel.h"
+#include "core/bounds.hpp"
+#include "grid/grid.hpp"
+#include "laser.hpp"
 
 
 void test_cylgrid( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "()...";
         std::cout << ansi::reset << std::endl;
@@ -41,15 +27,15 @@ void test_cylgrid( void ) {
 
     uint2 ntiles{ 8, 8 };
     uint2 nx{ 16, 16 };
-    bnd<unsigned int> gc;
+    bounds_2d<unsigned int> gc;
     gc.x = {1,2};
     gc.y = {1,2};
 
-    Partition parallel( partition, make_int2(1,0) );
+    mpi::cart2d parallel( partition, make_int2(1,0) );
 
-    CylGrid<float> field( 4, ntiles, nx, gc, parallel );
+    cyl_modes::tiled<float> field( 4, ntiles, nx, gc, parallel );
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << "field: " << field << '\n';
 
         std::cout << "mode0: " << field.mode0() << '\n';
@@ -66,7 +52,7 @@ void test_cylgrid( void ) {
 
 void test_cyl3_cylgrid( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "()...";
         std::cout << ansi::reset << std::endl;
@@ -77,13 +63,13 @@ void test_cyl3_cylgrid( void ) {
 
     uint2 ntiles{ 8, 8 };
     uint2 nx{ 16, 16 };
-    bnd<unsigned int> gc{ 0 };
+    bounds_2d<unsigned int> gc{ 0 };
 
-    Partition parallel( partition, make_int2(1,0) );
+    mpi::cart2d parallel( partition, make_int2(1,0) );
 
-    Cyl3CylGrid<float> field( 4, ntiles, nx, gc, parallel );
+    cyl_modes::tiled_cyl3<float> field( 4, ntiles, nx, gc, parallel );
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
 
         std::cout << "field: " << field << '\n';
 
@@ -100,7 +86,7 @@ void test_cyl3_cylgrid( void ) {
 
 void test_pvec3_cylgrid( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "()...";
         std::cout << ansi::reset << std::endl;
@@ -108,34 +94,31 @@ void test_pvec3_cylgrid( void ) {
 
     uint2 ntiles{ 8, 8 };
     uint2 nx{ 16, 16 };
-    bnd<unsigned int> gc{ 0 };
+    bounds_2d<unsigned int> gc{ 0 };
 
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
-    Partition parallel( partition, make_int2(1,0) );
+    mpi::cart2d parallel( partition, make_int2(1,0) );
 
-    auto A = new Cyl3CylGrid<float>( 4, ntiles, nx, gc, parallel );
-    auto B = new Cyl3CylGrid<float>( 4, ntiles, nx, gc, parallel );
+    cyl_modes::tiled_cyl3<float> A( 4, ntiles, nx, gc, parallel );
+    cyl_modes::tiled_cyl3<float> B( 4, ntiles, nx, gc, parallel );
 
-    A -> set_name( "field A" );
-    B -> set_name( "field B" );
+    A.set_name( "field A" );
+    B.set_name( "field B" );
 
-    A -> zero();
-    B -> zero();
+    A.zero();
+    B.zero();
 
-    if ( mpi::world_root() ) {
-        std::cout << "A: " << * A << '\n';
+    if ( mpi::root() ) {
+        std::cout << "A: " << A << '\n';
 
-        std::cout << "mode0: " << A->mode0() << '\n';
-        std::cout << "mode1: " << B->mode(1) << '\n';
-        std::cout << "mode2: " << A->mode(2) << '\n';
-        std::cout << "mode3: " << B->mode(3) << '\n';
+        std::cout << "mode0: " << A.mode0() << '\n';
+        std::cout << "mode1: " << B.mode(1) << '\n';
+        std::cout << "mode2: " << A.mode(2) << '\n';
+        std::cout << "mode3: " << B.mode(3) << '\n';
     }
 
-    delete( A );
-    delete( B );
-
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Done!\n";
         std::cout << ansi::reset;
@@ -143,18 +126,16 @@ void test_pvec3_cylgrid( void ) {
 
 }
 
-#include "emf.h"
-
 void test_emf( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "()...";
         std::cout << ansi::reset << std::endl;
     }
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
-    Partition parallel( partition, make_int2(1,0) );
+    mpi::cart2d parallel( partition, make_int2(1,0) );
 
     uint2 ntiles{ 8, 8 };
     uint2 nx{ 16, 16 };
@@ -162,9 +143,9 @@ void test_emf( void ) {
     float2 box{ 12.8, 12.8 };
     double dt{ 0.04 };
 
-    EMF emf( 4, ntiles, nx, box, dt, parallel );
+    emf emf( 4, ntiles, nx, box, dt, parallel );
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << "field: " << emf << '\n';
 
         std::cout << "mode0: " << emf.E->mode0() << '\n';
@@ -178,36 +159,33 @@ void test_emf( void ) {
     }
 }
 
-#include "simulation.h"
-#include "laser.h"
-
 void test_laser( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "()...";
         std::cout << ansi::reset << std::endl;
     }
     // Parallel partition
-    uint2 partition = make_uint2( 2, 2 );
+    uint2 partition = make_uint2( 1, 4 );
 
-    uint2 ntiles{ 16, 8 };
-    uint2 nx{ 64, 32 };
+    uint2 ntiles{ 32, 8 };
+    uint2 nx{ 32, 16 };
     float2 box{ 20.48, 25.6 };
 
     // double dt = 0.01;
-    auto dt = 0.9 * zpic::courant( 2, ntiles, nx, box );
+    auto dt = 0.9 * zpic::simulation::courant( 2, ntiles, nx, box );
 
-    if ( mpi::world_root() )
+    if ( mpi::root() )
         std::cout << "Using dt = " << dt << '\n';
 
     // Create simulation
-    Simulation sim( 2, ntiles, nx, box, dt, partition, false );
+    zpic::simulation sim( 2, ntiles, nx, box, dt, partition, false );
 
-//    Laser::PlaneWave laser;
+//    laser::planeWave laser;
 
-    Laser::Gaussian laser;
-    laser.W0 = 4.0;
+    laser::gaussian laser;
+    laser.W0 = 8.0;
     laser.focus = 20.48;
 
     // Common laser parameters
@@ -225,24 +203,25 @@ void test_laser( void ) {
     sim.set_moving_window();
 
     auto diag = [& sim ]( ) {
-        sim.emf.save( emf::e, fcomp::r, 1 );
-        sim.emf.save( emf::e, fcomp::θ, 1 );
-        sim.emf.save( emf::e, fcomp::z, 1 );
+        sim.emf.save( emf::quantity::e, fcomp::cyl::r, 1 );
+        sim.emf.save( emf::quantity::e, fcomp::cyl::th, 1 );
+        sim.emf.save( emf::quantity::e, fcomp::cyl::z, 1 );
 
-        sim.emf.save( emf::b, fcomp::r, 1 );
-        sim.emf.save( emf::b, fcomp::θ, 1 );
-        sim.emf.save( emf::b, fcomp::z, 1 );
+        sim.emf.save( emf::quantity::b, fcomp::cyl::r, 1 );
+        sim.emf.save( emf::quantity::b, fcomp::cyl::th, 1 );
+        sim.emf.save( emf::quantity::b, fcomp::cyl::z, 1 );
     };
 
     diag();
 
-    auto niter = 1000;
+    auto niter = 0;
+//    auto niter = 1000;
     for( int i = 0; i <= niter; i ++) {
         if ( sim.get_iter() % 10 == 0 ) diag();
         sim.advance_mov_window();
     }
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Completed " << __func__ << "()\n"
                 << ansi::reset;
@@ -250,11 +229,9 @@ void test_laser( void ) {
 
 }
 
-#include "species.h"
-
 void test_inj( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Running " << __func__ << "()...\n"
                 << ansi::reset;
@@ -264,14 +241,14 @@ void test_inj( void ) {
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 16, 16 };
     float2 box{ 4, 4 };
-    auto dt = 0.99 * zpic::courant( nmodes, ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( nmodes, ntiles, nx, box );
 
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
-    Partition parallel( partition, make_int2(1,0) );
+    mpi::cart2d parallel( partition, make_int2(1,0) );
 
     uint3 ppc{ 2, 2, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
+    species electrons( "electrons", -1.0f, ppc );
 
 //    electrons.set_density(Density::Step(coord::z, 1.0, 2.0));
 //    electrons.set_density( Density::Slab(coord::z, 1.0, 2.0, 3.0)); 
@@ -281,7 +258,7 @@ void test_inj( void ) {
     electrons.save( );
     electrons.save_charge( 0 );
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Completed " << __func__ << "()\n"
                 << ansi::reset;
@@ -292,7 +269,7 @@ void test_inj( void ) {
 
 void test_mov( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Running " << __func__ << "()...\n"
                 << ansi::reset;
@@ -305,16 +282,16 @@ void test_mov( void ) {
 
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
-    Partition parallel( partition, make_int2(1,0) );
+    mpi::cart2d parallel( partition, make_int2(1,0) );
 
 
-    auto dt = 0.99 * zpic::courant( 2, ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( 2, ntiles, nx, box );
 
     uint3 ppc{ 2, 2, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
+    species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( Density::Sphere(1.0, float2{2,2}, 1.0)); 
-    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1.e6 } ) );
+    electrons.set_density( density::sphere(1.0, float2{2,2}, 1.0)); 
+    electrons.set_udist( udist::cold( float3{ 0, 0, 1.e6 } ) );
 
     electrons.initialize( nmodes, box, ntiles, nx, dt, 0, parallel );
 
@@ -328,7 +305,7 @@ void test_mov( void ) {
     electrons.save_charge(0);
     electrons.save();
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Completed " << __func__ << "()\n"
                 << ansi::reset;
@@ -338,7 +315,7 @@ void test_mov( void ) {
 
 void test_current( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Running " << __func__ << "()...\n"
                 << ansi::reset;
@@ -354,14 +331,14 @@ void test_current( void ) {
 
     // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
     
-    auto dt = 0.06;
+    auto dt = 0.05;
 
     // Create simulation
-    Simulation sim( nmodes, ntiles, nx, box, dt, partition );
+    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition );
 
     uint3 ppc{ 2, 2, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
-    electrons.set_density( Density::Sphere(1.0, float2{6.4,6.4}, 3.2)); 
+    species electrons( "electrons", -1.0f, ppc );
+//    electrons.set_density( Density::Sphere(1.0, float2{6.4,6.4}, 3.2)); 
 //    electrons.set_density( Density::Sphere(1.0, float2{6.4,0.0}, 3.2)); 
 
 //    electrons.set_udist( UDistribution::Cold( float3{ 1e6, 1e6, 1.e6 } ) );
@@ -370,9 +347,9 @@ void test_current( void ) {
     // ux, uy, uz
     // electrons.set_udist( UDistribution::Cold( float3{ 1e6, 0, 0 } ) );
     // electrons.set_udist( UDistribution::Cold( float3{ 0, 1e6, 0 } ) );
-    electrons.set_udist( UDistribution::Cold( float3{ -1e6, 1e6, -1.e6 } ) );
+    // electrons.set_udist( UDistribution::Cold( float3{ -1e6, 1e6, -1.e6 } ) );
 
-    electrons.set_udist( UDistribution::Cold( float3{ -1e-1, 1e-1, -1e-1 } ) );
+    electrons.set_udist( udist::cold( float3{ -1e-1, 1e-1, -1e-1 } ) );
 
     sim.add_species( electrons );
 
@@ -382,30 +359,30 @@ void test_current( void ) {
         electrons.save_charge(0);
 
         // Save mode 0
-        sim.current.save( fcomp::z, 0 );
-        sim.current.save( fcomp::r, 0 );
-        sim.current.save( fcomp::θ, 0 );
+        sim.current.save( fcomp::cyl::z , 0 );
+        sim.current.save( fcomp::cyl::r , 0 );
+        sim.current.save( fcomp::cyl::th, 0 );
 
         // Save mode 1
-        sim.current.save( fcomp::z, 1 );
-        sim.current.save( fcomp::r, 1 );
-        sim.current.save( fcomp::θ, 1 );
+        sim.current.save( fcomp::cyl::z , 1 );
+        sim.current.save( fcomp::cyl::r , 1 );
+        sim.current.save( fcomp::cyl::th, 1 );
 
-        sim.emf.save(emf::e, fcomp::z, 0);
-        sim.emf.save(emf::e, fcomp::r, 0);
-        sim.emf.save(emf::e, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::z , 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::r , 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::b, fcomp::z, 0);
-        sim.emf.save(emf::b, fcomp::r, 0);
-        sim.emf.save(emf::b, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::z , 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::r , 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::e, fcomp::z, 1);
-        sim.emf.save(emf::e, fcomp::r, 1);
-        sim.emf.save(emf::e, fcomp::θ, 1);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::z , 1);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::r , 1);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 1);
 
-        sim.emf.save(emf::b, fcomp::z, 1);
-        sim.emf.save(emf::b, fcomp::r, 1);
-        sim.emf.save(emf::b, fcomp::θ, 1);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::z , 1);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::r , 1);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 1);
     };
 
     diag();
@@ -414,7 +391,7 @@ void test_current( void ) {
         diag();
     }
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Completed " << __func__ << "()\n"
                 << ansi::reset;
@@ -424,7 +401,7 @@ void test_current( void ) {
 
 void test_beam( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Running " << __func__ << "()...\n"
                 << ansi::reset;
@@ -440,20 +417,23 @@ void test_beam( void ) {
     uint2 nx { 32, 32 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
-    auto dt = zpic::courant( nmodes, dims, box ) * 0.5f;
+    // auto dt = zpic::courant( nmodes, dims, box ) * 0.5f;
+
+    // For comparison with the GPU version
+    double dt     = 0.03;
 
     std::cout << "dt     = " << dt << '\n';
     std::cout << "ntiles = " << ntiles << '\n';
 
     // Create simulation
-    Simulation sim( nmodes, ntiles, nx, box, dt, partition );
+    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition );
 
 
-    uint3 ppc{ 2, 2, 1 };
-    Species electrons( "electrons", -1.0f, ppc );
+    uint3 ppc{ 2, 2, 3 };
+    species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( Density::Sphere(1.0, float2{20.0,0.0}, 1.6)); 
-    electrons.set_udist( UDistribution::Cold( float3{ 0, 0, 1e6 } ) );
+    electrons.set_density( density::sphere(1.0, float2{20.0,0.0}, 1.6)); 
+    electrons.set_udist( udist::cold( float3{ 0, 0, 1e6 } ) );
 
     sim.add_species( electrons );
     sim.set_moving_window();
@@ -464,17 +444,22 @@ void test_beam( void ) {
         // Save mode 0
         electrons.save_charge(0);
 
-        sim.emf.save(emf::e, fcomp::z, 0);
-        sim.emf.save(emf::e, fcomp::r, 0);
-        sim.emf.save(emf::e, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::b, fcomp::z, 0);
-        sim.emf.save(emf::b, fcomp::r, 0);
-        sim.emf.save(emf::b, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::z, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::r, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 0);
 
-        sim.current.save( fcomp::z, 0 );
-        sim.current.save( fcomp::r, 0 );
-        sim.current.save( fcomp::θ, 0 );
+        sim.current.save( fcomp::cyl::z, 0 );
+        sim.current.save( fcomp::cyl::r, 0 );
+        sim.current.save( fcomp::cyl::th, 0 );
+
+        sim.current.save( fcomp::cyl::z, 1 );
+        sim.current.save( fcomp::cyl::r, 1 );
+        sim.current.save( fcomp::cyl::th, 1 );
+
     };
 
     for( int i = 0; i < 1000; i++ ) {
@@ -484,7 +469,7 @@ void test_beam( void ) {
     diag();
 
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Completed " << __func__ << "()\n"
                 << ansi::reset;
@@ -494,7 +479,7 @@ void test_beam( void ) {
 
 void test_pwfa( void ) {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Running " << __func__ << "()...\n"
                 << ansi::reset;
@@ -510,23 +495,23 @@ void test_pwfa( void ) {
     uint2 nx { 32, 32 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
-    auto dt = zpic::courant( nmodes, dims, box ) * 0.5f;
+    auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.5f;
 
     std::cout << "dt     = " << dt << '\n';
     std::cout << "ntiles = " << ntiles << '\n';
 
     // Create simulation
-    Simulation sim( nmodes, ntiles, nx, box, dt, partition);
+    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition);
 
     uint3 ppc{ 2, 2, 1 };
 
-    Species beam( "beam", -1.0f, ppc );
-    beam.set_density( Density::Sphere(1.0, float2{23.0,0.0}, 1.6)); 
-    beam.set_udist( UDistribution::Cold( float3{ 0, 0, 1e6 } ) );
+    species beam( "beam", -1.0f, ppc );
+    beam.set_density( density::sphere(1.0, float2{23.0,0.0}, 1.6)); 
+    beam.set_udist( udist::cold( float3{ 0, 0, 1e6 } ) );
     sim.add_species( beam );
 
-    Species plasma( "plasma", -1.0f, ppc );
-    plasma.set_density( Density::Step( coord::z, 1.0, 40.96 ) ); 
+    species plasma( "plasma", -1.0f, ppc );
+    plasma.set_density( density::step( coord::cyl::z, 1.0, 40.96 ) ); 
     sim.add_species( plasma );
 
     sim.set_moving_window();
@@ -537,17 +522,17 @@ void test_pwfa( void ) {
         plasma.save_charge(0);
         plasma.save();
 
-        sim.emf.save(emf::e, fcomp::z, 0);
-        sim.emf.save(emf::e, fcomp::r, 0);
-        sim.emf.save(emf::e, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::b, fcomp::z, 0);
-        sim.emf.save(emf::b, fcomp::r, 0);
-        sim.emf.save(emf::b, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::z, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::r, 0);
+        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 0);
 
-        sim.current.save( fcomp::z, 0 );
-        sim.current.save( fcomp::r, 0 );
-        sim.current.save( fcomp::θ, 0 );
+        sim.current.save( fcomp::cyl::z, 0 );
+        sim.current.save( fcomp::cyl::r, 0 );
+        sim.current.save( fcomp::cyl::th, 0 );
     };
 
     while ( sim.get_t() <= 61.5 ) {
@@ -556,20 +541,16 @@ void test_pwfa( void ) {
     }
 
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold
                 << "Completed " << __func__ << "()\n"
                 << ansi::reset;
     }
 }
 
-
-#include "timer.h"
-
-
 void test_lwfa() {
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "()...";
         std::cout << ansi::reset << std::endl;
@@ -583,19 +564,19 @@ void test_lwfa() {
     uint2 nx { 32, 32 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
-    auto dt = zpic::courant( nmodes, dims, box ) * 0.9f;
+    auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.9f;
 
     // Create simulation
-    Simulation sim( nmodes, ntiles, nx, box, dt, partition );
+    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition );
 
     // Add electrons
-    Species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
-    electrons.set_density( Density::Step( coord::z, 1.0, 20.48 ) );
+    species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
+    electrons.set_density( density::step( coord::cyl::z, 1.0, 20.48 ) );
 //    electrons.set_density( Density::Step( coord::z, 1.0, 10.24 ) );
     sim.add_species( electrons );
     
     // Add Laser
-    Laser::Gaussian laser;
+    laser::gaussian laser;
     laser.start   = 20.0;
     laser.fwhm    = 2.0;
     laser.a0      = 2.0;
@@ -609,50 +590,49 @@ void test_lwfa() {
 
     // Set moving window and current filtering
     sim.set_moving_window();
-    sim.current.set_filter( Filter::Compensated( coord::z, 4 ));
+    sim.current.set_filter( filter::compensated( filter::axis::z, 4 ));
 
     auto diag = [& sim, & electrons ]( ) {
-        sim.emf.save(emf::e, fcomp::z, 0);
-        sim.emf.save(emf::e, fcomp::r, 0);
-        sim.emf.save(emf::e, fcomp::θ, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::e, fcomp::z, 1);
-        sim.emf.save(emf::e, fcomp::r, 1);
-        sim.emf.save(emf::e, fcomp::θ, 1);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 1);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 1);
+        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 1);
 
-        sim.current.save( fcomp::z, 0);
-        sim.current.save( fcomp::r, 0);
-        sim.current.save( fcomp::θ, 0);
+        sim.current.save( fcomp::cyl::z, 0);
+        sim.current.save( fcomp::cyl::r, 0);
+        sim.current.save( fcomp::cyl::th, 0);
 
-        sim.current.save( fcomp::z, 1 );
-        sim.current.save( fcomp::r, 1 );
-        sim.current.save( fcomp::θ, 1 );
-
+        sim.current.save( fcomp::cyl::z, 1 );
+        sim.current.save( fcomp::cyl::r, 1 );
+        sim.current.save( fcomp::cyl::th, 1 );
     
         electrons.save_charge( 0 );
         electrons.save_charge( 1 );
     };
 
-    if ( mpi::world_root() )
+    if ( mpi::root() )
         std::cout << "Starting simulation, dt = " << dt << '\n';
 
-    Timer timer;
-    timer.start();
+    timer::clock t0("test");
+    t0.start();
 
     while( sim.get_t() <= 1.05 * box.x ) {
         if ( sim.get_iter() % 100 == 0 ) {
-            if ( mpi::world_root() )
+            if ( mpi::root() )
                 std::cout << "i = " << sim.get_iter() << '\n';
             diag();
         }
         sim.advance_mov_window();
     }
 
-    timer.stop();
+    t0.stop();
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << "Simulation run up to t = " << sim.get_t()
-                << " in " << timer.elapsed(timer::s) << " s\n";
+                << " in " << t0.elapsed(timer::units::s) << " s\n";
 
         std::cout << ansi::bold;
         std::cout << "Done!\n";
@@ -666,7 +646,7 @@ int main( int argc, char *argv[] ) {
     // Initialize the MPI environment
     mpi::init( & argc, & argv );
 
-    if ( mpi::world_root() ) {
+    if ( mpi::root() ) {
         std::cout << ansi::bold 
                 << "quasi-3D tests\n"
                 << ansi::reset ;

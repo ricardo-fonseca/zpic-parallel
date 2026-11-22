@@ -1,377 +1,479 @@
-#include "current.h"
+#include "current.hpp"
 
-#include <iostream>
-#include "bnd.h"
+#include <string>
+#include <type_traits>
+
+
+namespace kernel {
+
+namespace current_bc {
 
 /**
- * @brief Physical boundary conditions for the z direction
- * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.x.lower ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @brief Normal / tangential current components for walls normal to z or r
+ *
+ * @note The accessors are templates so the same wall code works for real
+ *       (mode 0) and complex (modes m > 0) grids
  */
-template< class T >
-void current_bcz(
-    const uint2 tile_idx,
-    T * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
-    const current::bc_type bc ) {
+template< coord::cyl dir > struct comp;
 
-    const int jstride = ext_nx.x;
+template<> struct comp< coord::cyl::z > {
+    template< typename T > static T & n ( cyl3<T> & v ) { return v.z; }
+    template< typename T > static T & t1( cyl3<T> & v ) { return v.r; }
+    template< typename T > static T & t2( cyl3<T> & v ) { return v.th; }
+};
 
-    if ( tile_idx.x == 0 ) {
-        // Lower boundary
-        switch( bc.x.lower ) {
-        case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
-                // j includes the y-stride
-                const int j = idx * jstride;
+template<> struct comp< coord::cyl::r > {
+    template< typename T > static T & n ( cyl3<T> & v ) { return v.r; }
+    template< typename T > static T & t1( cyl3<T> & v ) { return v.z; }
+    template< typename T > static T & t2( cyl3<T> & v ) { return v.th; }
+};
 
-                auto jz0 = -J[ -1 + j ].z + J[ 0 + j ].z; 
-                auto jr1 =  J[ -1 + j ].r + J[ 1 + j ].r;
-                auto jθ1 =  J[ -1 + j ].θ + J[ 1 + j ].θ;
+/**
+ * @brief Lower wall (pec / pmc) boundary condition for one line of cells
+ *
+ * The wall sits on node 0. Layout along the line (stride s):
+ *
+ *  p[-s]   normal: -1/2  tangential: -1 (guard)
+ *  p[ 0]   normal: +1/2  tangential: wall node
+ *  p[+s]   normal: +3/2  tangential: +1
+ *
+ * Fold (particle reflection, same for pec and pmc): the current deposited
+ * beyond the wall is mirrored into the domain, with the normal component
+ * reversed. The deposit on the wall node is its own mirror and is unchanged.
+ *
+ * Images (wall type dependent):
+ *  pec - opposite sign image charges: normal J even, tangential J odd, so
+ *        the tangential J on the wall node is 0
+ *  pmc - same sign image charges: normal J odd, tangential J even, so the
+ *        tangential J on the wall node is doubled (fold step only)
+ *
+ * @note Walls do not involve θ, so the same rules apply to every mode
+ *
+ * @param p     Pointer to the wall node
+ * @param s     Stride along the line normal to the wall (1 or ystride)
+ * @param type  Wall type (pec or pmc)
+ * @param fold  Fold guard cell current and correct wall node (once per step)
+ */
+template< coord::cyl dir, typename T > 
+void lower_conducting( cyl3<T> * const p, int const s, current::bc::type const type, bool const fold ) {
+    using C = comp<dir>;
+    const bool pec = ( type == current::bc::pec );
 
-                J[ -1 + j ].z = J[ 0 + j ].z = jz0;
-                J[ -1 + j ].r = J[ 1 + j ].r = jr1;
-                J[ -1 + j ].θ = J[ 1 + j ].θ = jθ1;
-            }
-            break;
-        default:
-            break;
+    if ( fold ) {
+        C::n ( p[ 0 ] ) -= C::n ( p[ -s ] );
+        C::t1( p[ s ] ) += C::t1( p[ -s ] );
+        C::t2( p[ s ] ) += C::t2( p[ -s ] );
+
+        if ( ! pec ) {
+            C::t1( p[ 0 ] ) *= 2.0f;
+            C::t2( p[ 0 ] ) *= 2.0f;
         }
-    } else {
-        // Upper boundary
-        switch( bc.x.upper ) {
-        case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
-                const int j = idx * jstride;
+    }
 
-                auto jz0 =  J[ nx.x-1 + j ].z - J[ nx.x + 0 + j ].z; 
-                auto jr1 =  J[ nx.x-1 + j ].r + J[ nx.x + 1 + j ].r;
-                auto jθ1 =  J[ nx.x-1 + j ].θ + J[ nx.x + 1 + j ].θ;
+    if ( pec ) {
+        C::t1( p[ 0 ] ) = T{};
+        C::t2( p[ 0 ] ) = T{};
+    }
 
-                J[ nx.x-1 + j ].z = J[ nx.x + 0 + j ].z = jz0;
-                J[ nx.x-1 + j ].r = J[ nx.x + 1 + j ].r = jr1;
-                J[ nx.x-1 + j ].θ = J[ nx.x + 1 + j ].θ = jθ1;
-            }
-            break;
-        default:
-            break;
+    const float pn = pec ? +1.0f : -1.0f;   // normal component parity
+    const float pt = -pn;                   // tangential component parity
+
+    C::n ( p[ -s ] ) = pn * C::n ( p[ 0 ] );
+    C::t1( p[ -s ] ) = pt * C::t1( p[ s ] );
+    C::t2( p[ -s ] ) = pt * C::t2( p[ s ] );
+}
+
+/**
+ * @brief Upper wall (pec / pmc) boundary condition for one line of cells
+ *
+ * The wall sits on node n (first upper guard cell). Layout along the line
+ * (stride s):
+ *
+ *  p[-2s]  normal: n-3/2         tangential: n-2
+ *  p[ -s]  normal: n-1/2         tangential: n-1
+ *  p[  0]  normal: n+1/2 (guard) tangential: wall node (guard)
+ *  p[ +s]  normal: n+3/2 (guard) tangential: n+1 (guard)
+ *
+ * See lower_conducting() for the fold / image rules.
+ *
+ * @param p     Pointer to the wall node
+ * @param s     Stride along the line normal to the wall (1 or ystride)
+ * @param type  Wall type (pec or pmc)
+ * @param fold  Fold guard cell current and correct wall node (once per step)
+ */
+template< coord::cyl dir, typename T > 
+void upper_conducting( cyl3<T> * const p, int const s, current::bc::type const type, bool const fold ) {
+    using C = comp<dir>;
+    const bool pec = ( type == current::bc::pec );
+
+    if ( fold ) {
+        C::n ( p[  -s ] ) -= C::n ( p[ 0 ] );
+        C::n ( p[ -2*s] ) -= C::n ( p[ s ] );
+        C::t1( p[  -s ] ) += C::t1( p[ s ] );
+        C::t2( p[  -s ] ) += C::t2( p[ s ] );
+
+        if ( ! pec ) {
+            C::t1( p[ 0 ] ) *= 2.0f;
+            C::t2( p[ 0 ] ) *= 2.0f;
+        }
+    }
+
+    if ( pec ) {
+        C::t1( p[ 0 ] ) = T{};
+        C::t2( p[ 0 ] ) = T{};
+    }
+
+    const float pn = pec ? +1.0f : -1.0f;   // normal component parity
+    const float pt = -pn;                   // tangential component parity
+
+    C::n ( p[ 0 ] ) = pn * C::n ( p[  -s  ] );
+    C::n ( p[ s ] ) = pn * C::n ( p[ -2*s ] );
+    C::t1( p[ s ] ) = pt * C::t1( p[  -s  ] );
+    C::t2( p[ s ] ) = pt * C::t2( p[  -s  ] );
+}
+
+/**
+ * @brief Axial (r = 0) boundary condition for one radial line of cells
+ *
+ * Radial layout (row j, stride s), cell j centred at r = j Δr:
+ *
+ *  p[ -s]  z, θ: r = -3/2 Δr (guard)   r: r = -Δr (guard)
+ *  p[  0]  z, θ: r = -1/2 Δr           r: r = 0 (axis)
+ *  p[ +s]  z, θ: r = +1/2 Δr           r: r = +Δr
+ *  p[+2s]  z, θ: r = +3/2 Δr
+ *
+ * Mode m parity across the axis: (-1)^m for z, -(-1)^m for r and θ (the r̂
+ * and θ̂ unit vectors flip). The r component on the axis is set to 0 when
+ * its parity is odd (even m); for odd m it is left as computed.
+ *
+ * @param p     Pointer to row 0
+ * @param s     Row stride (ystride)
+ * @param m     Mode number
+ * @param fold  `true`: fold the current deposited at r < 0 back into the
+ *              domain, then set the images. `false`: only set the images.
+ */
+template< typename T > 
+void axial( cyl3<T> * const p, int const s, int const m, bool const fold ) {
+
+    const float sz  = ( m & 1 ) ? -1.0f : +1.0f;    // z parity
+    const float srt = -sz;                          // r, θ parity
+
+    if ( fold ) {
+        p[   s ].z  += sz  * p[  0 ].z;
+        p[ 2*s ].z  += sz  * p[ -s ].z;
+
+        p[   s ].th += srt * p[  0 ].th;
+        p[ 2*s ].th += srt * p[ -s ].th;
+
+        p[   s ].r  += srt * p[ -s ].r;
+    }
+
+    // Images below the axis
+    p[  0 ].z  = sz  * p[   s ].z;
+    p[ -s ].z  = sz  * p[ 2*s ].z;
+
+    p[  0 ].th = srt * p[   s ].th;
+    p[ -s ].th = srt * p[ 2*s ].th;
+
+    p[ -s ].r  = srt * p[   s ].r;
+    if ( srt < 0 ) p[ 0 ].r = T{};
+}
+
+/**
+ * @brief True if t is a conducting wall (pec / pmc)
+ */
+inline bool conducting( const current::bc::type t ) {
+    return t == current::bc::pec || t == current::bc::pmc;
+}
+
+/**
+ * @brief Physical boundaries touching tile (tx, ty) on this rank
+ */
+struct tile_edges {
+    current::bc::type z_lower, z_upper, r_upper;
+    bool axis;
+
+    tile_edges( const current::bc_type & local_bc,
+        const unsigned tx, const unsigned ty, const uint2 ntiles ) :
+        z_lower( ( tx == 0            && conducting( local_bc.x.lower ) ) ? local_bc.x.lower : current::bc::none ),
+        z_upper( ( tx == ntiles.x - 1 && conducting( local_bc.x.upper ) ) ? local_bc.x.upper : current::bc::none ),
+        r_upper( ( ty == ntiles.y - 1 && conducting( local_bc.y.upper ) ) ? local_bc.y.upper : current::bc::none ),
+        axis   (   ty == 0            && local_bc.y.lower == current::bc::axial ) { }
+
+    bool z_walls() const { return z_lower != current::bc::none || z_upper != current::bc::none; }
+    bool r_edges() const { return r_upper != current::bc::none || axis; }
+};
+
+/**
+ * @brief Apply the wall / axis boundary conditions to one tile
+ *
+ * Two stages, separated by a block synchronization:
+ *
+ *  1. z walls, on every extended row of the tile
+ *  2. upper r wall and axis, on every extended column of the tile
+ *
+ * All operations are linear and act identically on every row / column, so
+ * running the z stage first and then the r stage over the full extended
+ * tile gives the correct corner values. Each tile's extended region
+ * (including guard cells) is private to the tile, so different blocks never
+ * touch the same memory.
+ *
+ * @note Within a stage, the lower and upper operations on a line are done
+ *       by the same thread, so they never race even when a single tile
+ *       holds both boundaries.
+ *
+ * @warning Must be called by all threads in the block
+ *
+ * @param tile      Pointer to the start of the tile buffer (extended region)
+ * @param view      Grid view
+ * @param edges     Physical boundaries touching this tile
+ * @param m         Mode number
+ * @param fold      See lower_conducting() / axial()
+ */
+template< typename T >
+void tile_bc( cyl3<T> * const tile, const grid::tiled_cyl3_view<T> & view,
+    const tile_edges & edges, const int m, const bool fold ) {
+
+    const int ystride = view.tile_ystride();
+
+    // Stage 1: z walls
+    if ( edges.z_walls() ) {
+        // ix = 0 (lower wall) and ix = nx (upper wall, first upper guard cell)
+        cyl3<T> * const Jl = & tile[ view.gc.x.lower ];
+        cyl3<T> * const Ju = & tile[ view.gc.x.lower + view.tile_dims.x ];
+
+        for( unsigned idx = 0; idx < view.tile_ext_dims.y; idx ++ ) {
+            if ( edges.z_lower != current::bc::none )
+                lower_conducting< coord::cyl::z >( & Jl[ idx * ystride ], 1, edges.z_lower, fold );
+            if ( edges.z_upper != current::bc::none )
+                upper_conducting< coord::cyl::z >( & Ju[ idx * ystride ], 1, edges.z_upper, fold );
+        }
+    }
+
+    // Stage 2: upper r wall and axis
+    if ( edges.r_edges() ) {
+        // iy = 0 (axis) and iy = ny (upper wall, first upper guard row)
+        cyl3<T> * const Ja = & tile[ view.gc.y.lower * ystride ];
+        cyl3<T> * const Ju = & tile[ ( view.gc.y.lower + view.tile_dims.y ) * ystride ];
+
+        for( unsigned idx = 0; idx < view.tile_ext_dims.x; idx ++ ) {
+            if ( edges.r_upper != current::bc::none )
+                upper_conducting< coord::cyl::r >( & Ju[ idx ], ystride, edges.r_upper, fold );
+            if ( edges.axis )
+                axial( & Ja[ idx ], ystride, m, fold );
         }
     }
 }
 
+} // namespace current_bc
 
 /**
- * @brief Physical boundary conditions for the radial direction
- * 
- * @note This must only be called for the upper radial boundary (not the
- * @note axial boundary)
- * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.y.lower * ystride ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
- */
-template< class T >
-void current_bcr( 
-    const uint2 tile_idx,
-    T * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
-    const current::bc_type bc ) {
-
-    const int jstride = ext_nx.x;
-    
-    // Upper boundary
-    switch( bc.y.upper ) {
-    case( current::bc::reflecting ):
-        for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
-            const int i = idx;
-
-            auto jz1 =  J[ i + (nx.y-1)*jstride ].z + J[ i + (nx.y + 1)*jstride ].z; 
-            auto jr0 =  J[ i + (nx.y-1)*jstride ].r - J[ i + (nx.y + 0)*jstride ].r;
-            auto jθ1 =  J[ i + (nx.y-1)*jstride ].θ + J[ i + (nx.y + 1)*jstride ].θ;
-
-            J[ i + (nx.y-1)*jstride ].z = J[ i + (nx.y + 1)*jstride ].z = jz1;
-            J[ i + (nx.y-1)*jstride ].r = J[ i + (nx.y + 0)*jstride ].r = jr0;
-            J[ i + (nx.y-1)*jstride ].θ = J[ i + (nx.y + 1)*jstride ].θ = jθ1;
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-/**
- * @brief Processes "physical" boundary conditions
- * 
- */
-void Current::process_bc() {
-
-    NOT_IMPLEMENTED
-
-#if 0
-    const uint2 ntiles          = J -> ntiles;
-    const unsigned int tile_vol = J -> tile_vol;
-    const uint2 nx              = J -> nx;
-    const uint2 ext_nx          = J -> ext_nx;
-
-    // z boundaries
-    if ( bc.x.lower > current::bc::periodic || bc.x.upper > current::bc::periodic ) {
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.x - 1 ) tiles have physical x boundaries
-
-        #pragma omp parallel for
-        for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx : { 0u, ntiles.x-1 } ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at z cell 0
-                const auto z_offset = J -> gc.x.lower;
-
-                current_bcz( tile_idx, J -> mode0().d_buffer[tile_off + z_offset], nx, ext_nx, bc );
-
-                for( int m = 1; m < nmodes; m++ )
-                    current_bcz( tile_idx, J -> mode(m).d_buffer[tile_off + z_offset], nx, ext_nx, bc );
-            }
-        }
-    }
-
-    // y boundaries
-    if ( bc.y.upper > current::bc::periodic ) {
-
-        // Loop over tiles
-        //  Only upper ( ntiles.y - 1 ) tiles have physical r boundaries
-        unsigned ty = ntiles.y-1;
-
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
-
-            // Start at r cell 0
-            const auto r_offset = J -> gc.y.lower * ext_nx.x;
-
-            current_bcr( tile_idx, J -> mode0().d_buffer[ tile_off + r_offset ], nx, ext_nx, bc );
-            for( int m = 1; m < nmodes; m++ )
-                current_bcr( tile_idx, J -> mode(m).d_buffer[tile_off + r_offset], nx, ext_nx, bc );
-        }
-    }
-#endif
-
-}
-
-/**
- * @brief Normalize current grid (m = 0)
- * 
- * @param tile_idx      Tile index (x,y)
- * @param ntiles        Number of tiles in grid (x,y)
- * @param d_current     Pointer to current grid
- * @param offset        Offset to position (0,0) on the grid
- * @param nx            Tile grid size
- * @param ext_nx        External tile grid size
- * @param dx            Cell size (z,r)
+ * @brief Fold the current deposited beyond walls / axis and normalize for
+ *        ring particles, mode m
+ *
+ * One block per tile:
+ *
+ *  1. Tiles on a physical boundary fold the raw deposit beyond the wall /
+ *     axis back into the domain (current_bc::tile_bc() with fold = true).
+ *     This is done before normalization so that each value is normalized at
+ *     the position it is folded into.
+ *  2. The full extended tile (including guard cells) is normalized. This
+ *     covers the upper wall nodes, which sit on the first upper guard cell
+ *     and are filtered like interior nodes; guard cells on internal
+ *     boundaries are overwritten by the following copy_to_gc().
+ *
+ * Normalization (Jz, Jθ at the lower cell edge r = (j - 1/2) Δr, Jr at the
+ * cell centre r = j Δr):
+ *
+ *  m = 0:  Jz *= (Δz/Δt) / r,      Jr *= (Δr/Δt) / r,      Jθ *= (Δr/Δt) / r
+ *  m > 0:  Jz *= 2 (Δz/Δt) / r,    Jr *= 2 (Δr/Δt) / r,    Jθ *= 2 i / (m Δt)
+ *
+ * with Jr on the axis set to 0.
+ *
+ * @note Launch with grid( local_ntiles.x, local_ntiles.y )
+ *
+ * @tparam T            float (m = 0) or util::complex64 (m > 0)
+ * @param J_grid        View of the mode m current grid
+ * @param local_bc      Local rank boundary conditions
+ * @param m             Mode number
+ * @param dx            Cell size
  * @param dt            Time step
- * @param ir0           Coordinate of lower tile corner in grid
  */
-void current_norm_0(
-    uint2 const tile_idx,
-    uint2 const ntiles,
-    cyl3<float> * const __restrict__ d_current, int offset, 
-    uint2 const nx, uint2 const ext_nx,
-    float2 const dx, double dt,
-    const int ir0 ) {
+template< typename T >
+void current_fold_norm(
+    const uint2 tile_idx,
+    const grid::tiled_cyl3_view<T> J_grid,
+    const current::bc_type local_bc,
+    const int m,
+    float2 const dx, double const dt ) {
 
-    auto tid = tile_idx.y * ntiles.x + tile_idx.x;
-    const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
-    const int jstride = ext_nx.x;
+    cyl3<T> * const __restrict__ current = J_grid.tile_buffer( tile_idx );
+    const int jstride = J_grid.tile_ystride();
 
-    auto * __restrict__ current = &  d_current[ tile_off + offset ];
+    // Fold
+    const current_bc::tile_edges edges( local_bc, tile_idx.x, tile_idx.y, J_grid.local_ntiles );
+    current_bc::tile_bc( current, J_grid, edges, m, true );
 
-    ///@brief radial cell size
-    auto dr = dx.y;
+    // Normalize
+    const float dr = dx.y;
+    const float dz_dt = dx.x / dt;
+    const float dr_dt = dx.y / dt;
 
-    float const dz_dt = dx.x / dt; 
-    float const dr_dt = dx.y / dt; 
+    // Mode 0 is real, modes m > 0 carry an extra factor 2
+    constexpr bool real_mode = std::is_floating_point_v< T >;
+    const float fm = real_mode ? 1.0f : 2.0f;
 
-    for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
-        /// @brief r at center of cell
-        float rc   = std::abs( ir0 + j        ) * dr;
-        /// @brief r at lower edge of cell
-        float rl   = std::abs( ir0 + j - 0.5f ) * dr;
-        
-        float norm_r  = ( ir0 + j == 0 )? 0 : 1.0f / rc;
-        float norm_zθ = 1.0f / rl;
+    const auto ext_dims = J_grid.tile_ext_dims;
+    const int j0 = ( J_grid.local_tile_start.y + tile_idx.y ) * J_grid.tile_dims.y
+                   - static_cast<int>( J_grid.gc.y.lower );
 
-        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ j * jstride +i ].z *= dz_dt * norm_zθ;
-            current[ j * jstride +i ].r *= dr_dt * norm_r;
-            current[ j * jstride +i ].θ *= dr_dt * norm_zθ;
-        }
-    }
+    for( int idx = 0; idx < static_cast<int>( ext_dims.y * ext_dims.x ); idx ++ ) {
+        const int i = idx % ext_dims.x;
+        const int j = idx / ext_dims.x;
 
-    // Axial boundary
-    // Fold values for r < 0 back into simulation domain
-    if ( ir0 == 0 ) {
+        /// @brief r at center of cell (r position of Jr)
+        const float rc = std::abs( j0 + j ) * dr;
+        /// @brief r at lower edge of cell (r position of Jz, Jθ)
+        const float rl = std::abs( j0 + j - 0.5f ) * dr;
 
-        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
-            current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
+        auto & Jc = current[ j * jstride + i ];
 
-            current[ i + 1 * jstride ].r -= current[ i + (-1) * jstride ].r;
+        Jc.z *= fm * dz_dt / rl;
+        Jc.r *= ( j0 + j == 0 ) ? 0.0f : fm * dr_dt / rc;
 
-            current[ i + 1 * jstride ].θ -= current[ i +   0  * jstride ].θ;
-            current[ i + 2 * jstride ].θ -= current[ i + (-1) * jstride ].θ;
-
-            // The following values are used for diagnostic output only
-            current[ i + 0 * jstride ].z  = current[ i + 1 * jstride ].z;
-            current[ i + 0 * jstride ].r  = current[ i + 1 * jstride ].r;
-            current[ i + 0 * jstride ].θ  = current[ i + 1 * jstride ].θ;
+        if constexpr ( real_mode ) {
+            Jc.th *= dr_dt / rl;
+        } else {
+            Jc.th *= T( 0, static_cast<float>( 2 / ( m * dt ) ) );
         }
     }
 }
 
 /**
- * @brief Normalize current grid, modes m > 0
- * 
- * @param m             Mode
- * @param tile_idx      Tile index (x,y)
- * @param ntiles        Number of tiles in grid (x,y)
- * @param d_current     Pointer to current grid
- * @param offset        Offset to position (0,0) on the grid
- * @param nx            Tile grid size
- * @param ext_nx        External tile grid size
- * @param dx            Cell size (z,r)
- * @param dt            Time step
- * @param ir0           Coordinate of lower tile corner in grid
+ * @brief Set the wall / axis image currents in the guard cells, mode m
+ *
+ * Idempotent; used after copy_to_gc() on the normalized current and after
+ * every filter pass. Tiles not on a physical boundary exit immediately.
+ *
+ * @note Launch with grid( local_ntiles.x, local_ntiles.y )
+ *
+ * @param J_grid        View of the mode m current grid
+ * @param local_bc      Local rank boundary conditions
+ * @param m             Mode number
  */
-void current_norm_m(
-    unsigned const m,
-    uint2 const tile_idx,
-    uint2 const ntiles,
-    cyl3< std::complex<float> > * const __restrict__ d_current, int offset, 
-    uint2 const nx, uint2 const ext_nx,
-    float2 const dx, double dt,
-    const int ir0 ) {
+template< typename T >
+void current_images(
+    const uint2 tile_idx,
+    const grid::tiled_cyl3_view<T> J_grid,
+    const current::bc_type local_bc,
+    const int m ) {
 
-    auto tid = tile_idx.y * ntiles.x + tile_idx.x;
-    const int tile_off = tid * roundup4( ext_nx.x * ext_nx.y );
-    const int jstride = ext_nx.x;
+    const current_bc::tile_edges edges( local_bc, tile_idx.x, tile_idx.y, J_grid.local_ntiles );
 
-    auto * __restrict__ current = &  d_current[ tile_off + offset ];
+    // Uniform across the block, so the early exit is safe
+    if ( ! edges.z_walls() && ! edges.r_edges() ) return;
 
-    ///@brief radial cell size
-    auto dr = dx.y;
-    float const dz_dt = dx.x / dt; 
-    float const dr_dt = dx.y / dt; 
+    current_bc::tile_bc( J_grid.tile_buffer( tile_idx ), J_grid, edges, m, false );
+}
 
-    ///@brief Normalization for jθ
-    const std::complex<float> norm_θ{0,2/(m*static_cast<float>(dt))};
+} // namespace kernel
 
-    for( int j = -1; j < static_cast<int>(nx.y+2); j++ ){
-        /// @brief r at center of cell
-        float rc   = std::abs( ir0 + j        ) * dr;
-        /// @brief r at lower edge of cell
-        float rl   = std::abs( ir0 + j - 0.5f ) * dr;
-        
-        float norm_r  = ( ir0 + j == 0 )? 0 : (2 * dr_dt) / rc;
-        float norm_z  = ( 2 * dz_dt ) / rl;
+/**
+ * @brief Fold the current deposited beyond walls / axis and normalize for
+ *        ring particles, all modes
+ *
+ * @note Use exactly once per time step, on the raw deposit: after
+ *       add_from_gc() and before copy_to_gc()
+ *
+ * @note Relies on add_from_gc() leaving the guard cells on non-periodic
+ *       physical edges (including the axis) untouched, so that they still
+ *       hold the current deposited beyond the wall / axis.
+ */
+void current::fold_and_normalize() {
 
-        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ i + j * jstride ].z *= norm_z;
-            current[ i + j * jstride ].r *= norm_r;
-            current[ i + j * jstride ].θ *= norm_θ;
+    const auto ntiles = J -> get_local_ntiles();
+    const int nx = ntiles.x;
+    const int ny = ntiles.y;
+
+    #pragma omp parallel for collapse(2)
+    for( int ty = 0; ty < ny; ty ++ ) {
+        for( int tx = 0; tx < nx; tx ++ ) {
+            kernel::current_fold_norm( make_uint2(tx, ty),
+                mode0().view(), local_bc, 0, dx, dt
+            );
         }
     }
 
-    // Axial boundary
-    // Fold values for r < 0 back into simulation domain
-    if ( ir0 == 0 ) {
-
-        // alternative, signθ = -(-1)^m
-        // const auto signθ = ( m & 1 ) ? 1.f : -1.f;
-
-        if ( m != 1 ) {
-            std::cerr << "Only mode m = 1 supported, aborting..." << '\n';
-            std::exit(1);
-        }
-
-        for( int i = -1; i < static_cast<int>(nx.x+2); i++ ){
-            current[ i + 1 * jstride ].z += current[ i +   0  * jstride ].z;
-            current[ i + 2 * jstride ].z += current[ i + (-1) * jstride ].z;
-
-            current[ i + 1 * jstride ].r -= current[ i + (-1) * jstride ].r;
-
-            current[ i + 1 * jstride ].θ -= current[ i +   0  * jstride ].θ;
-            current[ i + 2 * jstride ].θ -= current[ i + (-1) * jstride ].θ;
-
-            // The following values are used for diagnostic output only
-            current[ i + 0 * jstride ].z  = current[ i + 1 * jstride ].z;
-            current[ i + 0 * jstride ].r  = current[ i + 1 * jstride ].r;
-            current[ i + 0 * jstride ].θ  = current[ i + 1 * jstride ].θ;
+    #pragma omp parallel for collapse(3)
+    for( int m = 1; m < nmodes; m++ ) {
+        for( int ty = 0; ty < ny; ty ++ ) {
+            for( int tx = 0; tx < nx; tx ++ ) {
+                kernel::current_fold_norm( make_uint2(tx, ty),
+                    mode(m).view(), local_bc, m, dx, dt
+                );
+            }
         }
     }
 }
 
-
 /**
- * @brief Normalize grid values for ring particles
- * 
+ * @brief Set the wall / axis image currents in the guard cells, all modes
+ *
+ * @note Idempotent. Use after copy_to_gc() on the normalized current, and
+ *       after every filter pass.
  */
-void Current::normalize() {
+void current::set_images() {
 
-    auto & J0 = J -> mode0();
-    const auto ntiles  = J0.get_ntiles();
-    const auto offset  = J0.offset;
-    const auto nx      = J0.nx;
-    const auto ext_nx  = J0.ext_nx;
+    // Nothing to do on ranks without physical (wall / axis) boundaries
+    if ( ! is_conducting( local_bc.x.lower ) && ! is_conducting( local_bc.x.upper ) &&
+         ! is_conducting( local_bc.y.upper ) && local_bc.y.lower != current::bc::axial ) return;
 
-    const auto global_tile_off = J0.get_tile_off();
+    const auto ntiles = J -> get_local_ntiles();
+    const int nx = ntiles.x;
+    const int ny = ntiles.y;
 
-    // Normalize mode m = 0
-    #pragma omp parallel for
-    for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
-        auto tile_idx = uint2{ tid % ntiles.x, tid / ntiles.x };
-        int ir0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
-        current_norm_0( tile_idx, ntiles, J0.d_buffer, offset, nx, ext_nx, dx, dt, ir0 );
+    #pragma omp parallel for collapse(2)
+    for( int ty = 0; ty < ny; ty ++ ) {
+        for( int tx = 0; tx < nx; tx ++ ) {
+            kernel::current_images ( make_uint2(tx,ty),
+                mode0().view(), local_bc, 0
+            );
+        }
     }
 
-    // Normalize higher order modes
-    #pragma omp parallel for
-    for( unsigned tid = 0; tid < ntiles.x * ntiles.y; tid ++ ) {
-        auto tile_idx = uint2{ tid % ntiles.x, tid / ntiles.x };
-        int ir0 = ( global_tile_off.y + tile_idx.y ) * nx.y;
-        for( int m = 1; m < nmodes; m++ ) {
-            auto & Jm = J -> mode(m);
-            current_norm_m( m, tile_idx, ntiles, Jm.d_buffer, offset, nx, ext_nx, dx, dt, ir0 );
+    #pragma omp parallel for collapse(3)
+    for( int m = 1; m < nmodes; m++ ) {
+        for( int ty = 0; ty < ny; ty ++ ) {
+            for( int tx = 0; tx < nx; tx ++ ) {
+                kernel::current_images( make_uint2(tx, ty),
+                    mode(m).view(), local_bc, m
+                );
+            }
         }
     }
 }
 
 /**
  * @brief Advance electric current to next iteration
- * 
- * Adds up current deposited on guard cells and (optionally) applies digital filtering
- * 
+ *
+ * 1. Add up current deposited on guard cells (internal boundaries)
+ * 2. Fold the current deposited beyond the walls / axis back into the domain
+ *    (raw deposit) and normalize for ring particles
+ * 3. Update guard cells and set the wall / axis images
+ * 4. Apply filtering, refreshing the wall / axis images after every pass
+ *
  */
-void Current::advance() {
+void current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc( );
+
+    // Fold current deposited beyond walls / axis and normalize
+    fold_and_normalize();
+
+    // Update guard cell values with normalized current and set the images
     J -> copy_to_gc( );
-
-    // Do additional bc calculations if needed
-    // Process_bc();
-
-    // Normalize for ring particles
-    normalize();
+    set_images();
 
     // Apply filtering
     apply_filter();
@@ -379,47 +481,61 @@ void Current::advance() {
     // Advance iteration count
     iter++;
 
-    // I'm not sure if this should be before or after `iter++`
-    // Note that it only affects the axis range on output data
-    if ( moving_window.needs_move( iter * dt ) )
-        moving_window.advance();
+    // Moving window is checked after the iteration count is advanced so
+    // that the window position matches the time label used by save()
+    // (iter * dt). This only affects the axis range on output data and must
+    // follow the same ordering as emf::advance()
+    if ( mov_window.needs_move( iter * dt ) )
+        mov_window.advance();
 }
 
 /**
  * @brief Save current density to file
- * 
- * @param fc        Which current component to save (r, θ or z)
+ *
+ * @param jc        Which current component to save (r, θ or z)
  * @param m         Mode
  */
-void Current::save( const fcomp::cyl jc, unsigned m ) {
+void current::save( const fcomp::cyl jc, unsigned m ) {
 
     std::string vfname  = "J" + std::to_string(m);      // Dataset name
     std::string vflabel = "J^" + std::to_string(m) + "_";    // Dataset label (for plots)
     std::string path{"CURRENT"};
 
     switch ( jc ) {
-        case( fcomp::z ) :
+        case( fcomp::cyl::z ) :
             vfname  += 'z';
             vflabel += 'z';
             break;
-        case( fcomp::r ) :
+        case( fcomp::cyl::r ) :
             vfname  += 'r';
             vflabel += 'r';
             break;
-        case( fcomp::θ ) :
+        case( fcomp::cyl::th ) :
             vfname  += "θ";
             vflabel += "\\theta";
             break;
         default:
-            std::cerr << "Invalid current component (jc) selected, aborting\n";
-            std::exit(1);
+            mpi::fatal( "Invalid field component (fc) selected" );
     }
+
+    zdf::grid_info info = {
+        .name = (char *) vfname.c_str(),
+        .ndims = 2,
+        .label = (char *) vflabel.c_str(),
+        .units = (char *) "e \\omega_n^2 / c",
+    };
+
+    zdf::iteration iteration = {
+        .n = iter,
+        .t = iter * dt,
+        .time_units = (char *) "1/\\omega_n"
+    };
 
     zdf::grid_axis axis[2];
     axis[0] = (zdf::grid_axis) {
         .name = (char *) "z",
-        .min = 0.0 + moving_window.motion(),
-        .max = box.x + moving_window.motion(),
+        .min = mov_window.motion(),
+        .max = box.x + mov_window.motion(),
         .label = (char *) "z",
         .units = (char *) "c/\\omega_n"
     };
@@ -432,18 +548,7 @@ void Current::save( const fcomp::cyl jc, unsigned m ) {
         .units = (char *) "c/\\omega_n"
     };
 
-    zdf::grid_info info = {
-        .name = (char *) vfname.c_str(),
-    	.label = (char *) vflabel.c_str(),
-    	.units = (char *) "e \\omega_n^2 / c",
-    	.axis = axis
-    };
-
-    zdf::iteration iteration = {
-    	.n = iter,
-    	.t = iter * dt,
-    	.time_units = (char *) "1/\\omega_n"
-    };
+    info.axis = axis;
 
     J -> save( m, jc, info, iteration, path );
 }
