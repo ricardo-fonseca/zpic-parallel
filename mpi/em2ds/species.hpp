@@ -536,7 +536,10 @@ public:
     /**
      * @brief Returns total time centered kinetic energy
      * 
-     * @return double 
+     * @note The energy is computed during push(); the value refers to the
+     *       last push and is not updated by advance( current & )
+     * 
+     * @return double  
      */
     double get_energy() const {
         // Normalize and return
@@ -548,8 +551,7 @@ public:
      * 
      * @return uint64_t
      */
-    auto get_nmove() const {
-
+    uint64_t get_nmove() const {
         return nmove;
     }
 

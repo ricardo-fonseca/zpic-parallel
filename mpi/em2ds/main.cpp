@@ -1,4 +1,5 @@
 #include <iostream>
+#include <string>
 
 #include "zpic.hpp"
 #include "util/term.hpp"
@@ -22,7 +23,7 @@ void test_tiled_grid( ) {
     const uint2 global_ntiles = { 3, 2 };
 
 
-    // const uint2 nx     = { 12, 12 };
+    // const uint2 tile_dims     = { 12, 12 };
     const uint2 tile_dims     = { 11, 17 };
 
     bounds_2d<unsigned int> gc;
@@ -45,6 +46,7 @@ void test_tiled_grid( ) {
     data.zero( );
     data.set( 1.0 );
 
+    #pragma omp parallel for
     for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
         const uint2 tile_idx = { tid % ntiles.x, tid / ntiles.x  };
         float * const __restrict__ tile_data = data.tile_data(tid);
@@ -115,6 +117,7 @@ void test_tiled_vec3_grid( ) {
     // data.set( float3{1.0, 2.0, 3.0} );
 
     // Set different value per tile
+    #pragma omp parallel for
     for( unsigned int tid = 0; tid < local_ntiles.y * local_ntiles.x; tid++ ) {
         const uint2 tile_idx = { tid % local_ntiles.x, tid / local_ntiles.x  };
         auto * const __restrict__ tile_data = data.tile_data( tid );
@@ -569,12 +572,8 @@ void test_laser( ) {
     
     save_emf();
 
-    std::ostringstream buffer;
-    buffer << niter << " iterations: ";
-
-    if ( mpi::root() ) t0.report( buffer.str() );
-
     if ( mpi::root() ) {
+        t0.report( std::to_string(niter) + " iterations.");
         std::cout << ansi::bold;
         std::cout << "Done!\n";
         std::cout << ansi::reset;
@@ -830,15 +829,6 @@ void test_weibel( )
     }                  
 }
 
-/**
- * @brief Print information about the environment
- * 
- */
-void info( ) {
-
-
-}
-
 int main( int argc, char *argv[] ) {
 
     // Initialize the MPI environment
@@ -847,9 +837,10 @@ int main( int argc, char *argv[] ) {
     // Initialize SIMD support
     simd::init();
 
+    // Initialize FFT library
     grid::fft::init();
 
-    info();
+    zpic::sys_info();
 
     // test_tiled_grid();
     // test_tiled_vec3_grid();
@@ -863,7 +854,6 @@ int main( int argc, char *argv[] ) {
     // test_inj();
     // test_mov();
     // test_current_charge();
-
     test_weibel();
 
     grid::fft::cleanup();

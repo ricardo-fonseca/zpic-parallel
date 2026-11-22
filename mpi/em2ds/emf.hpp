@@ -159,7 +159,7 @@ class emf {
     void save( quantity const quant, const fcomp::cart fc ) const;
     
     /**
-     * @brief Get EM field energy
+     * @brief Get local EM field energy
      * 
      * @note The energy will be recalculated each time this routine is called
      * 

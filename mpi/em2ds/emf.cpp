@@ -461,7 +461,7 @@ void emf::save( const quantity quant, fcomp::cart const fc ) const {
 }
 
 /**
- * @brief Get total field energy per field component
+ * @brief Get local field energy per field component
  * 
  * @warning This function will always recalculate the energy each time it is
  *          called.

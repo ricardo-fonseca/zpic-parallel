@@ -1,9 +1,9 @@
 #include "species.hpp"
+
 #include <vector>
 #include <cstddef>
 #include <iostream>
 #include <string>
-
 
 #include "grid/tiled.hpp"
 #include "parallel/partition.hpp"
@@ -17,7 +17,6 @@
  *          levels
  */
 constexpr int local_align = 64;
-
 
 /**
  * @brief Returns reciprocal Lorentz gamma factor
@@ -683,8 +682,6 @@ void move_deposit_kernel(
     memory::zero( _current_buffer, current.tile_vol );
     memory::zero( _charge_buffer, charge.tile_vol );
 
-    // sync
-
     // Move particles and deposit current
     const int tid = tile_idx.y * ntiles.x + tile_idx.x;
 
@@ -1157,7 +1154,6 @@ void push_kernel (
 
 #endif
 
-
 /**
  * @brief Initialize data structures and inject initial particle distribution
  * 
@@ -1529,7 +1525,7 @@ void species::move( )
 }
 
 /**
- * @brief       Accelerates particles using a Boris pusher
+ * @brief       Accelerates particles using a Boris / Euler pusher
  * 
  * @param E     Electric field
  * @param B     Magnetic field
@@ -1627,14 +1623,9 @@ void dep_charge_kernel(
         rho[ idx + 1 + ystride ] += s1y * s1x * q;
     }
 
-    // sync
-
-    // Copy data to global memory
-    {
-        float * __restrict__ tgt = charge.tile_buffer(tid);
-        for( unsigned i = 0; i < charge.tile_vol; i ++ )
-            tgt[i] += _charge_buffer[i];
-    } 
+    float * __restrict__ tgt = charge.tile_buffer(tid);
+    for( unsigned i = 0; i < charge.tile_vol; i ++ )
+        tgt[i] += _charge_buffer[i];
 }
 
 /**

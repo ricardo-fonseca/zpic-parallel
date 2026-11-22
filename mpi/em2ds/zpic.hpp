@@ -288,12 +288,23 @@ class simulation {
     /**
      * @brief Returns total number of particles moved
      * 
-     * @return unsigned long long 
+     * @note The default behavior is to only return the global result on the
+     *       root MPI node.
+     * 
+     * @param all           (optional) Set to true to return value on all MPI
+     *                      nodes, defaults to false
+     * @return uint64_t 
      */
-    inline uint64_t get_nmove() const {
+    uint64_t get_nmove( bool all = false ) {
         uint64_t nmove = 0;
-        for ( auto & sp : species ) 
-            nmove += sp -> get_nmove();
+        for (unsigned i = 0; i < species.size(); i++) nmove += species[i] -> get_nmove();
+        
+        if ( all ) {
+            parallel.allreduce( &nmove, 1, mpi::sum );
+        } else {
+            parallel.reduce( &nmove, 1, mpi::sum );
+        }
+
         return nmove;
     }
 };

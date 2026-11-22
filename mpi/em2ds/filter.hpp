@@ -1,7 +1,12 @@
 #pragma once
 
-#include  "grid/flat.hpp"
-#include  "grid/flat3.hpp"
+#include <complex>
+#include <memory>
+#include <algorithm>
+
+#include "grid/flat.hpp"
+#include "grid/flat3.hpp"
+#include "grid/fft.hpp"
 
 namespace filter {
 
@@ -20,9 +25,127 @@ class none : public digital {
     std::unique_ptr<digital> clone() const override {
         return std::make_unique<none>( *this );
     }
-    void apply( grid::flat<complex_t> & fld ) override { /* do nothing */ };
-    void apply( grid::flat3<complex_t> & fld ) override { /* do nothing */ };
+
+    void apply( grid::flat<complex_t> & ) override { /* do nothing */ };
+    void apply( grid::flat3<complex_t> & ) override { /* do nothing */ };
 };
+
+namespace kernel {
+
+/**
+ * @brief Range of local ky indices to be zeroed by the lowpass filter on a
+ *        k-space row
+ * 
+ * @note The FFTW k-space layout is transposed (x = ky, y = kx), split along kx
+ *       across ranks and holds the full ky extent locally, so each local row
+ *       corresponds to a single kx value. If kx is above the kx cutoff the
+ *       whole row is zeroed; otherwise, since ky is stored in FFT order (see
+ *       grid::fft::k()), the modes with |ky| above the ky cutoff form a single
+ *       contiguous range in the middle of the row. The mask depends only on
+ *       kx and |ky|, so Hermitian symmetry of the r2c half-spectrum is
+ *       preserved.
+ * 
+ * @note Cutoff positions are the same as in the GPU (cuFFTMp) version.
+ * 
+ * @param global_dims   Global k-space grid dimensions (x = ky, y = kx)
+ * @param local_dims    Local k-space grid dimensions
+ * @param local_start   Position of local grid on global grid
+ * @param iy            Local row (kx) index
+ * @param cutoff        Cutoff as a fraction of the Nyquist mode along x and y
+ * @param i0            (out) First local ky index to zero
+ * @param i1            (out) Last local ky index to zero + 1 (i1 == i0 zeroes
+ *                      nothing)
+ */
+inline void lowpass_range( 
+    const uint2 global_dims, const uint2 local_dims, const uint2 local_start,
+    const int iy, const float2 cutoff, int & i0, int & i1 )
+{
+    static_assert( grid::fft::kspace_transposed, "Transposed k-space layout expected" );
+
+    const int nky = global_dims.x;
+    const int nkx = global_dims.y;      // nx/2 + 1 (r2c half spectrum)
+    const int nx  = local_dims.x;
+
+    // Cutoff positions in global grid
+    const int kcx = cutoff.x * ( nkx - 1 );
+    const int kcy = cutoff.y * ( nky / 2 );
+
+    // Global kx mode
+    const int kx = int( local_start.y ) + iy;
+
+    // Row above the kx cutoff: zero everything
+    if ( kx > kcx ) {
+        i0 = 0;
+        i1 = nx;
+        return;
+    }
+
+    // Otherwise zero |ky| > kcy, i.e. global ky indices [ kcy + 1, nky - kcy - 1 ],
+    // converted to local indices
+    i0 = std::clamp( kcy + 1   - int( local_start.x ), 0, nx );
+    i1 = std::clamp( nky - kcy - int( local_start.x ), i0, nx );
+}
+
+/**
+ * @brief Lowpass filter for scalar k-space grids
+ * 
+ * @param fld       k-space grid
+ * @param cutoff    Cutoff as a fraction of the Nyquist mode along x and y
+ */
+inline void lowpass( grid::flat<complex_t> & fld, float2 const cutoff )
+{
+    const auto global_dims = fld.get_global_dims();
+    const auto local_dims  = fld.get_local_dims();
+    const auto local_start = fld.get_local_start();
+
+    complex_t * __restrict__ data = fld.data();
+    const int ystride = local_dims.x;
+    const int nrows   = local_dims.y;
+
+    // One row per iteration (one block per row in the GPU version)
+    #pragma omp parallel for schedule(static)
+    for( int iy = 0; iy < nrows; iy++ ) {
+        int i0, i1;
+        lowpass_range( global_dims, local_dims, local_start, iy, cutoff, i0, i1 );
+
+        complex_t * const row = &data[ iy * ystride ];
+        std::fill( row + i0, row + i1, complex_t(0) );
+    }
+}
+
+/**
+ * @brief Lowpass filter for vector (3 component) k-space grids
+ * 
+ * @param fld       k-space grid
+ * @param cutoff    Cutoff as a fraction of the Nyquist mode along x and y
+ */
+inline void lowpass( grid::flat3<complex_t> & fld, float2 const cutoff )
+{
+    const auto global_dims = fld.get_global_dims();
+    const auto local_dims  = fld.get_local_dims();
+    const auto local_start = fld.get_local_start();
+
+    complex_t * __restrict__ x_data = fld.x();
+    complex_t * __restrict__ y_data = fld.y();
+    complex_t * __restrict__ z_data = fld.z();
+
+    const int ystride = local_dims.x;
+    const int nrows   = local_dims.y;
+
+    // One row per iteration (one block per row in the GPU version)
+    #pragma omp parallel for schedule(static)
+    for( int iy = 0; iy < nrows; iy++ ) {
+        int i0, i1;
+        lowpass_range( global_dims, local_dims, local_start, iy, cutoff, i0, i1 );
+
+        const int off = iy * ystride;
+        std::fill( x_data + off + i0, x_data + off + i1, complex_t(0) );
+        std::fill( y_data + off + i0, y_data + off + i1, complex_t(0) );
+        std::fill( z_data + off + i0, z_data + off + i1, complex_t(0) );
+    }
+}
+
+} // namespace kernel
 
 /**
  * @brief Sharp (brick-wall) spectral lowpass filter
@@ -54,62 +177,12 @@ class lowpass : public digital {
     }
 
     void apply( grid::flat<complex_t> & fld ) override {
-        complex_t * __restrict__ data = fld.data();
-
-        auto dims = fld.get_local_dims();
-        auto start = fld.get_local_start();
-        auto global = fld.get_global_dims();
-
-        // Note that ky is along the x direction, and kx is along the y direction
-        const int kcx = cutoff.x * ( global.y - 1 );
-        const int kcy = cutoff.y * ( global.x / 2 );
-
-        #pragma omp parallel for
-        for( unsigned idx = 0; idx < dims.y * dims.x; idx++ ) {
-            const int ix = start.x + idx % dims.x;
-            const int iy = start.y + idx / dims.x;
-
-            // Note that ky is along the x direction, and kx is along the y direction
-            const float ky = std::abs(( 2 * ix < int(global.x) ) ? ix : ( ix - int(global.x) ) );
-            const float kx = iy;
-
-            if ( ky > kcy || kx > kcx ) {
-                data[ idx ] = 0;
-            }
-        }
-    };
+        kernel::lowpass( fld, cutoff );
+    }
     
     void apply( grid::flat3<complex_t> & fld ) override {
-        complex_t * __restrict__ data_x = fld.x();
-        complex_t * __restrict__ data_y = fld.y();
-        complex_t * __restrict__ data_z = fld.z();
-        
-
-        auto dims = fld.get_local_dims();
-        auto start = fld.get_local_start();
-        auto global = fld.get_global_dims();
-
-        // Note that ky is along the x direction, and kx is along the y direction
-        const int kcx = cutoff.x * global.y;
-        const int kcy = cutoff.y * global.x / 2;
-
-        #pragma omp parallel for
-        for( unsigned idx = 0; idx < dims.y * dims.x; idx++ ) {
-            const int ix = start.x + idx % dims.x;
-            const int iy = start.y + idx / dims.x;
-
-            // Note that ky is along the x direction, and kx is along the y direction
-            const float ky = std::abs(( 2 * ix < int(global.x) ) ? ix : ( ix - int(global.x) ) );
-            const float kx = iy;
-
-            if ( ky > kcy || kx > kcx ) {
-                data_x[ idx ] = 0;
-                data_y[ idx ] = 0;
-                data_z[ idx ] = 0;
-            }
-        }
-    };
+        kernel::lowpass( fld, cutoff );
+    }
 };
-
 
 }
