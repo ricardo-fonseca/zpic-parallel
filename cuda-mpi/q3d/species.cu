@@ -576,7 +576,9 @@ inline void dep_current_seg_0(
     const auto Δx  = __fsub_rn( t1.x, t0.x );
     const auto Δy  = __fsub_rn( t1.y, t0.y );
 
-    const auto jth = q * ( fma( - Δx , yif , Δy * xif ) ) / std::sqrt( fma( xif, xif, yif*yif) );
+    // Azimuthal displacement (r Δθ, cell units) times charge. The 1/3 factor
+    // is the normalization of the Jθ weights below
+    const auto jth = q * ( fma( - Δx , yif , Δy * xif ) ) / ( 3 * std::sqrt( fma( xif, xif, yif*yif) ) );
 
     int i = ix.x;
     int j = ix.y;
@@ -587,10 +589,13 @@ inline void dep_current_seg_0(
     gpu::block::atomic_fetch_add( &J[ stride * j     + i     ].r, wl2 * wp20 );
     gpu::block::atomic_fetch_add( &J[ stride * j     + (i+1) ].r, wl2 * wp21 );
 
-    gpu::block::atomic_fetch_add( &J[ stride * j     + i     ].th, jth * ( S0z0 * S0r0 + S1z0 * S1r0 + (S0z0 * S1r0 - S1z0 * S0r0)/2.0f ) );
-    gpu::block::atomic_fetch_add( &J[ stride * j     + (i+1) ].th, jth * ( S0z1 * S0r0 + S1z1 * S1r0 + (S0z1 * S1r0 - S1z1 * S0r0)/2.0f ) );
-    gpu::block::atomic_fetch_add( &J[ stride * (j+1) + i     ].th, jth * ( S0z0 * S0r1 + S1z0 * S1r1 + (S0z0 * S1r1 - S1z0 * S0r1)/2.0f ) );
-    gpu::block::atomic_fetch_add( &J[ stride * (j+1) + (i+1) ].th, jth * ( S0z1 * S0r1 + S1z1 * S1r1 + (S0z1 * S1r1 - S1z1 * S0r1)/2.0f ) );
+    // Jθ weights are the time average of Sz(t) Sr(t) along the segment:
+    //   (S0z S0r + S1z S1r)/3 + (S0z S1r + S1z S0r)/6
+    // The factor 1/3 is included in jth
+    gpu::block::atomic_fetch_add( &J[ stride * j     + i     ].th, jth * ( S0z0 * S0r0 + S1z0 * S1r0 + (S0z0 * S1r0 + S1z0 * S0r0)/2.0f ) );
+    gpu::block::atomic_fetch_add( &J[ stride * j     + (i+1) ].th, jth * ( S0z1 * S0r0 + S1z1 * S1r0 + (S0z1 * S1r0 + S1z1 * S0r0)/2.0f ) );
+    gpu::block::atomic_fetch_add( &J[ stride * (j+1) + i     ].th, jth * ( S0z0 * S0r1 + S1z0 * S1r1 + (S0z0 * S1r1 + S1z0 * S0r1)/2.0f ) );
+    gpu::block::atomic_fetch_add( &J[ stride * (j+1) + (i+1) ].th, jth * ( S0z1 * S0r1 + S1z1 * S1r1 + (S0z1 * S1r1 + S1z1 * S0r1)/2.0f ) );
 }
 
 /**
