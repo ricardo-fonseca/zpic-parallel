@@ -87,7 +87,7 @@ CFLAGS   += $(INCLUDES)
 # --------------------------------------------------------------------------- #
 
 SOURCE = emf.cpp laser.cpp current.cpp \
-         udist.cpp density.cpp species.cpp
+         udist.cpp density.cpp species.cpp cathode.cpp
 
 SOURCE += main.cpp
 

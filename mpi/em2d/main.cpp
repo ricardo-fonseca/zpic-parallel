@@ -259,7 +259,7 @@ void test_inj( ) {
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
     species electrons( "electrons", -1.0f, ppc );
@@ -311,7 +311,7 @@ void test_mov( ) {
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
     species electrons( "electrons", -1.0f, ppc );
@@ -359,7 +359,7 @@ void test_current( ) {
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
     species electrons( "electrons", -1.0f, ppc );
@@ -493,7 +493,7 @@ void test_mov_window_inj( ) {
 
     float2 box{ 30.72, 25.6 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
 
     // Disable periodic boundaries along x
     int2 periodic = { 0, 1 };
@@ -560,7 +560,7 @@ void test_lwfa()
 
     float2 box{ 30.72, 25.6 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
 
     if ( mpi::root() ) {
         std::cout << "(*info*) dt = " << dt << '\n';

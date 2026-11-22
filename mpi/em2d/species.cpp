@@ -1648,7 +1648,7 @@ void species_bcx(
  * @param bc            Boundary condition
  */
 void species_bcy(
-    int bnd_y, int tile_idx_x,
+    int tile_idx_x, int bnd_y, 
     part::particles_view const part,
     species::bc_type const bc ) 
 {
@@ -1719,7 +1719,7 @@ void species::process_bc() {
        #pragma omp parallel for collapse(2) schedule(dynamic)
         for( unsigned bnd_y : { 0, 1 } ) {
             for( unsigned tx = 0; tx < particles -> get_local_ntiles().x; tx ++ )
-                species_bcy ( bnd_y, tx, particles -> view(), local_bc );
+                species_bcy ( tx, bnd_y, particles -> view(), local_bc );
         }
     }
 }

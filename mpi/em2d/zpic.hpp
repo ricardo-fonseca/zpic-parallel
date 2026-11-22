@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
 #include "core/vec_types.hpp"
 #include "parallel/mpi.hpp"
@@ -23,77 +24,60 @@ namespace zpic {
  */
 inline void sys_info() {
     if ( mpi::root() ) {
-
         std::cout << "MPI running on " << mpi::size() << " processes\n";
-
-        #ifdef SIMD
-            std::cout << "SIMD support enabled\n";
-            std::cout << "  vector unit : " << simd::name << '\n';
-            std::cout << "  vector width: " << simd::width <<'\n';
-        #else
-            std::cout << "SIMD support not enabled\n";
-        #endif
-        
-        #ifdef _OPENMP
-            std::cout << "OpenMP enabled\n";
-            std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
-            std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
-            #pragma omp parallel
-            {
-                if ( omp_get_thread_num() == 0 )
-                    std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
-            }
-        #else
-            std::cout << "OpenMP support not enabled\n";
-        #endif
-
+        simd::info();
+        omp::info();
     }
 }
 
 /**
- * @brief CFL time limit from cell size
- * 
- * @param dx        Cell size
- * @return float    CFL time limit
- */
-inline float courant( const float2 dx ) {
-    return std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
-}
-
-/**
- * @brief CFL time limit number cells and box size 
- * 
- * @param gnx       Global number of cells
- * @param box       Simulation box size (global)
- * @return float    CFL time limit
- */
-inline float courant( const uint2 gnx, const float2 box  ) {
-    float2 dx = make_float2( box.x/gnx.x, box.y/gnx.y);
-    return courant(dx);
-}
-
-/**
- * @brief CFL time limit from number of tiles, tile size and simulation box size
- * 
- * @param ntiles    Number of tiles
- * @param nx        Number of cells per tile
- * @param box       Simulation box size (global)
- * @return float    CFL time limit
- */
-inline float courant( const uint2 ntiles, const uint2 nx, const float2 box ) {
-    float2 dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
-    return courant(dx);
-}
-
-
-/**
- * @brief EM2Ds simulation
+ * @brief EM2D simulation
  * 
  */
 class simulation {
 
+    public:
+
+    /**
+    * @brief CFL time limit from cell size
+    *
+    * @note This uses the stability limit from field solver
+    * 
+    * @param dx        Cell size
+    * @return float    CFL time limit
+    */
+    static float courant( const float2 dx ) {
+        return emf::courant(dx);
+    }
+
+    /**
+    * @brief CFL time limit number cells and box size 
+    * 
+    * @param gnx       Global number of cells
+    * @param box       Simulation box size (global)
+    * @return float    CFL time limit
+    */
+    static float courant( const uint2 gnx, const float2 box  ) {
+        float2 dx = make_float2( box.x/gnx.x, box.y/gnx.y);
+        return courant(dx);
+    }
+
+    /**
+    * @brief CFL time limit from number of tiles, tile size and simulation box size
+    * 
+    * @param ntiles    Number of tiles
+    * @param nx        Number of cells per tile
+    * @param box       Simulation box size (global)
+    * @return float    CFL time limit
+    */
+    static float courant( const uint2 ntiles, const uint2 nx, const float2 box ) {
+        float2 dx = make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) );
+        return courant(dx);
+    }
+
     private:
 
+    /// @brief number of iterations
     unsigned int iter;
 
     public:
@@ -111,12 +95,12 @@ class simulation {
     mpi::cart2d parallel;
 
     /// @brief EM fields
-    emf emf;
+    ::emf emf;
     /// @brief Electric current density
-    current current;
- 
+    ::current current;
+
     /// @brief Vector of particle species
-    std::vector <species*> species;
+    std::vector< ::species * > species;
 
     /**
      * @brief Construct a new simulation object
@@ -179,21 +163,12 @@ class simulation {
     /**
      * @brief Turns on the moving window algorithm
      * 
-     * @note This should be called after all species have been added to the
-     *       simulation
      */
     void set_moving_window() {
-        
-        if ( parallel.periodic.x ) {
-            mpi::fatal( "Unable to set_moving_window() with periodic x partition" );
-        }
-        
         emf.set_moving_window();
         current.set_moving_window();
-
-        for ( auto & sp : species ) {
-            sp -> set_moving_window();
-        }
+        for ( auto & sp : species )
+            sp->set_moving_window();
     }
 
     /**
@@ -201,7 +176,7 @@ class simulation {
      *
      * @param s     Particle species 
      */
-    inline void add_species( class species & s ) {
+    void add_species( class species & s ) {
         species.push_back( &s );
         s.initialize( box, global_ntiles, tile_dims, dt, species.size(), parallel );
     }
@@ -210,23 +185,112 @@ class simulation {
      * @brief Gets a pointer to a specific species object
      * 
      * @param name                species name
-     * @return species const* 
+     * @return species* (nullptr if not found)
      */
-    inline class species * get_species( const std::string & name ) {
-        unsigned id = 0;
-        for( id = 0; id < species.size(); id++ )
-            if ( (species[id])->name == name ) break;
-        return ( id < species.size() ) ? species[id] : nullptr;
+    class species * get_species( const std::string & name ) {
+        auto it = std::find_if( species.begin(), species.end(),
+            [&name]( const auto & s ) { return s->name == name; } );
+        return ( it != species.end() ) ? *it : nullptr;
+    }
+
+    const class species * get_species( const std::string & name ) const {
+        auto it = std::find_if( species.begin(), species.end(),
+            [&name]( const auto & s ) { return s->name == name; } );
+        return ( it != species.end() ) ? *it : nullptr;
+    }
+
+    /**
+     * @brief Checks that the species, field and current boundary conditions
+     *        are consistent
+     * 
+     * On every global edge:
+     * | current          | emf      | species    |
+     * |------------------|----------|------------|
+     * | none             | none     | open       |
+     * | periodic         | periodic | periodic   |
+     * | pec              | pec      | reflecting |
+     * | pmc              | pmc      | reflecting |
+     * | pec_absorbing    | pec      | open       |
+     * 
+     * Periodic boundaries are validated against the parallel partition by
+     * each object.
+     * 
+     * @note Calls mpi::fatal() on invalid combinations. This is a cheap host
+     *       side check, that could be called at every iteration so that 
+     *.      boundary conditions may be changed at any time.
+     */
+    void validate_bc() const {
+
+        // Access boundary values by direction / edge
+        auto at = []( auto const & b, coord::cart const dir, edge::pos const pos ) {
+            auto const & bd = ( dir == coord::x ) ? b.x : b.y;
+            return ( pos == edge::lower ) ? bd.lower : bd.upper;
+        };
+
+        auto const emf_bc = emf.get_bc();
+        auto const current_bc = current.get_bc();
+
+        for( auto dir : coord::all ) {
+            for( auto pos : edge::all ) {
+                std::string const loc = coord::name( dir ) + " " + edge::name( pos );
+
+                // Get current bc
+                auto const j = at( current_bc, dir, pos );
+
+                // Get required emf bc
+                emf::bc::type emf_req;
+                switch( at( current_bc, dir, pos ) ) {
+                case current::bc::none:
+                    emf_req = emf::bc::none; break;
+                case current::bc::pmc:
+                    emf_req = emf::bc::pmc; break;
+                case current::bc::pec_absorbing:
+                case current::bc::pec:
+                    emf_req = emf::bc::pec; break;
+                default:
+                    continue;   // periodic
+                } 
+
+                auto const e = at( emf_bc, dir, pos );
+                if ( e != emf_req ) {
+                    mpi::fatal( "emf (" + emf::bc::name( e ) + ") and current (" + 
+                        current::bc::name( j ) + ") boundary types do not match on the " +
+                        loc + " edge" );
+                }
+
+                // Get required species bc
+                species::bc::type sp_req;
+                switch( at( current_bc, dir, pos ) ) {
+                case current::bc::none:
+                case current::bc::pec_absorbing:
+                    sp_req = species::bc::open; break;
+                case current::bc::pec:
+                case current::bc::pmc:
+                    sp_req = species::bc::reflecting; break;
+                default:
+                    continue;   // periodic
+                }
+
+                for( auto const * sp : species ) {
+                    auto const s = at( sp -> get_bc(), dir, pos );
+                    if ( s != sp_req ) {
+                        mpi::fatal( "species " + sp -> name + ": the " + loc + " edge is " +
+                            species::bc::name( s ) + ", but the current boundary (" +
+                            current::bc::name( j ) + ") requires " + species::bc::name( sp_req ) );
+                    }
+                }
+            }
+        }
     }
 
     /**
      * @brief Advance simulation 1 iteration
      * 
      */
-    inline void advance( ) {
+    void advance() {
 
-        // Zero global current and charge
-        current.zero( );
+        // Zero global current
+        current.zero();
 
         // Advance all species
         for ( auto & sp : species ) {
@@ -234,7 +298,7 @@ class simulation {
         }
 
         // Update current edge values and guard cells
-        current.advance( );
+        current.advance();
 
         // Advance EM fields
         emf.advance( current );
@@ -249,7 +313,7 @@ class simulation {
     void advance_mov_window() {
 
         // Zero global current
-        current.zero();
+        current.zero( );
 
         // Advance all species
         for ( auto & sp : species ) {
@@ -270,31 +334,31 @@ class simulation {
      * 
      * @return unsigned int     Iteration
      */
-    inline unsigned int get_iter() const { return iter; };
+    unsigned int get_iter() { return iter; };
 
     /**
      * @brief Get current simulation time
      * 
-     * @return double   simulation time
+     * @return double   Simulation time
      */
-    inline double get_t() const { return iter * double(dt); };
+    double get_t() { return iter * double(dt); };
 
     /**
      * @brief Print global energy diagnostic
      * @note must be called by all MPI nodes
      */
-    inline void energy_info() {
+    void energy_info() {
         if ( parallel.root() ) {
             std::cout << "(*info*) Energy at n = " << iter << ", t = " << iter * double(dt)  << '\n';
         }
         
         double part_ene = 0;
-        for (unsigned i = 0; i < species.size(); i++) {
-            double kin = species[i]->get_energy();
+         for ( auto & sp : species ) {
+            double kin = sp -> get_energy();
             parallel.reduce( &kin, 1, mpi::sum );
             
             if ( parallel.root() )
-                std::cout << "(*info*) " << species[i]->name << " = " << kin << '\n';
+                std::cout << "(*info*) " << sp->name << " = " << kin << '\n';
 
             part_ene += kin;
         }
@@ -333,7 +397,8 @@ class simulation {
      */
     uint64_t get_nmove( bool all = false ) {
         uint64_t nmove = 0;
-        for (unsigned i = 0; i < species.size(); i++) nmove += species[i] -> get_nmove();
+        for ( auto & sp : species ) 
+            nmove += sp -> get_nmove();
         
         if ( all ) {
             parallel.allreduce( &nmove, 1, mpi::sum );
@@ -345,5 +410,4 @@ class simulation {
     }
 };
 
-
-}
+} // namespace zpic
