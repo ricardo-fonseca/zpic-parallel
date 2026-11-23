@@ -201,6 +201,18 @@ inline vec_f32 vec_load( const float * mem_addr) {
 }
 
 /**
+ * @brief Loads vector from unaligned memory
+ *
+ * @note Same as vec_load(), the load instruction has no alignment requirement
+ *
+ * @param mem_addr
+ * @return vec_f32
+ */
+inline vec_f32 vec_loadu( const float * mem_addr) {
+    return svld1_f32( svptrue_b32(), (float32_t *) mem_addr );
+}
+
+/**
  * @brief Stores vector to memory
  * 
  * @warning The address must be aligned to a 32 byte boundary
@@ -1233,5 +1245,51 @@ inline vint2 vint2_zero( ) {
 struct alignas(vec_mask) vmask2 {
     vec_mask x, y;
 };
+
+/**
+ * @brief Gathers pairs of consecutive floats from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (floats) and pairs need not be aligned.
+ *
+ * @note Used, e.g., to gather (real, imaginary) pairs of complex values (see
+ *       vec_gather_c() in vec_complex.hpp) with half the number of gathered
+ *       elements of 2 separate vec_gather() calls
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vfloat2      .x - first values, .y - second values
+ */
+inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
+    // 64 bit gathers (byte offsets), half the vector elements each
+    const svbool_t pg = svptrue_b64();
+    const svint64_t off_lo = svlsl_n_s64_x( pg, svunpklo_s64( vindex ), 2 );
+    const svint64_t off_hi = svlsl_n_s64_x( pg, svunpkhi_s64( vindex ), 2 );
+
+    const svfloat32_t lo = svreinterpret_f32_u64(
+        svld1_gather_s64offset_u64( pg, (uint64_t const *) base_addr, off_lo ) );
+    const svfloat32_t hi = svreinterpret_f32_u64(
+        svld1_gather_s64offset_u64( pg, (uint64_t const *) base_addr, off_hi ) );
+
+    // lo = x0 y0 x1 y1 ..., hi = ... ; de-interleave
+    return vfloat2{ svuzp1_f32( lo, hi ), svuzp2_f32( lo, hi ) };
+}
+
+/**
+ * @brief Gathers pairs of consecutive ints from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (ints) and pairs need not be aligned.
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vint2        .x - first values, .y - second values
+ */
+inline vint2 vec_gather_2( int const * base_addr, vec_i32 vindex ) {
+    const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
+    return vint2{ svreinterpret_s32_f32( v.x ), svreinterpret_s32_f32( v.y ) };
+}
 
 } // namespace simd

@@ -148,6 +148,18 @@ inline vec_f32 vec_load( const float * mem_addr) {
 }
 
 /**
+ * @brief Loads vector from unaligned memory
+ *
+ * @note Same as vec_load(), the load instruction has no alignment requirement
+ *
+ * @param mem_addr
+ * @return vec_f32
+ */
+inline vec_f32 vec_loadu( const float * mem_addr) {
+    return vld1q_f32( (float32_t *) mem_addr );
+}
+
+/**
  * @brief Stores vector to memory
  * 
  * @warning The address must be aligned to a 32 byte boundary
@@ -358,7 +370,8 @@ inline vec_mask32 vec_le( vec_f32 a, vec_f32 b ) {
  * @return vec_f32 
  */
 inline vec_f32 vec_fmadd( vec_f32 a, vec_f32 b, vec_f32 c ) { 
-    return vmlaq_f32( c, b, a );
+    // vmlaq_f32 is not fused on AArch64, use vfmaq_f32
+    return vfmaq_f32( c, a, b );
 }
 
 /**
@@ -370,7 +383,8 @@ inline vec_f32 vec_fmadd( vec_f32 a, vec_f32 b, vec_f32 c ) {
  * @return vec_f32 
  */
 inline vec_f32 vec_fmsub( vec_f32 a, vec_f32 b, vec_f32 c ) { 
-    return vmlaq_f32( c, b, vnegq_f32(a) );
+    // -( c - a*b ), single rounding (negation is exact)
+    return vnegq_f32( vfmsq_f32( c, a, b ) );
 }
 
 /**
@@ -382,7 +396,8 @@ inline vec_f32 vec_fmsub( vec_f32 a, vec_f32 b, vec_f32 c ) {
  * @return vec_f32 
  */
 inline vec_f32 vec_fnmadd( vec_f32 a, vec_f32 b, vec_f32 c ) {
-    return vmlsq_f32( c, b, a );
+    // vmlsq_f32 is not fused on AArch64, use vfmsq_f32
+    return vfmsq_f32( c, a, b );
 }
 
 /**
@@ -1134,5 +1149,55 @@ inline vint2 vint2_zero( ) {
 struct alignas(vec_mask32) vmask2 {
     vec_mask32 x, y;
 };
+
+/**
+ * @brief Gathers pairs of consecutive floats from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (floats) and pairs need not be aligned.
+ *
+ * @note Used, e.g., to gather (real, imaginary) pairs of complex values (see
+ *       vec_gather_c() in vec_complex.hpp) with half the number of gathered
+ *       elements of 2 separate vec_gather() calls
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vfloat2      .x - first values, .y - second values
+ */
+inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
+    // Pairs are loaded with 64 bit loads
+    const float32x4_t v01 = vcombine_f32(
+        vld1_f32( base_addr + vgetq_lane_s32( vindex, 0 ) ),
+        vld1_f32( base_addr + vgetq_lane_s32( vindex, 1 ) ) );
+    const float32x4_t v23 = vcombine_f32(
+        vld1_f32( base_addr + vgetq_lane_s32( vindex, 2 ) ),
+        vld1_f32( base_addr + vgetq_lane_s32( vindex, 3 ) ) );
+
+    // v01 = x0 y0 x1 y1, v23 = x2 y2 x3 y3
+    return vfloat2{ vuzp1q_f32( v01, v23 ), vuzp2q_f32( v01, v23 ) };
+}
+
+/**
+ * @brief Gathers pairs of consecutive ints from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (ints) and pairs need not be aligned.
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vint2        .x - first values, .y - second values
+ */
+inline vint2 vec_gather_2( int const * base_addr, vec_i32 vindex ) {
+    const int32x4_t v01 = vcombine_s32(
+        vld1_s32( base_addr + vgetq_lane_s32( vindex, 0 ) ),
+        vld1_s32( base_addr + vgetq_lane_s32( vindex, 1 ) ) );
+    const int32x4_t v23 = vcombine_s32(
+        vld1_s32( base_addr + vgetq_lane_s32( vindex, 2 ) ),
+        vld1_s32( base_addr + vgetq_lane_s32( vindex, 3 ) ) );
+
+    return vint2{ vuzp1q_s32( v01, v23 ), vuzp2q_s32( v01, v23 ) };
+}
 
 } // namespace simd

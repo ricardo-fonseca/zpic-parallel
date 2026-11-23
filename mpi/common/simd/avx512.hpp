@@ -239,6 +239,16 @@ inline __m512 vec_load( const float * mem_addr) {
 }
 
 /**
+ * @brief Loads vector from unaligned memory
+ *
+ * @param mem_addr
+ * @return __m512
+ */
+inline __m512 vec_loadu( const float * mem_addr) {
+    return _mm512_loadu_ps( mem_addr );
+}
+
+/**
  * @brief Stores vector to memory
  * 
  * @warning The address must be aligned to a 32 byte boundary
@@ -1407,5 +1417,54 @@ inline vint2 vint2_zero( ) {
 struct alignas(__mmask16) vmask2 {
     __mmask16 x, y;
 };
+
+/**
+ * @brief Gathers pairs of consecutive floats from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (floats) and pairs need not be aligned.
+ *
+ * @note Used, e.g., to gather (real, imaginary) pairs of complex values (see
+ *       vec_gather_c() in vec_complex.hpp) with half the number of gathered
+ *       elements of 2 separate vec_gather() calls
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vfloat2      .x - first values, .y - second values
+ */
+inline vfloat2 vec_gather_2( float const * base_addr, __m512i vindex ) {
+    // 64 bit gathers, 8 pairs each
+    const __m512i lo = _mm512_i32gather_epi64( _mm512_castsi512_si256( vindex ), base_addr, 4 );
+    const __m512i hi = _mm512_i32gather_epi64( _mm512_extracti64x4_epi64( vindex, 1 ), base_addr, 4 );
+
+    // lo = x0 y0 ... x7 y7, hi = x8 y8 ... x15 y15
+    const __m512i even = _mm512_set_epi32( 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 0 );
+    const __m512i odd  = _mm512_set_epi32( 31, 29, 27, 25, 23, 21, 19, 17, 15, 13, 11, 9, 7, 5, 3, 1 );
+
+    const __m512 flo = _mm512_castsi512_ps( lo );
+    const __m512 fhi = _mm512_castsi512_ps( hi );
+
+    return vfloat2{
+        _mm512_permutex2var_ps( flo, even, fhi ),
+        _mm512_permutex2var_ps( flo, odd,  fhi )
+    };
+}
+
+/**
+ * @brief Gathers pairs of consecutive ints from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (ints) and pairs need not be aligned.
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vint2        .x - first values, .y - second values
+ */
+inline vint2 vec_gather_2( int const * base_addr, __m512i vindex ) {
+    const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
+    return vint2{ _mm512_castps_si512( v.x ), _mm512_castps_si512( v.y ) };
+}
 
 } // namespace simd

@@ -162,6 +162,16 @@ inline __m256 vec_load( const float * mem_addr) {
 }
 
 /**
+ * @brief Loads vector from unaligned memory
+ *
+ * @param mem_addr
+ * @return __m256
+ */
+inline __m256 vec_loadu( const float * mem_addr) {
+    return _mm256_loadu_ps( mem_addr );
+}
+
+/**
  * @brief Stores vector to memory
  * 
  * @warning The address must be aligned to a 32 byte boundary
@@ -1149,5 +1159,56 @@ inline vint2 vint2_zero( ) {
 struct alignas(__m256i) vmask2 {
     __m256i x, y;
 };
+
+/**
+ * @brief Gathers pairs of consecutive floats from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (floats) and pairs need not be aligned.
+ *
+ * @note Used, e.g., to gather (real, imaginary) pairs of complex values (see
+ *       vec_gather_c() in vec_complex.hpp) with half the number of gathered
+ *       elements of 2 separate vec_gather() calls
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vfloat2      .x - first values, .y - second values
+ */
+inline vfloat2 vec_gather_2( float const * base_addr, __m256i vindex ) {
+    // 64 bit gathers, 4 pairs each
+    const __m256i lo = _mm256_i32gather_epi64( (long long const *) base_addr, _mm256_castsi256_si128( vindex ), 4 );
+    const __m256i hi = _mm256_i32gather_epi64( (long long const *) base_addr, _mm256_extracti128_si256( vindex, 1 ), 4 );
+
+    // lo = x0 y0 x1 y1 | x2 y2 x3 y3, hi = x4 y4 x5 y5 | x6 y6 x7 y7
+    const __m256 flo = _mm256_castsi256_ps( lo );
+    const __m256 fhi = _mm256_castsi256_ps( hi );
+
+    // x0 x1 x4 x5 | x2 x3 x6 x7 (and same for y)
+    const __m256 x = _mm256_shuffle_ps( flo, fhi, _MM_SHUFFLE( 2, 0, 2, 0 ) );
+    const __m256 y = _mm256_shuffle_ps( flo, fhi, _MM_SHUFFLE( 3, 1, 3, 1 ) );
+
+    // Reorder 64 bit blocks
+    return vfloat2{
+        _mm256_castpd_ps( _mm256_permute4x64_pd( _mm256_castps_pd( x ), _MM_SHUFFLE( 3, 1, 2, 0 ) ) ),
+        _mm256_castpd_ps( _mm256_permute4x64_pd( _mm256_castps_pd( y ), _MM_SHUFFLE( 3, 1, 2, 0 ) ) )
+    };
+}
+
+/**
+ * @brief Gathers pairs of consecutive ints from memory
+ *
+ * For each vector element i, loads base_addr[ vindex[i] ] into the x
+ * component and base_addr[ vindex[i] + 1 ] into the y component. Indices are
+ * in elements (ints) and pairs need not be aligned.
+ *
+ * @param base_addr     Base address
+ * @param vindex        Index (in elements) of the first value of each pair
+ * @return vint2        .x - first values, .y - second values
+ */
+inline vint2 vec_gather_2( int const * base_addr, __m256i vindex ) {
+    const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
+    return vint2{ _mm256_castps_si256( v.x ), _mm256_castps_si256( v.y ) };
+}
 
 } // namespace simd
