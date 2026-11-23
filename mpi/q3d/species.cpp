@@ -30,6 +30,19 @@ constexpr int local_align = 64;
 #define Q3D_FORCE_INLINE inline
 #endif
 
+/**
+ * @brief Trajectory splitter selection
+ * 
+ * 0 (default) - curved path splitter; 1 - original splitter (kept for
+ * reference / comparison with other codes, see split2d_cyl()). The SIMD
+ * move / deposit kernel implements the curved path splitter only, so the
+ * scalar move / deposit kernels are used when the original splitter is
+ * selected.
+ */
+#ifndef Q3D_ORIGINAL_SPLIT
+#define Q3D_ORIGINAL_SPLIT 0
+#endif
+
 /// @brief Maximum number of cylindrical modes supported
 /// @note The CPU code has no intrinsic limit, this matches the CUDA version
 int constexpr max_push_modes = 16;
@@ -690,7 +703,7 @@ inline void split2d_cyl(
     float εr;
 
 
-#if 0
+#if Q3D_ORIGINAL_SPLIT
     // Original code - keep for reference
     #warning Using original split2d_cyl
 
@@ -2015,6 +2028,591 @@ void vpush_all (
     tile_energy = energy;
 }
 
+/**
+ * @brief Trajectory segment (SIMD)
+ */
+struct vsegment {
+    vint2   ix;
+    vfloat2 x0, x1;
+    vfloat2 t0, t1;
+};
+
+/**
+ * @brief Split particle trajectories into segments fully contained in a
+ *        cell (SIMD version of split2d_cyl(), curved path splitter)
+ * 
+ * @note Same algorithm and operation order as the (new) split2d_cyl(). All
+ *       possible split positions are computed for every particle and the
+ *       segments are assembled using vec_select(). Values computed for lanes
+ *       that do not use them (e.g. the z-split position of a particle that
+ *       does not cross a z edge) may be inf / NaN, and are discarded.
+ * 
+ * @param ir0       Radial cell index of tile lower edge
+ * @param ix        (simd vector) Initial particle cell
+ * @param x0        (simd vector) Initial particle position (z,r)
+ * @param delta     (simd vector) Particle motion (z,r)
+ * @param deltai    (simd vector) [out] Particle cell motion
+ * @param t0        (simd vector) Initial transverse position (x,y)
+ * @param tdelta    (simd vector) Transverse motion (x,y)
+ * @param v0        (simd vector) [out] 1st segment
+ * @param v1        (simd vector) [out] 2nd segment
+ * @param v2        (simd vector) [out] 3rd segment
+ * @param cross_z   (simd vector) [out] Mask of particles crossing a z edge
+ * @param cross_r   (simd vector) [out] Mask of particles crossing a r edge
+ */
+inline void vsplit2d_cyl( 
+    const int ir0, const vint2 ix, const vfloat2 x0, const vfloat2 delta, vint2 & deltai,
+    const vfloat2 t0, const vfloat2 tdelta,
+    vsegment & v0, vsegment & v1, vsegment & v2,
+    vmask & cross_z, vmask & cross_r )
+{
+    const vfloat c_1_2 = vec_float( 0.5f );
+    const vint   c_1i  = vec_int( 1 );
+    const vint   c_0i  = vec_int( 0 );
+
+    /// @brief final (z,r) position, indexed to original cell
+    const vfloat2 x1{ vec_add( x0.x, delta.x ), vec_add( x0.y, delta.y ) };
+
+    /// @brief final (x,y) transverse position
+    const vfloat2 t1{ vec_add( t0.x, tdelta.x ), vec_add( t0.y, tdelta.y ) };
+
+    // Get cell (iz,ir) motion
+    deltai.x = vec_sub( vec_ge( x1.x, c_1_2, c_1i ), vec_lt( x1.x, vec_neg( c_1_2 ), c_1i ) );
+    deltai.y = vec_sub( vec_ge( x1.y, c_1_2, c_1i ), vec_lt( x1.y, vec_neg( c_1_2 ), c_1i ) );
+
+    // Get cell crossings
+    cross_z = vec_ne( deltai.x, c_0i );
+    cross_r = vec_ne( deltai.y, c_0i );
+
+    const vfloat fdeltai_x = vec_float( deltai.x );
+    const vfloat fdeltai_y = vec_float( deltai.y );
+
+    /// @brief cell position of z-split, if any
+    const vfloat zs = vec_mul( c_1_2, fdeltai_x );
+    /// @brief cell position of r-split, if any
+    const vfloat rs = vec_mul( c_1_2, fdeltai_y );
+
+    /// @brief |Δt|²
+    const vfloat a = vec_fmadd( tdelta.x, tdelta.x, vec_mul( tdelta.y, tdelta.y ) );
+    /// @brief t0 · Δt
+    const vfloat b = vec_fmadd( t0.x, tdelta.x, vec_mul( t0.y, tdelta.y ) );
+
+    /// @brief ir0 + ix.y
+    const vint ir = vec_add( vec_int( ir0 ), ix.y );
+    /// @brief initial radial position (cell based, as in the move kernels)
+    const vfloat r0 = vec_add( vec_float( ir ), x0.y );
+
+    // z-split
+    const vfloat εz = vec_div( vec_sub( zs, x0.x ), delta.x );
+    const vfloat xz = vec_fmadd( εz, tdelta.x, t0.x );
+    const vfloat yz = vec_fmadd( εz, tdelta.y, t0.y );
+    vfloat rz;
+    {
+        const vfloat den = vec_add( vec_sqrt( vec_fmadd( xz, xz, vec_mul( yz, yz ) ) ), r0 );
+        const vfloat drz = vec_div( vec_mul( εz, vec_fmadd( εz, a, vec_add( b, b ) ) ), den );
+        const vmask  use = vec_and( vec_ne( delta.y, vec_zero_float() ), vec_gt( den, vec_zero_float() ) );
+        rz = vec_select( x0.y, vec_add( x0.y, drz ), use );
+    }
+
+    // r-split
+    vfloat εr;
+    {
+        const vfloat c = vec_mul( vec_sub( x0.y, rs ),
+            vec_add( vec_add( vec_float( vec_add( ir, ir ) ), x0.y ), rs ) );
+        const vfloat disc = vec_max( vec_fmadd( b, b, vec_neg( vec_mul( a, c ) ) ), vec_zero_float() );
+        const vfloat qq = vec_neg( vec_add( b, vec_copysign( vec_sqrt( disc ), b ) ) );
+        const vfloat e1 = vec_div( qq, a );
+        const vfloat e2 = vec_div( c, qq );
+        const vfloat lo = vec_min( e1, e2 );
+        const vfloat hi = vec_max( e1, e2 );
+        const vfloat root = vec_select( hi, lo, vec_ge( lo, vec_zero_float() ) );
+        εr = vec_min( vec_max( root, vec_zero_float() ), vec_float( 1.0f ) );
+    }
+    const vfloat xr = vec_fmadd( εr, tdelta.x, t0.x );
+    const vfloat yr = vec_fmadd( εr, tdelta.y, t0.y );
+    const vfloat zr = vec_fmadd( εr, delta.x, x0.x );
+
+    // Crossing cases
+    const vmask both   = vec_and( cross_z, cross_r );
+    const vmask zfirst = vec_and( both, vec_lt( εz, εr ) );
+    /// @brief z-split is the 1st split (z-cross only, or z-cross first)
+    const vmask zsplit = vec_or( vec_and( cross_z, vec_not( cross_r ) ), zfirst );
+    /// @brief r-split is the 1st split (r-cross only, or r-cross first)
+    const vmask rsplit = vec_or( vec_and( cross_r, vec_not( cross_z ) ), vec_and( both, vec_not( zfirst ) ) );
+    /// @brief z-cross only
+    const vmask zonly  = vec_and( cross_z, vec_not( cross_r ) );
+    /// @brief r-cross only
+    const vmask ronly  = vec_and( cross_r, vec_not( cross_z ) );
+
+    const vfloat x1z = vec_sub( x1.x, fdeltai_x );
+    const vfloat x1r = vec_sub( x1.y, fdeltai_y );
+
+    // 1st segment
+    v0.ix = ix; v0.x0 = x0; v0.t0 = t0;
+    v0.x1.x = vec_select( vec_select( x1.x, zr, rsplit ), zs, zsplit );
+    v0.x1.y = vec_select( vec_select( x1.y, rs, rsplit ), rz, zsplit );
+    v0.t1.x = vec_select( vec_select( t1.x, xr, rsplit ), xz, zsplit );
+    v0.t1.y = vec_select( vec_select( t1.y, yr, rsplit ), yz, zsplit );
+
+    // 2nd segment
+    v1.ix.x = vec_select( ix.x, vec_add( ix.x, deltai.x ), zsplit );
+    v1.ix.y = vec_select( ix.y, vec_add( ix.y, deltai.y ), rsplit );
+    v1.x0.x = vec_select( zr,  vec_neg( zs ), zsplit );
+    v1.x0.y = vec_select( vec_neg( rs ), rz, zsplit );
+    v1.x1.x = vec_select( vec_select( vec_select( zs, vec_sub( zr, fdeltai_x ), zfirst ), x1.x, ronly ), x1z, zonly );
+    v1.x1.y = vec_select( vec_select( vec_select( vec_sub( rz, fdeltai_y ), rs, zfirst ), x1r, ronly ), x1.y, zonly );
+    v1.t0   = v0.t1;
+    v1.t1.x = vec_select( vec_select( xz, xr, zfirst ), t1.x, vec_or( zonly, ronly ) );
+    v1.t1.y = vec_select( vec_select( yz, yr, zfirst ), t1.y, vec_or( zonly, ronly ) );
+
+    // 3rd segment
+    v2.ix.x = vec_add( ix.x, deltai.x );
+    v2.ix.y = vec_add( ix.y, deltai.y );
+    v2.x0.x = vec_select( vec_neg( zs ), vec_sub( zr, fdeltai_x ), zfirst );
+    v2.x0.y = vec_select( vec_sub( rz, fdeltai_y ), vec_neg( rs ), zfirst );
+    v2.t0.x = vec_select( xz, xr, zfirst );
+    v2.t0.y = vec_select( yz, yr, zfirst );
+    v2.x1   = vfloat2{ x1z, x1r };
+    v2.t1   = t1;
+}
+
+/**
+ * @brief Mode 0 current weights of a segment (SIMD version of
+ *        dep_current_seg_0(), weights only)
+ * 
+ * @param s         (simd vector) Segment
+ * @param q         (simd vector) Particle charge
+ * @param w[out]    (simd vector) Weights: Jz(i,j), Jz(i,j+1), Jr(i,j),
+ *                  Jr(i+1,j), Jθ(i,j), Jθ(i+1,j), Jθ(i,j+1), Jθ(i+1,j+1)
+ */
+inline void vdep_weights_0( const vsegment & s, const vfloat q, vfloat w[8] )
+{
+    const vfloat c_1_2 = vec_float( 0.5f );
+
+    const vfloat S0z0 = vec_sub( c_1_2, s.x0.x );
+    const vfloat S0z1 = vec_add( c_1_2, s.x0.x );
+    const vfloat S1z0 = vec_sub( c_1_2, s.x1.x );
+    const vfloat S1z1 = vec_add( c_1_2, s.x1.x );
+
+    const vfloat S0r0 = vec_sub( c_1_2, s.x0.y );
+    const vfloat S0r1 = vec_add( c_1_2, s.x0.y );
+    const vfloat S1r0 = vec_sub( c_1_2, s.x1.y );
+    const vfloat S1r1 = vec_add( c_1_2, s.x1.y );
+
+    const vfloat wl1 = vec_mul( q, vec_sub( s.x1.x, s.x0.x ) );
+    const vfloat wl2 = vec_mul( q, vec_sub( s.x1.y, s.x0.y ) );
+
+    const vfloat wp10 = vec_mul( c_1_2, vec_add( S0r0, S1r0 ) );
+    const vfloat wp11 = vec_mul( c_1_2, vec_add( S0r1, S1r1 ) );
+    const vfloat wp20 = vec_mul( c_1_2, vec_add( S0z0, S1z0 ) );
+    const vfloat wp21 = vec_mul( c_1_2, vec_add( S0z1, S1z1 ) );
+
+    const vfloat xif = vec_add( s.t0.x, s.t1.x );
+    const vfloat yif = vec_add( s.t0.y, s.t1.y );
+    const vfloat Δx  = vec_sub( s.t1.x, s.t0.x );
+    const vfloat Δy  = vec_sub( s.t1.y, s.t0.y );
+
+    // Azimuthal displacement times charge, including the 1/3 normalization
+    const vfloat jθ = vec_div( 
+        vec_mul( q, vec_fmadd( vec_neg( Δx ), yif, vec_mul( Δy, xif ) ) ),
+        vec_mul( vec_float( 3.0f ), vec_sqrt( vec_fmadd( xif, xif, vec_mul( yif, yif ) ) ) ) );
+
+    w[0] = vec_mul( wl1, wp10 );
+    w[1] = vec_mul( wl1, wp11 );
+    w[2] = vec_mul( wl2, wp20 );
+    w[3] = vec_mul( wl2, wp21 );
+
+    // Jθ weights, time average of Sz(t) Sr(t) (the 1/3 factor is in jθ)
+    auto wth = [&]( vfloat S0z, vfloat S1z, vfloat S0r, vfloat S1r ) {
+        return vec_mul( jθ, vec_add( vec_fmadd( S0z, S0r, vec_mul( S1z, S1r ) ),
+            vec_mul( vec_fmadd( S0z, S1r, vec_mul( S1z, S0r ) ), c_1_2 ) ) );
+    };
+    w[4] = wth( S0z0, S1z0, S0r0, S1r0 );
+    w[5] = wth( S0z1, S1z1, S0r0, S1r0 );
+    w[6] = wth( S0z0, S1z0, S0r1, S1r1 );
+    w[7] = wth( S0z1, S1z1, S0r1, S1r1 );
+}
+
+/**
+ * @brief Geometry of a segment for the deposit of modes m > 0 (SIMD version
+ *        of the first part of dep_current_seg_n())
+ */
+struct vseg_m {
+    /// @brief exp( -i θ ) at the initial, final and mid points
+    vcomplex e1_0, e1_1, e1_m;
+    /// @brief exp( -i m θ ) at the initial, final and mid points (current m)
+    vcomplex e0, e1, em;
+    vfloat S0z0, S0z1, S1z0, S1z1, S0r0, S0r1, S1r0, S1r1;
+    vfloat dz, dr, wp10, wp11, wp20, wp21;
+
+    vseg_m() = default;
+
+    vseg_m( const vsegment & s ) {
+        const vfloat c_1_2 = vec_float( 0.5f );
+        const vfloat c_1   = vec_float( 1.0f );
+
+        const vfloat rcr0 = vec_div( c_1, vec_sqrt( vec_fmadd( s.t0.x, s.t0.x, vec_mul( s.t0.y, s.t0.y ) ) ) );
+        const vfloat rcr1 = vec_div( c_1, vec_sqrt( vec_fmadd( s.t1.x, s.t1.x, vec_mul( s.t1.y, s.t1.y ) ) ) );
+
+        const vfloat xif = vec_add( s.t0.x, s.t1.x );
+        const vfloat yif = vec_add( s.t0.y, s.t1.y );
+        const vfloat rrm2 = vec_div( c_1, vec_sqrt( vec_fmadd( xif, xif, vec_mul( yif, yif ) ) ) );
+
+        // exp( -i θ ) = cos θ - i sin θ
+        e1_0 = vec_complex( vec_mul( s.t0.x, rcr0 ), vec_neg( vec_mul( s.t0.y, rcr0 ) ) );
+        e1_1 = vec_complex( vec_mul( s.t1.x, rcr1 ), vec_neg( vec_mul( s.t1.y, rcr1 ) ) );
+        e1_m = vec_complex( vec_mul( xif, rrm2 ),    vec_neg( vec_mul( yif, rrm2 ) ) );
+
+        e0 = e1_0; e1 = e1_1; em = e1_m;
+
+        S0z0 = vec_sub( c_1_2, s.x0.x );
+        S0z1 = vec_add( c_1_2, s.x0.x );
+        S1z0 = vec_sub( c_1_2, s.x1.x );
+        S1z1 = vec_add( c_1_2, s.x1.x );
+        S0r0 = vec_sub( c_1_2, s.x0.y );
+        S0r1 = vec_add( c_1_2, s.x0.y );
+        S1r0 = vec_sub( c_1_2, s.x1.y );
+        S1r1 = vec_add( c_1_2, s.x1.y );
+
+        dz = vec_sub( s.x1.x, s.x0.x );
+        dr = vec_sub( s.x1.y, s.x0.y );
+
+        wp10 = vec_mul( c_1_2, vec_add( S0r0, S1r0 ) );
+        wp11 = vec_mul( c_1_2, vec_add( S0r1, S1r1 ) );
+        wp20 = vec_mul( c_1_2, vec_add( S0z0, S1z0 ) );
+        wp21 = vec_mul( c_1_2, vec_add( S0z1, S1z1 ) );
+    }
+
+    /**
+     * @brief Advance the angular factors to the next mode, exp( -i (m+1) θ )
+     */
+    void next_mode() {
+        e0 = vec_mul( e0, e1_0 );
+        e1 = vec_mul( e1, e1_1 );
+        em = vec_mul( em, e1_m );
+    }
+
+    /**
+     * @brief Current weights for the current mode
+     * 
+     * @param q         (simd vector) Particle charge
+     * @param w[out]    (simd vector) Weights, same order as vdep_weights_0()
+     */
+    void weights( const vfloat q, vcomplex w[8] ) const {
+        const vcomplex c0 = vec_sub( e0, em );
+        const vcomplex c1 = vec_sub( e1, em );
+
+        const vcomplex qwl1 = vec_mul( q, vec_mul( em, dz ) );
+        const vcomplex qwl2 = vec_mul( q, vec_mul( em, dr ) );
+
+        w[0] = vec_mul( qwl1, wp10 );
+        w[1] = vec_mul( qwl1, wp11 );
+        w[2] = vec_mul( qwl2, wp20 );
+        w[3] = vec_mul( qwl2, wp21 );
+
+        auto wth = [&]( vfloat S0z, vfloat S1z, vfloat S0r, vfloat S1r ) {
+            return vec_mul( q, vec_sub( vec_mul( c1, vec_mul( S1z, S1r ) ), vec_mul( c0, vec_mul( S0z, S0r ) ) ) );
+        };
+        w[4] = wth( S0z0, S1z0, S0r0, S1r0 );
+        w[5] = wth( S0z1, S1z1, S0r0, S1r0 );
+        w[6] = wth( S0z0, S1z0, S0r1, S1r1 );
+        w[7] = wth( S0z1, S1z1, S0r1, S1r1 );
+    }
+};
+
+/**
+ * @brief Move particles, deposit current (all modes) and shift positions,
+ *        SIMD version
+ * 
+ * Same algorithm as move_deposit_0() / move_deposit_n(), processing
+ * simd::width particles at a time: the particle motion, the trajectory
+ * split and the current weights (all modes) are computed with SIMD
+ * instructions, and the weights are then added to the tile current one
+ * particle at a time (segments in order, as in the scalar code), since
+ * different particles may update the same cells. Remaining particles are
+ * processed with the scalar code.
+ * 
+ * @param tile_idx          Tile index
+ * @param part              Particle data
+ * @param current_m0        Current grid (m=0)
+ * @param current_m         Current grids (m > 0), indexed by m (entry 0 unused)
+ * @param nmodes            Number of modes (including mode 0)
+ * @param dt_dx             Ratio between time step and cell size
+ * @param shift             Cell shift
+ * @param buffer_m0         Scratch buffer for the mode 0 tile current,
+ *                          current_m0.tile_vol elements (one per thread)
+ * @param buffer_m          Scratch buffer for the tile current of the modes
+ *                          m > 0, ( nmodes - 1 ) * tile_vol elements (one per
+ *                          thread)
+ */
+void vmove_deposit_n(
+    uint2 const tile_idx,
+    cyl_part::particles_view const part,
+    grid::tiled_cyl3_view<float> current_m0, 
+    grid::tiled_cyl3_view<complex_t> const * const current_m, 
+    const int nmodes,
+    float2 const dt_dx, const int2 shift,
+    cyl3<float> * const __restrict__ buffer_m0,
+    cyl3<complex_t> * const __restrict__ buffer_m )
+{
+    const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
+    const int tile_np   = part.tile_np[ tile_id ];
+
+    if ( tile_np == 0 ) return;
+
+    const int tile_vol = current_m0.tile_vol;
+
+    // Zero local current buffers
+    memory::zero( buffer_m0, tile_vol );
+    if ( nmodes > 1 ) memory::zero( buffer_m, ( nmodes - 1 ) * tile_vol );
+
+    cyl3<float>     * const J0 = & buffer_m0[ current_m0.inner_offset ];
+    cyl3<complex_t> * const Jm = & buffer_m[ current_m0.inner_offset ];
+    const int jstride = current_m0.tile_ystride();
+
+    const int part_offset  = part.tile_offset[ tile_id ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ th = &part.th[ part_offset ];
+    auto * __restrict__ q  = &part.q[ part_offset ];
+    
+    auto const dt_dz = dt_dx.x;
+    auto const dt_dr = dt_dx.y;
+
+    const int ir0 = (part.local_tile_start.y + tile_idx.y) * part.tile_dims.y;
+
+    constexpr int W = simd::width;
+
+    // Per lane storage for the scatter step
+    alignas(local_align) int   s_idx[3][W];
+    alignas(local_align) int   s_act[3][W];
+    alignas(local_align) float s_w0[3][8][W];
+    alignas(local_align) float s_wr[3][8][W];
+    alignas(local_align) float s_wi[3][8][W];
+
+    const vfloat vdt_dz = vec_float( dt_dz );
+    const vfloat vdt_dr = vec_float( dt_dr );
+    const vint   vshift_x = vec_int( shift.x );
+    const vint   vshift_y = vec_int( shift.y );
+
+    const int np_vec = ( tile_np / W ) * W;
+
+    for( int i = 0; i < np_vec; i += W ) {
+        const vfloat3 pu  = vec_load_s3( (float *) & u[i] );
+        const vfloat2 x0  = vec_load_s2( (float *) & x[i] );
+        const vint2   ix0 = vec_load_s2( (int *)   & ix[i] );
+        const vfloat2 θi  = vec_load_s2( (float *) & th[i] );
+        const vfloat  pq  = vec_loadu( & q[i] );
+
+        // Get 1 / Lorentz gamma
+        const vfloat rg = rgamma( pu );
+
+        // Cartesian motion
+        const vfloat Δx = vec_mul( vec_mul( vdt_dr, rg ), pu.x );
+        const vfloat Δy = vec_mul( vec_mul( vdt_dr, rg ), pu.y );
+
+        /// @brief initial radial position
+        const vfloat ri = vec_add( vec_float( vec_add( vec_int( ir0 ), ix0.y ) ), x0.y );
+        const vfloat xi = vec_mul( ri, θi.x );
+        const vfloat yi = vec_mul( ri, θi.y );
+
+        // New cartesian positions
+        const vfloat xf = vec_fmadd( ri, θi.x, Δx );
+        const vfloat yf = vec_fmadd( ri, θi.y, Δy );
+
+        const vfloat xif = vec_fmadd( ri, θi.x, xf );
+        const vfloat yif = vec_fmadd( ri, θi.y, yf );
+
+        /// @brief New radial position
+        const vfloat rf = vec_sqrt( vec_fmadd( xf, xf, vec_mul( yf, yf ) ) );
+        /// @brief radial motion
+        const vfloat Δr = vec_div( vec_fmadd( Δx, xif, vec_mul( Δy, yif ) ), vec_add( rf, ri ) );
+
+        // Advance grid (z,r) position
+        const vfloat Δz = vec_mul( vec_mul( vdt_dz, rg ), pu.z );
+
+        // Split trajectory
+        vint2 deltai;
+        vsegment seg[3];
+        vmask cross_z, cross_r;
+        vsplit2d_cyl( ir0, ix0, x0, vfloat2{ Δz, Δr }, deltai, vfloat2{ xi, yi }, vfloat2{ Δx, Δy },
+            seg[0], seg[1], seg[2], cross_z, cross_r );
+
+        const vmask act1 = vec_or( cross_z, cross_r );
+        const vmask act2 = vec_and( cross_z, cross_r );
+
+        /// @brief Number of segments that need to be processed (segments with
+        ///        no active lanes are skipped)
+        const int nseg_v = vec_any( act2 ) ? 3 : ( vec_any( act1 ) ? 2 : 1 );
+
+        // Segment cell index and active lanes
+        for( int s = 0; s < nseg_v; s++ ) 
+            vec_store( s_idx[s], vec_add( seg[s].ix.x, vec_mul( seg[s].ix.y, jstride ) ) );
+        for( int k = 0; k < W; k++ ) {
+            // vec_extract() of a mask may return -1 (AVX2, NEON) or 1 for true
+            s_act[1][k] = ( vec_extract( act1, k ) != 0 );
+            s_act[2][k] = ( vec_extract( act2, k ) != 0 );
+        }
+
+        // Mode 0 weights
+        for( int s = 0; s < nseg_v; s++ ) {
+            vfloat w[8];
+            vdep_weights_0( seg[s], pq, w );
+            for( int c = 0; c < 8; c++ ) vec_store( s_w0[s][c], w[c] );
+        }
+
+        // Deposit mode 0, one particle at a time (segments in order)
+        for( int k = 0; k < W; k++ ) {
+            const int nseg = 1 + s_act[1][k] + s_act[2][k];
+            for( int s = 0; s < nseg; s++ ) {
+                cyl3<float> * const Js = & J0[ s_idx[s][k] ];
+                Js[ 0           ].z  += s_w0[s][0][k];
+                Js[ jstride     ].z  += s_w0[s][1][k];
+                Js[ 0           ].r  += s_w0[s][2][k];
+                Js[ 1           ].r  += s_w0[s][3][k];
+                Js[ 0           ].th += s_w0[s][4][k];
+                Js[ 1           ].th += s_w0[s][5][k];
+                Js[ jstride     ].th += s_w0[s][6][k];
+                Js[ jstride + 1 ].th += s_w0[s][7][k];
+            }
+        }
+
+        // Modes m > 0
+        if ( nmodes > 1 ) {
+            vseg_m gm[3];
+            for( int s = 0; s < nseg_v; s++ ) gm[s] = vseg_m( seg[s] );
+
+            for( int m = 1; m < nmodes; m++ ) {
+                if ( m > 1 ) for( int s = 0; s < nseg_v; s++ ) gm[s].next_mode();
+
+                for( int s = 0; s < nseg_v; s++ ) {
+                    vcomplex w[8];
+                    gm[s].weights( pq, w );
+                    for( int c = 0; c < 8; c++ ) {
+                        vec_store( s_wr[s][c], w[c].re );
+                        vec_store( s_wi[s][c], w[c].im );
+                    }
+                }
+
+                cyl3<complex_t> * const J = Jm + ( m - 1 ) * tile_vol;
+                for( int k = 0; k < W; k++ ) {
+                    const int nseg = 1 + s_act[1][k] + s_act[2][k];
+                    for( int s = 0; s < nseg; s++ ) {
+                        cyl3<complex_t> * const Js = & J[ s_idx[s][k] ];
+                        Js[ 0           ].z  += complex_t( s_wr[s][0][k], s_wi[s][0][k] );
+                        Js[ jstride     ].z  += complex_t( s_wr[s][1][k], s_wi[s][1][k] );
+                        Js[ 0           ].r  += complex_t( s_wr[s][2][k], s_wi[s][2][k] );
+                        Js[ 1           ].r  += complex_t( s_wr[s][3][k], s_wi[s][3][k] );
+                        Js[ 0           ].th += complex_t( s_wr[s][4][k], s_wi[s][4][k] );
+                        Js[ 1           ].th += complex_t( s_wr[s][5][k], s_wi[s][5][k] );
+                        Js[ jstride     ].th += complex_t( s_wr[s][6][k], s_wi[s][6][k] );
+                        Js[ jstride + 1 ].th += complex_t( s_wr[s][7][k], s_wi[s][7][k] );
+                    }
+                }
+            }
+        }
+
+        // Modify cell position and store
+        const vfloat2 x1{ 
+            vec_sub( vec_add( x0.x, Δz ), vec_float( deltai.x ) ),
+            vec_sub( vec_add( x0.y, Δr ), vec_float( deltai.y ) )
+        };
+        vec_store_s2( (float *) & x[i], x1 );
+
+        // Modify cell and store
+        const vint2 ix1{
+            vec_add( vec_add( ix0.x, deltai.x ), vshift_x ),
+            vec_add( vec_add( ix0.y, deltai.y ), vshift_y )
+        };
+        vec_store_s2( (int *) & ix[i], ix1 );
+
+        // Store new angular position
+        const vfloat2 θf{ vec_div( xf, rf ), vec_div( yf, rf ) };
+        vec_store_s2( (float *) & th[i], θf );
+    }
+
+    // Remaining particles (scalar code, see move_deposit_n())
+    for( int i = np_vec; i < tile_np; i++ ) {
+        auto pu  = u[i];
+        auto x0  = x[i];
+        auto ix0 = ix[i];
+        auto θi  = th[i];
+        auto pq  = q[i];
+
+        float const rg = rgamma( pu );
+
+        auto Δx = dt_dr * rg * pu.x;
+        auto Δy = dt_dr * rg * pu.y;
+
+        auto ri = (ir0 + ix0.y) + x0.y;
+        auto xi = ri * θi.x;
+        auto yi = ri * θi.y;
+
+        auto xf = ops::fma( ri, θi.x, Δx );
+        auto yf = ops::fma( ri, θi.y, Δy );
+
+        auto xif = ops::fma( ri, θi.x, xf );
+        auto yif = ops::fma( ri, θi.y, yf );
+
+        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
+        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
+
+        auto Δz = dt_dz * rg * pu.z;
+        float2 delta = make_float2( Δz, Δr );
+
+        int2 deltai, cross;
+
+        int2 v0_ix; float2 v0_x0, v0_x1, v0_t0, v0_t1; 
+        int2 v1_ix; float2 v1_x0, v1_x1, v1_t0, v1_t1; 
+        int2 v2_ix; float2 v2_x0, v2_x1, v2_t0, v2_t1; 
+
+        split2d_cyl( 
+            ir0, ix0, x0, delta, deltai,
+            make_float2( xi, yi ), make_float2( Δx, Δy ),
+            v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
+            v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
+            v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
+            cross
+        );
+        
+                                  dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
+        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
+
+        if ( nmodes > 1 ) {
+                                      dep_current_seg_n( nmodes, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, Jm, jstride, tile_vol );
+            if ( cross.x || cross.y ) dep_current_seg_n( nmodes, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, Jm, jstride, tile_vol );
+            if ( cross.x && cross.y ) dep_current_seg_n( nmodes, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, Jm, jstride, tile_vol );
+        }
+
+        x[i] = make_float2( 
+            (x0.x + Δz ) - deltai.x,
+            (x0.y + Δr ) - deltai.y
+        );
+
+        ix[i] = make_int2(
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
+        );
+
+        th[i] = float2{ xf/rf, yf/rf };
+    }
+
+    // Add current to global buffers
+    {
+        float * dev_J = reinterpret_cast< float * > ( current_m0.tile_buffer(tile_id) );
+        float * loc_J = reinterpret_cast< float * > ( buffer_m0 );
+        for( int k = 0; k < 3 * tile_vol; k++ ) dev_J[ k ] += loc_J[ k ];
+    }
+
+    for( int m = 1; m < nmodes; m++ ) {
+        float * dev_J = reinterpret_cast< float * > ( current_m[m].tile_buffer(tile_id) );
+        float * loc_J = reinterpret_cast< float * > ( & buffer_m[ ( m - 1 ) * tile_vol ] );
+        for( int k = 0; k < 3 * 2 * tile_vol; k++ ) dev_J[ k ] += loc_J[ k ];
+    }
+}
+
 #endif // SIMD
 
 /**
@@ -2344,6 +2942,37 @@ void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
     auto ntiles = data.local_ntiles;
     uint64_t _nmove = 0;
 
+#if defined( SIMD ) && ! Q3D_ORIGINAL_SPLIT
+    {
+        // SIMD version, any number of modes
+        std::vector< grid::tiled_cyl3_view<complex_t> > Jm;
+        if ( nmodes > 1 ) {
+            Jm.reserve( nmodes );
+            Jm.push_back( current.mode(1).view() );     // entry 0 is unused
+            for( int m = 1; m < nmodes; m++ ) Jm.push_back( current.mode(m).view() );
+        }
+
+        auto const tile_vol = J0.tile_vol;
+
+        #pragma omp parallel reduction(+:_nmove)
+        {
+            // Per thread scratch buffers for the tile current
+            std::vector< cyl3<float> >     buffer_m0( tile_vol );
+            std::vector< cyl3<complex_t> > buffer_m( ( nmodes - 1 ) * tile_vol );
+
+            #pragma omp for collapse(2) schedule( dynamic )
+            for( int ty = 0; ty < ntiles.y; ty ++ ) {
+                for( int tx = 0; tx < ntiles.x; tx ++ ) {
+                    kernel::vmove_deposit_n( 
+                        make_uint2( tx, ty ),
+                        data, J0.view(), Jm.data(), nmodes,
+                        dt_dx, shift, buffer_m0.data(), buffer_m.data() );
+                    _nmove += data.tile_np[ ty * ntiles.x + tx ];
+                }
+            }
+        }
+    }
+#else
     switch (nmodes) {
     case 1: {
         #pragma omp parallel for collapse(2) schedule( dynamic ) reduction(+:_nmove)
@@ -2387,6 +3016,7 @@ void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
         }
     } break;
     }
+#endif
 
     nmoved += _nmove;
 }
