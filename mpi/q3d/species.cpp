@@ -2321,14 +2321,131 @@ struct vseg_m {
 };
 
 /**
+ * @brief Deposit the mode 0 current of a segment, masked SIMD version
+ *
+ * Same strategy as vdep_current_seg() in mpi/em2d: the current weights are
+ * computed with SIMD instructions (vdep_weights_0()), only for the lanes
+ * selected by the mask. The weights, cell indices and mask are stored to
+ * small local (aligned) arrays, and then added to the tile current one
+ * particle (lane) at a time.
+ *
+ * @param s         (simd vector) Segment
+ * @param q         (simd vector) Particle charge
+ * @param J         Mode 0 current grid, pointing at cell (0,0)
+ * @param stride    Current grid y stride
+ * @param mask      (simd vector) Particles to deposit
+ */
+inline void vdep_current_seg_0( const vsegment & s, const vfloat q,
+    cyl3<float> * __restrict__ J, const int stride, const vmask mask )
+{
+    if ( vec_any( mask ) ) {
+        constexpr int W = simd::width;
+
+        alignas(local_align) float w_s[8][W];
+        alignas(local_align) int   idx_s[W];
+        alignas(local_align) int   act_s[W];
+
+        {
+            vfloat w[8];
+            vdep_weights_0( s, q, w );
+            for( int c = 0; c < 8; c++ ) vec_store( w_s[c], w[c] );
+        }
+        vec_store( idx_s, vec_add( s.ix.x, vec_mul( s.ix.y, stride ) ) );
+        vec_store( act_s, vec_select( vec_int( 0 ), vec_int( 1 ), mask ) );
+
+        for( int k = 0; k < W; k++ ) {
+            // Only deposit particles with active mask
+            if ( act_s[k] ) {
+                cyl3<float> * __restrict__ const Js = & J[ idx_s[k] ];
+                Js[ 0          ].z  += w_s[0][k];
+                Js[ stride     ].z  += w_s[1][k];
+                Js[ 0          ].r  += w_s[2][k];
+                Js[ 1          ].r  += w_s[3][k];
+                Js[ 0          ].th += w_s[4][k];
+                Js[ 1          ].th += w_s[5][k];
+                Js[ stride     ].th += w_s[6][k];
+                Js[ stride + 1 ].th += w_s[7][k];
+            }
+        }
+    }
+}
+
+/**
+ * @brief Deposit the current of a segment for all modes m > 0, masked SIMD
+ *        version
+ *
+ * For each mode the current weights are computed with SIMD instructions
+ * (vseg_m), stored to small local (aligned) arrays, and then added to the
+ * tile current one particle (lane) at a time, only for the lanes selected by
+ * the mask (same strategy as vdep_current_seg() in mpi/em2d).
+ *
+ * @param nmodes    Number of modes (including mode 0)
+ * @param s         (simd vector) Segment
+ * @param q         (simd vector) Particle charge
+ * @param J         Mode 1 current grid, pointing at cell (0,0); mode m is at
+ *                  J + (m-1) * mstride
+ * @param stride    Current grid y stride
+ * @param mstride   Distance between the current grids of consecutive modes
+ * @param mask      (simd vector) Particles to deposit
+ */
+inline void vdep_current_seg_n( const int nmodes, const vsegment & s, const vfloat q,
+    cyl3<complex_t> * __restrict__ J, const int stride, const int mstride, const vmask mask )
+{
+    if ( vec_any( mask ) ) {
+        constexpr int W = simd::width;
+
+        alignas(local_align) float wr_s[8][W];
+        alignas(local_align) float wi_s[8][W];
+        alignas(local_align) int   idx_s[W];
+        alignas(local_align) int   act_s[W];
+
+        vec_store( idx_s, vec_add( s.ix.x, vec_mul( s.ix.y, stride ) ) );
+        vec_store( act_s, vec_select( vec_int( 0 ), vec_int( 1 ), mask ) );
+
+        vseg_m g( s );
+
+        for( int m = 1; m < nmodes; m++ ) {
+            if ( m > 1 ) g.next_mode();
+
+            {
+                vcomplex w[8];
+                g.weights( q, w );
+                for( int c = 0; c < 8; c++ ) {
+                    vec_store( wr_s[c], w[c].re );
+                    vec_store( wi_s[c], w[c].im );
+                }
+            }
+
+            cyl3<complex_t> * __restrict__ const Jm = J + ( m - 1 ) * mstride;
+
+            for( int k = 0; k < W; k++ ) {
+                // Only deposit particles with active mask
+                if ( act_s[k] ) {
+                    cyl3<complex_t> * __restrict__ const Js = & Jm[ idx_s[k] ];
+                    Js[ 0          ].z  += complex_t( wr_s[0][k], wi_s[0][k] );
+                    Js[ stride     ].z  += complex_t( wr_s[1][k], wi_s[1][k] );
+                    Js[ 0          ].r  += complex_t( wr_s[2][k], wi_s[2][k] );
+                    Js[ 1          ].r  += complex_t( wr_s[3][k], wi_s[3][k] );
+                    Js[ 0          ].th += complex_t( wr_s[4][k], wi_s[4][k] );
+                    Js[ 1          ].th += complex_t( wr_s[5][k], wi_s[5][k] );
+                    Js[ stride     ].th += complex_t( wr_s[6][k], wi_s[6][k] );
+                    Js[ stride + 1 ].th += complex_t( wr_s[7][k], wi_s[7][k] );
+                }
+            }
+        }
+    }
+}
+
+/**
  * @brief Move particles, deposit current (all modes) and shift positions,
  *        SIMD version
  * 
  * Same algorithm as move_deposit_0() / move_deposit_n(), processing
  * simd::width particles at a time: the particle motion, the trajectory
  * split and the current weights (all modes) are computed with SIMD
- * instructions, and the weights are then added to the tile current one
- * particle at a time (segments in order, as in the scalar code), since
+ * instructions. The current is deposited segment by segment
+ * (vdep_current_seg_0() / vdep_current_seg_n(), same strategy as mpi/em2d),
+ * one particle at a time for the particles using each segment, since
  * different particles may update the same cells. Remaining particles are
  * processed with the scalar code.
  * 
@@ -2384,12 +2501,6 @@ void vmove_deposit_n(
 
     constexpr int W = simd::width;
 
-    // Per lane storage for the scatter step
-    alignas(local_align) int   s_idx[3][W];
-    alignas(local_align) int   s_act[3][W];
-    alignas(local_align) float s_w0[3][8][W];
-    alignas(local_align) float s_wr[3][8][W];
-    alignas(local_align) float s_wi[3][8][W];
 
     const vfloat vdt_dz = vec_float( dt_dz );
     const vfloat vdt_dr = vec_float( dt_dr );
@@ -2434,82 +2545,26 @@ void vmove_deposit_n(
 
         // Split trajectory
         vint2 deltai;
-        vsegment seg[3];
+        vsegment seg0, seg1, seg2;
         vmask cross_z, cross_r;
         vsplit2d_cyl( ir0, ix0, x0, vfloat2{ Δz, Δr }, deltai, vfloat2{ xi, yi }, vfloat2{ Δx, Δy },
-            seg[0], seg[1], seg[2], cross_z, cross_r );
+            seg0, seg1, seg2, cross_z, cross_r );
 
-        const vmask act1 = vec_or( cross_z, cross_r );
-        const vmask act2 = vec_and( cross_z, cross_r );
+        // Masked deposit (as in mpi/em2d): segment by segment, from the vector
+        // registers, lanes selected by the segment masks
+        {
+            const vmask act0 = vec_eq( ix0.x, ix0.x );      // all lanes
+            const vmask act1 = vec_or( cross_z, cross_r );
+            const vmask act2 = vec_and( cross_z, cross_r );
 
-        /// @brief Number of segments that need to be processed (segments with
-        ///        no active lanes are skipped)
-        const int nseg_v = vec_any( act2 ) ? 3 : ( vec_any( act1 ) ? 2 : 1 );
+            vdep_current_seg_0( seg0, pq, J0, jstride, act0 );
+            vdep_current_seg_0( seg1, pq, J0, jstride, act1 );
+            vdep_current_seg_0( seg2, pq, J0, jstride, act2 );
 
-        // Segment cell index and active lanes
-        for( int s = 0; s < nseg_v; s++ ) 
-            vec_store( s_idx[s], vec_add( seg[s].ix.x, vec_mul( seg[s].ix.y, jstride ) ) );
-        for( int k = 0; k < W; k++ ) {
-            // vec_extract() of a mask may return -1 (AVX2, NEON) or 1 for true
-            s_act[1][k] = ( vec_extract( act1, k ) != 0 );
-            s_act[2][k] = ( vec_extract( act2, k ) != 0 );
-        }
-
-        // Mode 0 weights
-        for( int s = 0; s < nseg_v; s++ ) {
-            vfloat w[8];
-            vdep_weights_0( seg[s], pq, w );
-            for( int c = 0; c < 8; c++ ) vec_store( s_w0[s][c], w[c] );
-        }
-
-        // Deposit mode 0, one particle at a time (segments in order)
-        for( int k = 0; k < W; k++ ) {
-            const int nseg = 1 + s_act[1][k] + s_act[2][k];
-            for( int s = 0; s < nseg; s++ ) {
-                cyl3<float> * const Js = & J0[ s_idx[s][k] ];
-                Js[ 0           ].z  += s_w0[s][0][k];
-                Js[ jstride     ].z  += s_w0[s][1][k];
-                Js[ 0           ].r  += s_w0[s][2][k];
-                Js[ 1           ].r  += s_w0[s][3][k];
-                Js[ 0           ].th += s_w0[s][4][k];
-                Js[ 1           ].th += s_w0[s][5][k];
-                Js[ jstride     ].th += s_w0[s][6][k];
-                Js[ jstride + 1 ].th += s_w0[s][7][k];
-            }
-        }
-
-        // Modes m > 0
-        if ( nmodes > 1 ) {
-            vseg_m gm[3];
-            for( int s = 0; s < nseg_v; s++ ) gm[s] = vseg_m( seg[s] );
-
-            for( int m = 1; m < nmodes; m++ ) {
-                if ( m > 1 ) for( int s = 0; s < nseg_v; s++ ) gm[s].next_mode();
-
-                for( int s = 0; s < nseg_v; s++ ) {
-                    vcomplex w[8];
-                    gm[s].weights( pq, w );
-                    for( int c = 0; c < 8; c++ ) {
-                        vec_store( s_wr[s][c], w[c].re );
-                        vec_store( s_wi[s][c], w[c].im );
-                    }
-                }
-
-                cyl3<complex_t> * const J = Jm + ( m - 1 ) * tile_vol;
-                for( int k = 0; k < W; k++ ) {
-                    const int nseg = 1 + s_act[1][k] + s_act[2][k];
-                    for( int s = 0; s < nseg; s++ ) {
-                        cyl3<complex_t> * const Js = & J[ s_idx[s][k] ];
-                        Js[ 0           ].z  += complex_t( s_wr[s][0][k], s_wi[s][0][k] );
-                        Js[ jstride     ].z  += complex_t( s_wr[s][1][k], s_wi[s][1][k] );
-                        Js[ 0           ].r  += complex_t( s_wr[s][2][k], s_wi[s][2][k] );
-                        Js[ 1           ].r  += complex_t( s_wr[s][3][k], s_wi[s][3][k] );
-                        Js[ 0           ].th += complex_t( s_wr[s][4][k], s_wi[s][4][k] );
-                        Js[ 1           ].th += complex_t( s_wr[s][5][k], s_wi[s][5][k] );
-                        Js[ jstride     ].th += complex_t( s_wr[s][6][k], s_wi[s][6][k] );
-                        Js[ jstride + 1 ].th += complex_t( s_wr[s][7][k], s_wi[s][7][k] );
-                    }
-                }
+            if ( nmodes > 1 ) {
+                vdep_current_seg_n( nmodes, seg0, pq, Jm, jstride, tile_vol, act0 );
+                vdep_current_seg_n( nmodes, seg1, pq, Jm, jstride, tile_vol, act1 );
+                vdep_current_seg_n( nmodes, seg2, pq, Jm, jstride, tile_vol, act2 );
             }
         }
 
