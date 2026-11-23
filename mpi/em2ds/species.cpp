@@ -1295,7 +1295,8 @@ void species_bcx(
             for( int i = 0; i < np; i++ ) {
                 if( ix[i].x >=  nx ) {
                     ix[i].x -= 1;
-                    x[i].x = -x[i].x;
+                    // Protects against x[i].x exactly == -0.5
+                    x[i].x = std::fmin( -x[i].x, std::nextafter( 0.5f, 0.f ) );
                     u[i].x = -u[i].x;
                 }
             }
@@ -1354,7 +1355,8 @@ void species_bcy(
             for( int i = 0; i < np; i++ ) {
                 if( ix[i].y >=  ny ) {
                     ix[i].y -= 1;
-                    x[i].y = -x[i].y;
+                    // Protects against x[i].y exactly == -0.5
+                    x[i].y = std::fmin( -x[i].y, std::nextafter( 0.5f, 0.f ) );
                     u[i].y = -u[i].y;
                 }
             }
