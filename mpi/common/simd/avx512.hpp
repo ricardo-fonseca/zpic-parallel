@@ -261,7 +261,8 @@ inline __m512 vec_store( float * mem_addr, __m512 a ) {
 }
 
 inline __m512 vec_neg( __m512 a ) {
-    return _mm512_sub_ps( _mm512_setzero_ps(), a );
+    // Flip the sign bit (0 - a would give +0 for a = +0)
+    return _mm512_castsi512_ps( _mm512_xor_si512( _mm512_castps_si512( a ), _mm512_set1_epi32( (int) 0x80000000 ) ) );
 }
 
 /**
@@ -1465,6 +1466,48 @@ inline vfloat2 vec_gather_2( float const * base_addr, __m512i vindex ) {
 inline vint2 vec_gather_2( int const * base_addr, __m512i vindex ) {
     const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
     return vint2{ _mm512_castps_si512( v.x ), _mm512_castps_si512( v.y ) };
+}
+
+/**
+ * @brief Maximum of 2 vectors (by element), with the semantics of std::fmax()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline __m512 vec_max( const __m512 a, const __m512 b ) {
+    // _mm512_max_ps returns b if either value is NaN
+    const __m512 r = _mm512_max_ps( a, b );
+    return _mm512_mask_blend_ps( _mm512_cmp_ps_mask( b, b, _CMP_UNORD_Q ), r, a );
+}
+
+/**
+ * @brief Minimum of 2 vectors (by element), with the semantics of std::fmin()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline __m512 vec_min( const __m512 a, const __m512 b ) {
+    // _mm512_min_ps returns b if either value is NaN
+    const __m512 r = _mm512_min_ps( a, b );
+    return _mm512_mask_blend_ps( _mm512_cmp_ps_mask( b, b, _CMP_UNORD_Q ), r, a );
+}
+
+/**
+ * @brief Returns a value with the magnitude of a and the sign of b (by
+ *        element), same as std::copysign()
+ *
+ * @param a     a vector (magnitude)
+ * @param b     b vector (sign)
+ */
+inline __m512 vec_copysign( const __m512 a, const __m512 b ) {
+    const __m512i sign = _mm512_set1_epi32( (int) 0x80000000 );
+    return _mm512_castsi512_ps( _mm512_or_si512(
+        _mm512_andnot_si512( sign, _mm512_castps_si512( a ) ),
+        _mm512_and_si512( sign, _mm512_castps_si512( b ) ) ) );
 }
 
 } // namespace simd

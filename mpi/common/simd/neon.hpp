@@ -1200,4 +1200,41 @@ inline vint2 vec_gather_2( int const * base_addr, vec_i32 vindex ) {
     return vint2{ vuzp1q_s32( v01, v23 ), vuzp2q_s32( v01, v23 ) };
 }
 
+/**
+ * @brief Maximum of 2 vectors (by element), with the semantics of std::fmax()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline vec_f32 vec_max( const vec_f32 a, const vec_f32 b ) {
+    // IEEE maxNum
+    return vmaxnmq_f32( a, b );
+}
+
+/**
+ * @brief Minimum of 2 vectors (by element), with the semantics of std::fmin()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline vec_f32 vec_min( const vec_f32 a, const vec_f32 b ) {
+    // IEEE minNum
+    return vminnmq_f32( a, b );
+}
+
+/**
+ * @brief Returns a value with the magnitude of a and the sign of b (by
+ *        element), same as std::copysign()
+ *
+ * @param a     a vector (magnitude)
+ * @param b     b vector (sign)
+ */
+inline vec_f32 vec_copysign( const vec_f32 a, const vec_f32 b ) {
+    return vbslq_f32( vdupq_n_u32( 0x80000000 ), b, a );
+}
+
 } // namespace simd

@@ -1008,18 +1008,6 @@ inline int vec_any( const vec_mask mask ) {
 }
 
 /**
- * @brief Extract a single logical value from a mask
- * 
- * @param mask      Input mask
- * @param i         Element index
- * @return int      Selected value (0 or 1)
- */
-inline int vec_extract( const vec_mask mask, int i ) {
-    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
-    return svlastb_s32( svwhilele_b32( 0, i ), v );
-}
-
-/**
  * @brief Returns a mask of all true values
  * 
  * @return vec_mask 
@@ -1040,18 +1028,6 @@ inline vec_mask vec_false() {
 /**
  * @brief Extract a single mask bit from a vec_mask
  * 
- * @param mask      Input vec_mask
- * @param i         Which value to extract
- * @return int      Selected value 
- */
-inline int vec_extract( const vec_mask mask, int i ) {
-    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
-    return svlastb_s32( svwhilele_b32( 0, i ), v );
-}
-
-/**
- * @brief Extract a single mask bit from a vec_mask
- * 
  * @tparam imm      Which value to extract
  * @param mask      Input vec_mask
  * @return int      Selected value 
@@ -1061,6 +1037,18 @@ inline int vec_extract( const vec_mask mask ) {
     static_assert( imm >= 0 && imm < sve_vec_width, "imm must be in the range [0..vec_width[" );
     vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
     return  v[imm];
+}
+
+/**
+ * @brief Extract a single logical value from a mask
+ * 
+ * @param mask      Input mask
+ * @param i         Element index
+ * @return int      Selected value (0 or 1)
+ */
+inline int vec_extract( const vec_mask mask, int i ) {
+    vec_i32 v = svsel_s32( mask, svdup_n_s32(1), svdup_n_s32(0) );
+    return svlastb_s32( svwhilele_b32( 0, i ), v );
 }
 
 /**
@@ -1290,6 +1278,46 @@ inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
 inline vint2 vec_gather_2( int const * base_addr, vec_i32 vindex ) {
     const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
     return vint2{ svreinterpret_s32_f32( v.x ), svreinterpret_s32_f32( v.y ) };
+}
+
+/**
+ * @brief Maximum of 2 vectors (by element), with the semantics of std::fmax()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline vec_f32 vec_max( const vec_f32 a, const vec_f32 b ) {
+    // IEEE maxNum
+    return svmaxnm_f32_x( svptrue_b32(), a, b );
+}
+
+/**
+ * @brief Minimum of 2 vectors (by element), with the semantics of std::fmin()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline vec_f32 vec_min( const vec_f32 a, const vec_f32 b ) {
+    // IEEE minNum
+    return svminnm_f32_x( svptrue_b32(), a, b );
+}
+
+/**
+ * @brief Returns a value with the magnitude of a and the sign of b (by
+ *        element), same as std::copysign()
+ *
+ * @param a     a vector (magnitude)
+ * @param b     b vector (sign)
+ */
+inline vec_f32 vec_copysign( const vec_f32 a, const vec_f32 b ) {
+    const svbool_t pg = svptrue_b32();
+    return svreinterpret_f32_u32( svorr_u32_x( pg,
+        svand_n_u32_x( pg, svreinterpret_u32_f32( a ), 0x7fffffff ),
+        svand_n_u32_x( pg, svreinterpret_u32_f32( b ), 0x80000000 ) ) );
 }
 
 } // namespace simd

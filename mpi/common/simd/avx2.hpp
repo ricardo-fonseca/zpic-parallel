@@ -184,7 +184,8 @@ inline __m256 vec_store( float * mem_addr, __m256 a ) {
 }
 
 inline __m256 vec_neg( __m256 a ) {
-    return _mm256_sub_ps( _mm256_setzero_ps(), a );
+    // Flip the sign bit (0 - a would give +0 for a = +0)
+    return _mm256_xor_ps( a, _mm256_set1_ps( -0.0f ) );
 }
 
 /**
@@ -1209,6 +1210,46 @@ inline vfloat2 vec_gather_2( float const * base_addr, __m256i vindex ) {
 inline vint2 vec_gather_2( int const * base_addr, __m256i vindex ) {
     const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
     return vint2{ _mm256_castps_si256( v.x ), _mm256_castps_si256( v.y ) };
+}
+
+/**
+ * @brief Maximum of 2 vectors (by element), with the semantics of std::fmax()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline __m256 vec_max( const __m256 a, const __m256 b ) {
+    // _mm256_max_ps returns b if either value is NaN
+    const __m256 r = _mm256_max_ps( a, b );
+    return _mm256_blendv_ps( r, a, _mm256_cmp_ps( b, b, _CMP_UNORD_Q ) );
+}
+
+/**
+ * @brief Minimum of 2 vectors (by element), with the semantics of std::fmin()
+ *
+ * @note If one of the values is NaN the other one is returned
+ *
+ * @param a     a vector
+ * @param b     b vector
+ */
+inline __m256 vec_min( const __m256 a, const __m256 b ) {
+    // _mm256_min_ps returns b if either value is NaN
+    const __m256 r = _mm256_min_ps( a, b );
+    return _mm256_blendv_ps( r, a, _mm256_cmp_ps( b, b, _CMP_UNORD_Q ) );
+}
+
+/**
+ * @brief Returns a value with the magnitude of a and the sign of b (by
+ *        element), same as std::copysign()
+ *
+ * @param a     a vector (magnitude)
+ * @param b     b vector (sign)
+ */
+inline __m256 vec_copysign( const __m256 a, const __m256 b ) {
+    const __m256 sign = _mm256_set1_ps( -0.0f );
+    return _mm256_or_ps( _mm256_andnot_ps( sign, a ), _mm256_and_ps( sign, b ) );
 }
 
 } // namespace simd
