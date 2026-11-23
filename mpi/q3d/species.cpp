@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-// Not implemented yet
-// #include "simd/simd.hpp"
+#include "simd/simd.hpp"
+#include "simd/vec_complex.hpp"
 
 using complex_t = species::complex_t;
 
@@ -15,6 +15,20 @@ using complex_t = species::complex_t;
  *          levels
  */
 constexpr int local_align = 64;
+
+/**
+ * @brief Force inlining of the small per-particle routines used inside the
+ *        multi-mode loops
+ * 
+ * @note GCC does not inline dep_current_seg_n() / interpolate_fld_w() on its
+ *       own (they contain loops / are called several times per particle), and
+ *       the call overhead roughly doubles the cost of the single pass kernels
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define Q3D_FORCE_INLINE __attribute__((always_inline)) inline
+#else
+#define Q3D_FORCE_INLINE inline
+#endif
 
 /// @brief Maximum number of cylindrical modes supported
 /// @note The CPU code has no intrinsic limit, this matches the CUDA version
@@ -216,106 +230,6 @@ void interpolate_fld(
           ( E[i  + (j +1)*jstride].th * s0z  + E[i+1  + (j +1)*jstride].th * s1z ) * s1r;
 
     // Interpolate B fieldj
-    b.z = ( B[i  +     jh*jstride].z * s0z  + B[i+1  +     jh*jstride].z * s1z ) * s0rh +
-          ( B[i  + (jh+1)*jstride].z * s0z  + B[i+1  + (jh+1)*jstride].z * s1z ) * s1rh;
-
-    b.r = ( B[ih +      j*jstride].r * s0zh + B[ih+1 +      j*jstride].r * s1zh ) * s0r +
-          ( B[ih + (j +1)*jstride].r * s0zh + B[ih+1 + (j +1)*jstride].r * s1zh ) * s1r;
-
-    b.th = ( B[ih +     jh*jstride].th * s0zh + B[ih+1 +     jh*jstride].th * s1zh ) * s0rh +
-          ( B[ih + (jh+1)*jstride].th * s0zh + B[ih+1 + (jh+1)*jstride].th * s1zh ) * s1rh;
-}
-
-/**
- * @brief Interpolate the E field at the particle position (linear)
- * 
- * @note Same interpolation as interpolate_fld(), for the E field only
- * 
- * @param E         Pointer to position (0,0) of E field grid
- * @param jstride   Grid y stride (must be signed)
- * @param ix        Particle cell index
- * @param x         Particle position inside cell
- * @param e[out]    E field at particle position
- */
-template< typename T >
-void interpolate_e( 
-    cyl3<T> const * const __restrict__ E, const int jstride,
-    const int2 ix, const float2 x, cyl3<T> & e )
-{
-    const int i = ix.x;
-    const int j = ix.y;
-
-    const auto z = x.x;
-    const auto r = x.y;
-
-    const auto s0z = 0.5f - z;
-    const auto s1z = 0.5f + z;
-
-    const auto s0r = 0.5f - r;
-    const auto s1r = 0.5f + r;
-
-    const int hz = z < 0;
-    const int hr = r < 0;
-
-    const int ih = i - hz;
-    const int jh = j - hr;
-
-    const auto s0zh = (1-hz) - z;
-    const auto s1zh = (  hz) + z;
-
-    const auto s0rh = (1-hr) - r;
-    const auto s1rh = (  hr) + r;
-
-    e.z = ( E[ih +     j *jstride].z * s0zh + E[ih+1 +     j *jstride].z * s1zh ) * s0r +
-          ( E[ih + (j +1)*jstride].z * s0zh + E[ih+1 + (j +1)*jstride].z * s1zh ) * s1r;
-
-    e.r = ( E[i  +     jh*jstride].r * s0z  + E[i+1  +     jh*jstride].r * s1z ) * s0rh +
-          ( E[i  + (jh+1)*jstride].r * s0z  + E[i+1  + (jh+1)*jstride].r * s1z ) * s1rh;
-
-    e.th = ( E[i  +     j *jstride].th * s0z  + E[i+1  +     j *jstride].th * s1z ) * s0r +
-          ( E[i  + (j +1)*jstride].th * s0z  + E[i+1  + (j +1)*jstride].th * s1z ) * s1r;
-}
-
-/**
- * @brief Interpolate the B field at the particle position (linear)
- * 
- * @note Same interpolation as interpolate_fld(), for the B field only
- * 
- * @param B         Pointer to position (0,0) of B field grid
- * @param jstride   Grid y stride (must be signed)
- * @param ix        Particle cell index
- * @param x         Particle position inside cell
- * @param b[out]    B field at particle position
- */
-template< typename T >
-void interpolate_b( 
-    cyl3<T> const * const __restrict__ B, const int jstride,
-    const int2 ix, const float2 x, cyl3<T> & b )
-{
-    const int i = ix.x;
-    const int j = ix.y;
-
-    const auto z = x.x;
-    const auto r = x.y;
-
-    const auto s0z = 0.5f - z;
-    const auto s1z = 0.5f + z;
-
-    const auto s0r = 0.5f - r;
-    const auto s1r = 0.5f + r;
-
-    const int hz = z < 0;
-    const int hr = r < 0;
-
-    const int ih = i - hz;
-    const int jh = j - hr;
-
-    const auto s0zh = (1-hz) - z;
-    const auto s1zh = (  hz) + z;
-
-    const auto s0rh = (1-hr) - r;
-    const auto s1rh = (  hr) + r;
-
     b.z = ( B[i  +     jh*jstride].z * s0z  + B[i+1  +     jh*jstride].z * s1z ) * s0rh +
           ( B[i  + (jh+1)*jstride].z * s0z  + B[i+1  + (jh+1)*jstride].z * s1z ) * s1rh;
 
@@ -587,38 +501,44 @@ inline complex_t expmimt( const int m, const float2 th ) {
 }
 
 /**
- * @brief Deposit (charge conserving) current for 1 segment inside a cell
+ * @brief Deposit (charge conserving) current for 1 segment inside a cell,
+ *        all modes m = 1 ... nmodes-1 at once
  * 
- * @tparam m        Azymuthal mode (> 0)
- * @param ix        Initial position (cell index)
- * @param x0        Initial position (z,r)
- * @param x1        Final position (z,r)
- * @param θ0        Initial angular position (cos,sin)
- * @param θm        Mid-point angular position (cos,sin)
- * @param θ1        Final angular position (cos,sin)
- * @param q         Charge
- * @param vθ        Angular velocity (not momentum)
- * @param J         Current buffer
- * @param stride    j stride for current buffer
+ * For every mode m > 0 the segment geometry and shape factors are computed
+ * once, and the angular factors exp( -i m θ ) are updated incrementally from
+ * one mode to the next, using the same operations as expmimt() (which is also
+ * used by the charge deposit, so that the deposit is charge conserving for
+ * every mode).
+ * 
+ * Jz and Jr use the mid-point factor exp(-i m θm); Jθ carries the difference
+ * between the endpoint factors and exp(-i m θm), so that
+ * Δρ_m + ΔJz + ΔJr - Jθ = 0 holds exactly (charge conservation)
+ * 
+ * @param nmodes    Number of modes (including mode 0)
+ * @param ix        Particle cell
+ * @param x0        Initial particle position (z,r)
+ * @param x1        Final particle position (z,r)
+ * @param t0        Initial particle transverse position (x,y)
+ * @param t1        Final particle  transverse position (x,y)
+ * @param q         Particle charge
+ * @param J         Mode 1 current grid, pointing at cell (0,0); mode m is at
+ *                  J + (m-1) * mstride
+ * @param stride    Current grid y stride
+ * @param mstride   Distance between the current grids of consecutive modes
  */
-inline void dep_current_seg(
-    const int m,
-    const int ir0, const int2 ix, const float2 x0, const float2 x1,
+Q3D_FORCE_INLINE void dep_current_seg_n(
+    const int nmodes,
+    const int2 ix, const float2 x0, const float2 x1,
     const float2 t0, const float2 t1, 
     const float q,
-    cyl3<complex_t> * __restrict__ J, const int stride )
+    cyl3<complex_t> * __restrict__ J, const int stride, const int mstride )
 {
-    // Initial and final grid positions
-    // We rename the variables for clarity
     int i = ix.x;
     int j = ix.y;
     const auto z0 = x0.x;
     const auto z1 = x1.x;
     const auto r0 = x0.y;
     const auto r1 = x1.y;
-
-    //const auto cr0 = (ir0 + j) + r0;
-    //const auto cr1 = (ir0 + j) + r1;
 
     const auto rcr0 = 1.0f / std::sqrt( ops::fma( t0.x, t0.x, t0.y*t0.y ) );
     const auto rcr1 = 1.0f / std::sqrt( ops::fma( t1.x, t1.x, t1.y*t1.y ) );
@@ -635,15 +555,6 @@ inline void dep_current_seg(
     const auto rrm2 = 1.0f / std::sqrt( ops::fma( xif, xif, yif*yif ) );
     const auto thm = float2{ xif * rrm2, yif * rrm2 };
 
-    // Complex coefficients for initial, mid and final angular positions.
-    // Jz and Jr use the mid-point factor exp(-i m θm); Jθ carries the
-    // difference between the endpoint factors and exp(-i m θm), so that
-    // Δρ_m + ΔJz + ΔJr - Jθ = 0 holds exactly (charge conservation)
-    const auto cm = expmimt( m, thm );
-    const auto c0 = expmimt( m, th0 ) - cm;
-    const auto c1 = expmimt( m, th1 ) - cm;
-
-
     const auto S0z0 = 0.5f - z0;
     const auto S0z1 = 0.5f + z0;
 
@@ -656,8 +567,8 @@ inline void dep_current_seg(
     const auto S1r0 = 0.5f - r1;
     const auto S1r1 = 0.5f + r1;
 
-    const auto wl1 = (z1 - z0) * cm;
-    const auto wl2 = (r1 - r0) * cm;
+    const auto dz = z1 - z0;
+    const auto dr = r1 - r0;
     
     const auto wp10 = 0.5f*(S0r0 + S1r0);
     const auto wp11 = 0.5f*(S0r1 + S1r1);
@@ -665,18 +576,41 @@ inline void dep_current_seg(
     const auto wp20 = 0.5f*(S0z0 + S1z0);
     const auto wp21 = 0.5f*(S0z1 + S1z1);
 
-    J[ stride * j     + i     ].z += q * wl1 * wp10;
-    J[ stride * (j+1) + i     ].z += q * wl1 * wp11;
+    /// @brief exp( -i m θ ) for the initial, final and mid point angles
+    float e0r = th0.x, e0i = -th0.y;
+    float e1r = th1.x, e1i = -th1.y;
+    float emr = thm.x, emi = -thm.y;
 
-    J[ stride * j     + i     ].r += q * wl2 * wp20;
-    J[ stride * j     + (i+1) ].r += q * wl2 * wp21;
+    for( int m = 1; m < nmodes; m++ ) {
 
-    // Shape factors are S{time}{coord}{node}: e.g. S1z0 is the weight of node 0
-    // along z at the final position (time 1)
-    J[ stride * j     + i     ].th += q * ( S1z0 * S1r0 * c1 - S0z0 * S0r0 * c0 );
-    J[ stride * j     + (i+1) ].th += q * ( S1z1 * S1r0 * c1 - S0z1 * S0r0 * c0 );
-    J[ stride * (j+1) + i     ].th += q * ( S1z0 * S1r1 * c1 - S0z0 * S0r1 * c0 );
-    J[ stride * (j+1) + (i+1) ].th += q * ( S1z1 * S1r1 * c1 - S0z1 * S0r1 * c0 );
+        if ( m > 1 ) {
+            // exp( -i m θ ) = exp( -i (m-1) θ ) exp( -i θ ), as in expmimt()
+            float re, im;
+            re = ops::fma( e0r, th0.x, e0i * th0.y ); im = ops::fma( e0r, -th0.y, e0i * th0.x ); e0r = re; e0i = im;
+            re = ops::fma( e1r, th1.x, e1i * th1.y ); im = ops::fma( e1r, -th1.y, e1i * th1.x ); e1r = re; e1i = im;
+            re = ops::fma( emr, thm.x, emi * thm.y ); im = ops::fma( emr, -thm.y, emi * thm.x ); emr = re; emi = im;
+        }
+
+        const complex_t cm{ emr, emi };
+        const auto c0 = complex_t{ e0r, e0i } - cm;
+        const auto c1 = complex_t{ e1r, e1i } - cm;
+
+        const auto wl1 = dz * cm;
+        const auto wl2 = dr * cm;
+
+        cyl3<complex_t> * __restrict__ Jm = J + ( m - 1 ) * mstride;
+
+        Jm[ stride * j     + i     ].z += q * wl1 * wp10;
+        Jm[ stride * (j+1) + i     ].z += q * wl1 * wp11;
+
+        Jm[ stride * j     + i     ].r += q * wl2 * wp20;
+        Jm[ stride * j     + (i+1) ].r += q * wl2 * wp21;
+
+        Jm[ stride * j     + i     ].th += q * ( S1z0 * S1r0 * c1 - S0z0 * S0r0 * c0 );
+        Jm[ stride * j     + (i+1) ].th += q * ( S1z1 * S1r0 * c1 - S0z1 * S0r0 * c0 );
+        Jm[ stride * (j+1) + i     ].th += q * ( S1z0 * S1r1 * c1 - S0z0 * S0r1 * c0 );
+        Jm[ stride * (j+1) + (i+1) ].th += q * ( S1z1 * S1r1 * c1 - S0z1 * S0r1 * c0 );
+    }
 }
 
 /**
@@ -1140,40 +1074,49 @@ void move_deposit_0(
 }
 
 /**
- * @brief Move particles, deposit current (modes 0 and 1) and shift positions
+ * @brief Move particles, deposit current (all modes, single pass) and
+ *        shift positions
+ * 
+ * Single pass version for any number of modes: the trajectory of each
+ * particle is computed and split once, and the current of all modes is
+ * deposited from the same segments (see dep_current_seg_n()).
  * 
  * @param tile_idx          Tile index
  * @param part              Particle data
  * @param current_m0        Current grid (m=0)
- * @param current_m1        Current grid (m=1)
- * @param current_offset    Offset to position [0,0] of the current grid
- * @param nx                Current grid size (internal)
- * @param ext_nx            Current grid size (external)
+ * @param current_m         Current grids (m > 0), indexed by m (entry 0 unused)
+ * @param nmodes            Number of modes (including mode 0)
  * @param dt_dx             Ratio between time step and cell size
  * @param shift             Cell shift
+ * @param buffer_m0         Scratch buffer for the mode 0 tile current,
+ *                          current_m0.tile_vol elements (one per thread)
+ * @param buffer_m          Scratch buffer for the tile current of the modes
+ *                          m > 0, ( nmodes - 1 ) * tile_vol elements (one per
+ *                          thread)
  */
-void move_deposit_1(
+void move_deposit_n(
     uint2 const tile_idx,
     cyl_part::particles_view const part,
     grid::tiled_cyl3_view<float> current_m0, 
-    grid::tiled_cyl3_view< complex_t > current_m1, 
-    float2 const dt_dx, const int2 shift ) 
+    grid::tiled_cyl3_view<complex_t> const * const current_m, 
+    const int nmodes,
+    float2 const dt_dx, const int2 shift,
+    cyl3<float> * const __restrict__ buffer_m0,
+    cyl3<complex_t> * const __restrict__ buffer_m )
 {
     const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
     const int tile_np   = part.tile_np[ tile_id ];
 
-    // This is usually in block shared memory
-    alignas(local_align) cyl3<float>               _current_buffer_m0[ current_m0.tile_vol ];
-    alignas(local_align) cyl3<std::complex<float>> _current_buffer_m1[ current_m1.tile_vol ];
+    if ( tile_np == 0 ) return;
+
+    const int tile_vol = current_m0.tile_vol;
 
     // Zero local current buffers
-    memory::zero( _current_buffer_m0, current_m0.tile_vol );
-    memory::zero( _current_buffer_m1, current_m1.tile_vol );
+    memory::zero( buffer_m0, tile_vol );
+    memory::zero( buffer_m, ( nmodes - 1 ) * tile_vol );
 
-    // Move particles and deposit current
-    cyl3<float> * __restrict__ J0 = & _current_buffer_m0[ current_m0.inner_offset ];
-    cyl3<complex_t> * __restrict__ J1 = & _current_buffer_m1[ current_m1.inner_offset ];
-
+    cyl3<float>     * J0 = & buffer_m0[ current_m0.inner_offset ];
+    cyl3<complex_t> * Jm = & buffer_m[ current_m0.inner_offset ];
     const int jstride = current_m0.tile_ystride();
 
     const int part_offset  = part.tile_offset[ tile_id ];
@@ -1182,151 +1125,7 @@ void move_deposit_1(
     auto * __restrict__ u  = &part.u[ part_offset ];
     auto * __restrict__ th = &part.th[ part_offset ];
     auto * __restrict__ q  = &part.q[ part_offset ];
-
-    auto const dt_dz = dt_dx.x;
-    auto const dt_dr = dt_dx.y;
-
-    const int ir0 = (part.local_tile_start.y + tile_idx.y) * part.tile_dims.y;
-
-    for( int i = 0; i < tile_np; i++ ) {
-        auto pu  = u[i];
-        auto x0  = x[i];
-        auto ix0 = ix[i];
-        auto θi  = th[i];
-        auto pq  = q[i];
-
-        // Get 1 / Lorentz gamma
-        float const rg = rgamma( pu );
-
-        // Cartesian motion
-        auto Δx = dt_dr * rg * pu.x;
-        auto Δy = dt_dr * rg * pu.y;
-
-        /// @brief initial radial position
-        auto ri = ( ir0 + ix0.y ) + x0.y;
-        auto xi = ri * θi.x;
-        auto yi = ri * θi.y;
-
-        // New cartesian positions
-        auto xf = ops::fma( ri, θi.x, Δx );
-        auto yf = ops::fma( ri, θi.y, Δy );
-
-        /// @brief xi + xf
-        auto xif = ops::fma( ri, θi.x, xf );
-        /// @brief yi + yf
-        auto yif = ops::fma( ri, θi.y, yf );
-
-        // Final positions
-
-        /// @brief New radial position
-        auto rf = std::sqrt( ops::fma( xf, xf, yf*yf ) );
-        /// @brief radial motion
-        auto Δr = ops::fma( Δx , xif , Δy * yif ) / (rf + ri);
-        // auto Δr = rf - ri;
-
-        // Advance grid (z,r) position
-        auto Δz = dt_dz * rg * pu.z;
-        float2 delta = make_float2( Δz, Δr );
-
-        // Check for cell crossings and split trajectory
-        int2 deltai, cross;
-
-        int2 v0_ix; float2 v0_x0, v0_x1, v0_t0, v0_t1; 
-        int2 v1_ix; float2 v1_x0, v1_x1, v1_t0, v1_t1; 
-        int2 v2_ix; float2 v2_x0, v2_x1, v2_t0, v2_t1; 
-
-        split2d_cyl( 
-            ir0, ix0, x0, delta, deltai,
-            make_float2( xi, yi ), make_float2( Δx, Δy ),
-            v0_ix, v0_x0, v0_x1, v0_t0, v0_t1,
-            v1_ix, v1_x0, v1_x1, v1_t0, v1_t1,
-            v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
-            cross
-        );
-        
-        // Deposit current (mode 0)
-        dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
-        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
-        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
-
-        // Deposit current (mode 1)
-        dep_current_seg( 1, ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J1, jstride );
-        if ( cross.x || cross.y ) dep_current_seg( 1, ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J1, jstride );
-        if ( cross.x && cross.y ) dep_current_seg( 1, ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J1, jstride );
-
-
-        // Correct cell position and store
-        x[i] = make_float2( 
-            (x0.x + Δz ) - deltai.x,
-            (x0.y + Δr ) - deltai.y
-        );
-
-        // Modify cell and store
-        ix[i] = make_int2(
-            ix0.x + deltai.x + shift.x,
-            ix0.y + deltai.y + shift.y
-        );
-
-        /// @brief store new angular position
-        th[i] = float2{ xf/rf, yf/rf };
-    }
-
-    // Current normalization is done in Current::normalize()
-
-    // Add current to global buffer
-    float * dev_J0 = reinterpret_cast< float * > ( current_m0.tile_buffer(tile_id));
-    float * shm_J0 = reinterpret_cast< float * > ( _current_buffer_m0 );
-    float * dev_J1 = reinterpret_cast< float * > ( current_m1.tile_buffer(tile_id));
-    float * shm_J1 = reinterpret_cast< float * > ( _current_buffer_m1 );
-
-    for( auto i = 0; i < 3 * current_m0.tile_vol; i++ ) {
-        dev_J0[ i ] += shm_J0[ i ]; 
-    }
-    for( auto i = 0; i < 3 * 2 * current_m1.tile_vol; i++ ) {
-        dev_J1[ i ] += shm_J1[ i ]; 
-    }
-}
-
-/**
- * @brief Deposit the current of a single mode m > 0 (particles are not moved)
- * 
- * @note Called once per mode, before move_deposit_0() moves the particles
- * 
- * @param tile_idx          Tile index
- * @param m                 Mode number (m >= 1)
- * @param part              Particle data
- * @param current_m         Current grid (mode m)
- * @param dt_dx             Ratio between time step and cell size (x/y)
- * @param buffer            Scratch buffer for the tile current, at least
- *                          current_m.tile_vol elements (one per thread)
- */
-void deposit_m(
-    uint2 const tile_idx,
-    const int m,
-    cyl_part::particles_view const part,
-    grid::tiled_cyl3_view< complex_t > current_m,
-    float2 const dt_dx,
-    cyl3< complex_t > * const __restrict__ buffer
-) {
-    const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
-    const int tile_np   = part.tile_np[ tile_id ];
-
-    if ( tile_np == 0 ) return;
-
-    // Zero local current buffer
-    memory::zero( buffer, current_m.tile_vol );
-
-    auto * Jm = & buffer[ current_m.inner_offset ];
-
-    const int jstride = current_m.tile_ystride();
-
-    const int part_offset  = part.tile_offset[ tile_id ];
-    auto * __restrict__ ix = &part.ix[ part_offset ];
-    auto * __restrict__ x  = &part.x[ part_offset ];
-    auto * __restrict__ u  = &part.u[ part_offset ];
-    auto * __restrict__ th = &part.th[ part_offset ];
-    auto * __restrict__ q  = &part.q[ part_offset ];
-
+    
     auto const dt_dz = dt_dx.x;
     auto const dt_dr = dt_dx.y;
 
@@ -1384,19 +1183,44 @@ void deposit_m(
             v2_ix, v2_x0, v2_x1, v2_t0, v2_t1,
             cross
         );
+        
+        // Deposit current (mode 0)
+                                  dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
+        if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
 
-        // Deposit current (mode m)
-                                  dep_current_seg( m, ir0, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, Jm, jstride );
-        if ( cross.x || cross.y ) dep_current_seg( m, ir0, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, Jm, jstride );
-        if ( cross.x && cross.y ) dep_current_seg( m, ir0, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, Jm, jstride );
+        // Deposit current (modes m > 0)
+                                  dep_current_seg_n( nmodes, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, Jm, jstride, tile_vol );
+        if ( cross.x || cross.y ) dep_current_seg_n( nmodes, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, Jm, jstride, tile_vol );
+        if ( cross.x && cross.y ) dep_current_seg_n( nmodes, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, Jm, jstride, tile_vol );
+
+        // Modify cell position and store
+        x[i] = make_float2( 
+            (x0.x + Δz ) - deltai.x,
+            (x0.y + Δr ) - deltai.y
+        );
+
+        // Modify cell and store
+        ix[i] = make_int2(
+            ix0.x + deltai.x + shift.x,
+            ix0.y + deltai.y + shift.y
+        );
+
+        /// @brief store new angular position
+        th[i] = float2{ xf/rf, yf/rf };
     }
 
-    // Add current to global buffer
-    float * dev_Jm = reinterpret_cast< float * > ( current_m.tile_buffer(tile_id) );
-    float * loc_Jm = reinterpret_cast< float * > ( buffer );
+    // Add current to global buffers
+    {
+        float * dev_J = reinterpret_cast< float * > ( current_m0.tile_buffer(tile_id) );
+        float * loc_J = reinterpret_cast< float * > ( buffer_m0 );
+        for( int k = 0; k < 3 * tile_vol; k++ ) dev_J[ k ] += loc_J[ k ];
+    }
 
-    for( unsigned k = 0; k < 3 * 2 * current_m.tile_vol; k++ ) {
-        dev_Jm[ k ] += loc_Jm[ k ]; 
+    for( int m = 1; m < nmodes; m++ ) {
+        float * dev_J = reinterpret_cast< float * > ( current_m[m].tile_buffer(tile_id) );
+        float * loc_J = reinterpret_cast< float * > ( & buffer_m[ ( m - 1 ) * tile_vol ] );
+        for( int k = 0; k < 3 * 2 * tile_vol; k++ ) dev_J[ k ] += loc_J[ k ];
     }
 }
 
@@ -1484,136 +1308,82 @@ void push_0 (
 }
 
 /**
- * @brief Advance particle velocities (modes 0 and 1)
+ * @brief Linear interpolation weights for the staggered E / B grids
  * 
- * @tparam type 
- * @param tile_idx      Tile index
- * @param part          Particle data
- * @param d_E           E-field grid (global)
- * @param d_B           B-field grid (global)
- * @param field_offset  Offset to position [0,0] of field grids
- * @param ext_nx        Field grid size (external)
- * @param alpha         Normalization parameter
- * @param d_energy      Total particle energy (if using OpenMP this must be a reduction variable)
+ * Holds the cell indices and shape factors used by interpolate_fld(), so
+ * that they can be computed once per particle and reused for every mode.
  */
-template < species::pusher type >
-void push_1 ( 
-    uint2 const tile_idx,
-    cyl_part::particles_view part,
-    grid::tiled_cyl3_view<float> E_grid_m0, grid::tiled_cyl3_view<float> B_grid_m0,
-    grid::tiled_cyl3_view<complex_t> E_grid_m1, grid::tiled_cyl3_view<complex_t> B_grid_m1, 
-    float const alpha, double & tile_energy )
-{
-    const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
-    const int tile_np   = part.tile_np[ tile_id ];
+struct interp_weights {
+    int i, j, ih, jh;
+    float s0z, s1z, s0r, s1r;
+    float s0zh, s1zh, s0rh, s1rh;
 
-    // Copy E and B into shared memory
-    cyl3<float> E_local_m0[ E_grid_m0.tile_vol ];
-    cyl3<float> B_local_m0[ B_grid_m0.tile_vol ];
+    interp_weights( const int2 ix, const float2 x ) {
+        i = ix.x;
+        j = ix.y;
 
-    memory::memcpy( E_local_m0, E_grid_m0.tile_buffer(tile_id), E_grid_m0.tile_vol );
-    memory::memcpy( B_local_m0, B_grid_m0.tile_buffer(tile_id), B_grid_m0.tile_vol );
+        const auto z = x.x;
+        const auto r = x.y;
 
-    auto const * const __restrict__ E_m0 = & E_local_m0[ E_grid_m0.inner_offset ];
-    auto const * const __restrict__ B_m0 = & B_local_m0[ B_grid_m0.inner_offset ];
+        s0z = 0.5f - z;
+        s1z = 0.5f + z;
 
-    // Copy E and B into shared memory (mode 1)
-    cyl3<complex_t> E_local_m1[ E_grid_m1.tile_vol ];
-    cyl3<complex_t> B_local_m1[ B_grid_m1.tile_vol ];
+        s0r = 0.5f - r;
+        s1r = 0.5f + r;
 
-    memory::memcpy( E_local_m1, E_grid_m1.tile_buffer(tile_id), E_grid_m1.tile_vol );
-    memory::memcpy( B_local_m1, B_grid_m1.tile_buffer(tile_id), B_grid_m1.tile_vol );
+        const int hz = z < 0;
+        const int hr = r < 0;
 
-    auto const * const __restrict__ E_m1 = & E_local_m1[ E_grid_m1.inner_offset ];
-    auto const * const __restrict__ B_m1 = & B_local_m1[ B_grid_m1.inner_offset ];
+        ih = i - hz;
+        jh = j - hr;
 
-    // Push particles
-    const int part_offset  = part.tile_offset[ tile_id ];
-    auto * __restrict__ ix = &part.ix[ part_offset ];
-    auto * __restrict__ x  = &part.x[ part_offset ];
-    auto * __restrict__ u  = &part.u[ part_offset ];
-    auto * __restrict__ th = &part.th[ part_offset ];
-    auto * __restrict__ q  = &part.q[ part_offset ];
+        s0zh = (1-hz) - z;
+        s1zh = (  hz) + z;
 
-    double energy = 0;
-    const int jstride = E_grid_m0.tile_ystride();
-
-    for( int i = 0; i < tile_np; i++ ) {
-
-        // Interpolate field - mode 0
-        cyl3<float> e, b;
-        interpolate_fld( E_m0, B_m0, jstride, ix[i], x[i], e, b );
-
-        // Interpolate field - mode 1
-        cyl3<std::complex<float>> e1, b1;
-        interpolate_fld( E_m1, B_m1, jstride, ix[i], x[i], e1, b1 );
-
-        // Get full field
-        auto cosθ = th[i].x;
-        auto sinθ = th[i].y;
-
-        e.z += ops::fma( cosθ, e1.z.real( ), -sinθ * e1.z.imag( ) );
-        e.r += ops::fma( cosθ, e1.r.real( ), -sinθ * e1.r.imag( ) );
-        e.th += ops::fma( cosθ, e1.th.real( ), -sinθ * e1.th.imag( ) );
-
-        b.z += ops::fma( cosθ, b1.z.real( ), -sinθ * b1.z.imag( ) );
-        b.r += ops::fma( cosθ, b1.r.real( ), -sinθ * b1.r.imag( ) );
-        b.th += ops::fma( cosθ, b1.th.real( ), -sinθ * b1.th.imag( ) );
-
-        // Convert to cartesian components
-        float3 cart_e = make_float3(
-            ops::fma( e.r, cosθ, - e.th * sinθ ),
-            ops::fma( e.r, sinθ, + e.th * cosθ ),
-            e.z
-        );
-
-        float3 cart_b = make_float3(
-            ops::fma( b.r, cosθ, - b.th * sinθ ),
-            ops::fma( b.r, sinθ, + b.th * cosθ ),
-            b.z
-        );
-
-        // Advance momentum
-        float3 pu = u[i];
-
-        /// @brief Particle kinetic energy (γ - 1), time centered
-        double ekin = 0;
-        if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, ekin );
-        if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, ekin );
-
-        // Particles have different weights (charge q ∝ r)
-        energy += q[i] * ekin;
+        s0rh = (1-hr) - r;
+        s1rh = (  hr) + r;
     }
+};
 
-    // Return energy from all particles in tile
-    tile_energy = energy;
+/**
+ * @brief Interpolate E and B at the particle position using precomputed
+ *        weights (same interpolation as interpolate_fld())
+ */
+template< typename T >
+Q3D_FORCE_INLINE void interpolate_fld_w( 
+    cyl3<T> const * const __restrict__ E, 
+    cyl3<T> const * const __restrict__ B, 
+    const int jstride, const interp_weights & w,
+    cyl3<T> & e, cyl3<T> & b )
+{
+    const int i = w.i, j = w.j, ih = w.ih, jh = w.jh;
+
+    e.z = ( E[ih +     j *jstride].z * w.s0zh + E[ih+1 +     j *jstride].z * w.s1zh ) * w.s0r +
+          ( E[ih + (j +1)*jstride].z * w.s0zh + E[ih+1 + (j +1)*jstride].z * w.s1zh ) * w.s1r;
+
+    e.r = ( E[i  +     jh*jstride].r * w.s0z  + E[i+1  +     jh*jstride].r * w.s1z ) * w.s0rh +
+          ( E[i  + (jh+1)*jstride].r * w.s0z  + E[i+1  + (jh+1)*jstride].r * w.s1z ) * w.s1rh;
+
+    e.th = ( E[i  +     j *jstride].th * w.s0z  + E[i+1  +     j *jstride].th * w.s1z ) * w.s0r +
+           ( E[i  + (j +1)*jstride].th * w.s0z  + E[i+1  + (j +1)*jstride].th * w.s1z ) * w.s1r;
+
+    b.z = ( B[i  +     jh*jstride].z * w.s0z  + B[i+1  +     jh*jstride].z * w.s1z ) * w.s0rh +
+          ( B[i  + (jh+1)*jstride].z * w.s0z  + B[i+1  + (jh+1)*jstride].z * w.s1z ) * w.s1rh;
+
+    b.r = ( B[ih +      j*jstride].r * w.s0zh + B[ih+1 +      j*jstride].r * w.s1zh ) * w.s0r +
+          ( B[ih + (j +1)*jstride].r * w.s0zh + B[ih+1 + (j +1)*jstride].r * w.s1zh ) * w.s1r;
+
+    b.th = ( B[ih +     jh*jstride].th * w.s0zh + B[ih+1 +     jh*jstride].th * w.s1zh ) * w.s0rh +
+           ( B[ih + (jh+1)*jstride].th * w.s0zh + B[ih+1 + (jh+1)*jstride].th * w.s1zh ) * w.s1rh;
 }
 
 /**
- * @brief Number of particles processed together in push_n()
+ * @brief Advance particle velocities, any number of modes (single pass)
  * 
- * The fields accumulated at the particle positions (e, b) of one batch are
- * kept in a small local array, so the batch should fit comfortably in L1
- */
-int constexpr opt_push_n_batch = 64;
-
-/**
- * @brief Advance particle velocities, any number of modes (streamed push)
- * 
- * Same strategy as the CUDA version: the particles of the tile are processed
- * in batches, and for each batch the fields of the different modes are
- * streamed one at a time, accumulating the field at the particle positions:
- * 
- *  for each batch of opt_push_n_batch particles of the tile:
- *      load the particle positions
- *      for E, then B:
- *          for m = 0 ... nmodes-1:
- *              accumulate Re( F_m exp(i m θ) ) at the particle positions
- *      advance the particle momenta
- * 
- * On the CPU the field tiles are read in place (one thread per tile, read
- * only), so no field copies are required and the memory use does not depend
- * on the number of modes.
+ * For each particle the interpolation weights are computed once, and the E
+ * and B fields of all modes are gathered in one go, accumulating
+ * Re( F_m exp( i m θ ) ). The field tiles are read in place (one thread per
+ * tile, read only).
  * 
  * @tparam type         Pusher type
  * @param tile_idx      Tile index
@@ -1627,7 +1397,7 @@ int constexpr opt_push_n_batch = 64;
  * @param tile_energy   (out) Total particle energy in the tile
  */
 template < species::pusher type >
-void push_n ( 
+void push_all ( 
     uint2 const tile_idx,
     cyl_part::particles_view part,
     grid::tiled_cyl3_view<float> E_grid_m0, grid::tiled_cyl3_view<float> B_grid_m0,
@@ -1648,108 +1418,604 @@ void push_n (
     auto * __restrict__ th = &part.th[ part_offset ];
     auto * __restrict__ q  = &part.q[ part_offset ];
 
-    constexpr int NB = opt_push_n_batch;
+    // Pointers to (0,0) of the field tiles of each mode
+    cyl3<float> const * const E0 = E_grid_m0.tile_data( tile_id );
+    cyl3<float> const * const B0 = B_grid_m0.tile_data( tile_id );
+
+    constexpr int max_modes = max_push_modes;
+    cyl3<complex_t> const * Em[ max_modes ];
+    cyl3<complex_t> const * Bm[ max_modes ];
+    for( int m = 1; m < nmodes; m++ ) {
+        Em[m] = E_grid_m[m].tile_data( tile_id );
+        Bm[m] = B_grid_m[m].tile_data( tile_id );
+    }
 
     double energy = 0;
 
-    for( int b0 = 0; b0 < tile_np; b0 += NB ) {
+    for( int i = 0; i < tile_np; i++ ) {
 
-        const int nb = ( b0 + NB < tile_np ) ? NB : tile_np - b0;
+        const interp_weights w( ix[i], x[i] );
+        const float2 t = th[i];
 
-        // Fields accumulated at the particle positions
-        cyl3<float> e[NB], b[NB];
-        for( int p = 0; p < nb; p++ ) {
-            e[p] = cyl3<float>{ 0, 0, 0 };
-            b[p] = cyl3<float>{ 0, 0, 0 };
+        // Mode 0
+        cyl3<float> e, b;
+        interpolate_fld_w( E0, B0, jstride, w, e, b );
+
+        // Modes m > 0
+        float emr = 1, emi = 0;
+        for( int m = 1; m < nmodes; m++ ) {
+            // exp( i m θ ) = exp( i (m-1) θ ) * ( cos θ + i sin θ )
+            const float re = ops::fma( emr, t.x, - emi * t.y );
+            const float im = ops::fma( emr, t.y,   emi * t.x );
+            emr = re; emi = im;
+
+            cyl3<complex_t> ve, vb;
+            interpolate_fld_w( Em[m], Bm[m], jstride, w, ve, vb );
+
+            e.z  += ops::fma( emr, ve.z.real(),  -emi * ve.z.imag()  );
+            e.r  += ops::fma( emr, ve.r.real(),  -emi * ve.r.imag()  );
+            e.th += ops::fma( emr, ve.th.real(), -emi * ve.th.imag() );
+
+            b.z  += ops::fma( emr, vb.z.real(),  -emi * vb.z.imag()  );
+            b.r  += ops::fma( emr, vb.r.real(),  -emi * vb.r.imag()  );
+            b.th += ops::fma( emr, vb.th.real(), -emi * vb.th.imag() );
         }
 
-        // Accumulate E (f = 0), then B (f = 1), streaming the modes
-        for( int f = 0; f < 2; f++ ) {
+        const auto cosθ = t.x;
+        const auto sinθ = t.y;
 
-            // Mode 0
-            {
-                cyl3<float> const * const fld = ( f == 0 ) ?
-                    E_grid_m0.tile_data( tile_id ) : B_grid_m0.tile_data( tile_id );
+        // Convert to cartesian components
+        float3 cart_e = make_float3(
+            ops::fma( e.r, cosθ, - e.th * sinθ ),
+            ops::fma( e.r, sinθ, + e.th * cosθ ),
+            e.z
+        );
 
-                for( int p = 0; p < nb; p++ ) {
-                    const int i = b0 + p;
-                    cyl3<float> v;
-                    if ( f == 0 ) interpolate_e( fld, jstride, ix[i], x[i], v );
-                    else          interpolate_b( fld, jstride, ix[i], x[i], v );
-                    auto & acc = ( f == 0 ) ? e[p] : b[p];
-                    acc.z += v.z; acc.r += v.r; acc.th += v.th;
-                }
-            }
+        float3 cart_b = make_float3(
+            ops::fma( b.r, cosθ, - b.th * sinθ ),
+            ops::fma( b.r, sinθ, + b.th * cosθ ),
+            b.z
+        );
 
-            /// @brief exp( i m θ ) for each particle, updated as m increases
-            float2 em[NB];
-            for( int p = 0; p < nb; p++ ) em[p] = make_float2( 1, 0 );
+        float3 pu = u[i];
 
-            // Modes m > 0
-            for( int m = 1; m < nmodes; m++ ) {
-                cyl3<complex_t> const * const fld = ( f == 0 ) ?
-                    E_grid_m[m].tile_data( tile_id ) : B_grid_m[m].tile_data( tile_id );
+        /// @brief Particle kinetic energy (γ - 1), time centered
+        double ekin = 0;
+        if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, ekin );
+        if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, ekin );
 
-                for( int p = 0; p < nb; p++ ) {
-                    const int i = b0 + p;
-
-                    // exp( i m θ ) = exp( i (m-1) θ ) * ( cos θ + i sin θ )
-                    // (same operation order as util::complex::operator*=)
-                    const float2 t = th[i];
-                    em[p] = make_float2(
-                        ops::fma( em[p].x, t.x, - em[p].y * t.y ),
-                        ops::fma( em[p].x, t.y,   em[p].y * t.x )
-                    );
-
-                    cyl3<complex_t> v;
-                    if ( f == 0 ) interpolate_e( fld, jstride, ix[i], x[i], v );
-                    else          interpolate_b( fld, jstride, ix[i], x[i], v );
-
-                    // Re( F_m exp( i m θ ) ), same form as push_1 for m = 1
-                    const float c = em[p].x;
-                    const float s = em[p].y;
-                    auto & acc = ( f == 0 ) ? e[p] : b[p];
-                    acc.z  += ops::fma( c, v.z.real(),  -s * v.z.imag()  );
-                    acc.r  += ops::fma( c, v.r.real(),  -s * v.r.imag()  );
-                    acc.th += ops::fma( c, v.th.real(), -s * v.th.imag() );
-                }
-            }
-        }
-
-        // Advance momenta
-        for( int p = 0; p < nb; p++ ) {
-            const int i = b0 + p;
-
-            const auto cosθ = th[i].x;
-            const auto sinθ = th[i].y;
-
-            // Convert to cartesian components
-            float3 cart_e = make_float3(
-                ops::fma( e[p].r, cosθ, - e[p].th * sinθ ),
-                ops::fma( e[p].r, sinθ, + e[p].th * cosθ ),
-                e[p].z
-            );
-
-            float3 cart_b = make_float3(
-                ops::fma( b[p].r, cosθ, - b[p].th * sinθ ),
-                ops::fma( b[p].r, sinθ, + b[p].th * cosθ ),
-                b[p].z
-            );
-
-            float3 pu = u[i];
-
-            /// @brief Particle kinetic energy (γ - 1), time centered
-            double ekin = 0;
-            if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, ekin );
-            if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, ekin );
-
-            // Particles have different weights (charge q ∝ r)
-            energy += q[i] * ekin;
-        }
+        // Particles have different weights (charge q ∝ r)
+        energy += q[i] * ekin;
     }
 
     tile_energy = energy;
 }
+
+/*
+ * Vector (SIMD) optimized functions
+ */
+
+#ifdef SIMD
+
+// SIMD types and vec_*() functions (see simd/simd.hpp, simd/vec_complex.hpp)
+using namespace simd;
+
+/**
+ * @brief Returns reciprocal Lorentz gamma factor (SIMD version)
+ * 
+ * @param u         (simd vector) Generalized velocity in units of c
+ * @return vfloat   (simd vector) Reciprocal Lorentz gamma factor
+ */
+inline vfloat rgamma( const vfloat3 u ) {
+    vfloat c1 = vec_float(1);
+    return vec_div( c1, vec_sqrt( vec_fmadd( u.z, u.z,
+                                  vec_fmadd( u.y, u.y,
+                                  vec_fmadd( u.x, u.x, c1 ) ) ) ) );
+}
+
+/**
+ * @brief Advance momentum using a relativistic Boris pusher (SIMD version)
+ * 
+ * @note See dudt_boris() for details
+ * 
+ * @param alpha     (simd vector) Normalization 0.5 q dt / m
+ * @param e         (simd vector) E-field at particle position (cartesian)
+ * @param b         (simd vector) B-field at particle position (cartesian)
+ * @param u         (simd vector) Initial generalized velocity
+ * @param ekin[out] (simd vector) Particle kinetic energy (γ - 1), time centered
+ * @return vfloat3  (simd vector) Final generalized velocity
+ */
+inline vfloat3 vdudt_boris( const vfloat alpha, vfloat3 e, vfloat3 b, vfloat3 u, vfloat & ekin )
+{
+    // First half of acceleration
+    e.x = vec_mul( e.x, alpha );
+    e.y = vec_mul( e.y, alpha );
+    e.z = vec_mul( e.z, alpha );
+
+    vfloat3 ut { 
+        vec_add( u.x, e.x ),
+        vec_add( u.y, e.y ),
+        vec_add( u.z, e.z )
+    };
+
+    {
+        const vfloat utsq = vec_fmadd( ut.z, ut.z, vec_fmadd( ut.y, ut.y, vec_mul( ut.x, ut.x ) ) );
+        const vfloat gamma = vec_sqrt( vec_add( utsq, 1.0f ) );
+        
+        // Get time centered energy
+        ekin = vec_div( utsq, vec_add( gamma, 1.0f ) );
+
+        // Time centered \alpha / \gamma
+        const vfloat alpha_gamma = vec_div( alpha, gamma );
+
+        // Rotation
+        b.x = vec_mul( b.x, alpha_gamma );
+        b.y = vec_mul( b.y, alpha_gamma );
+        b.z = vec_mul( b.z, alpha_gamma );
+    }
+
+    u.x = vec_fmadd( b.z, ut.y, ut.x );
+    u.y = vec_fmadd( b.x, ut.z, ut.y );
+    u.z = vec_fmadd( b.y, ut.x, ut.z );
+
+    u.x = vec_fnmadd( b.y, ut.z, u.x );
+    u.y = vec_fnmadd( b.z, ut.x, u.y );
+    u.z = vec_fnmadd( b.x, ut.y, u.z );
+
+    {
+        const vfloat otsq = vec_div( 
+            vec_float(2), 
+            vec_fmadd( b.z, b.z, vec_fmadd( b.y, b.y, vec_fmadd( b.x, b.x, vec_float(1) ) ) )
+        );
+        
+        b.x = vec_mul( b.x, otsq );
+        b.y = vec_mul( b.y, otsq );
+        b.z = vec_mul( b.z, otsq );
+    }
+
+    ut.x = vec_fmadd( b.z, u.y, ut.x );
+    ut.y = vec_fmadd( b.x, u.z, ut.y );
+    ut.z = vec_fmadd( b.y, u.x, ut.z );
+
+    ut.x = vec_fnmadd( b.y, u.z, ut.x );
+    ut.y = vec_fnmadd( b.z, u.x, ut.y );
+    ut.z = vec_fnmadd( b.x, u.y, ut.z );
+
+    // Second half of acceleration
+    ut.x = vec_add( ut.x, e.x );
+    ut.y = vec_add( ut.y, e.y );
+    ut.z = vec_add( ut.z, e.z );
+
+    return ut;
+}
+
+/**
+ * @brief Advance momentum using a relativistic Boris pusher for high magnetic
+ *        fields (Euler-Rodrigues rotation), SIMD version
+ * 
+ * @note See dudt_boris_euler() for details. As in the em2d SIMD version, the
+ *       rotation quaternion is obtained using vec_sinc_cos(), so no test on
+ *       |b| > 0 is required.
+ * 
+ * @param alpha     (simd vector) Normalization 0.5 q dt / m
+ * @param e         (simd vector) E-field at particle position (cartesian)
+ * @param b         (simd vector) B-field at particle position (cartesian)
+ * @param u         (simd vector) Initial generalized velocity
+ * @param ekin[out] (simd vector) Particle kinetic energy (γ - 1), time centered
+ * @return vfloat3  (simd vector) Final generalized velocity
+ */
+inline vfloat3 vdudt_boris_euler( const vfloat alpha, vfloat3 e, vfloat3 b, vfloat3 u, vfloat & ekin )
+{
+    // First half of acceleration
+    e.x = vec_mul( e.x, alpha );
+    e.y = vec_mul( e.y, alpha );
+    e.z = vec_mul( e.z, alpha );
+ 
+    vfloat3 ut {
+        vec_add( u.x, e.x ),
+        vec_add( u.y, e.y ),
+        vec_add( u.z, e.z )
+    };
+ 
+    {
+        const vfloat utsq  = vec_fmadd( ut.z, ut.z, vec_fmadd( ut.y, ut.y, vec_mul( ut.x, ut.x ) ) );
+        const vfloat gamma = vec_sqrt( vec_add( utsq, 1.0f ) );
+ 
+        // Get time centered energy
+        ekin = vec_div( utsq, vec_add( gamma, 1.0f ) );
+ 
+        // Time centered 2 * \alpha / \gamma
+        const vfloat alpha2_gamma = vec_div( vec_add( alpha, alpha ), gamma );
+ 
+        b.x = vec_mul( b.x, alpha2_gamma );
+        b.y = vec_mul( b.y, alpha2_gamma );
+        b.z = vec_mul( b.z, alpha2_gamma );
+    }
+ 
+    {
+        // Compute ||b||/2
+        const vfloat bnorm_2 = vec_mul( vec_sqrt(
+                vec_fmadd( b.z, b.z, vec_fmadd( b.y, b.y, vec_mul( b.x, b.x ) ) )
+            ), .5f );
+
+        // Compute cos( ||b||/2 ) and -sin( ||b||/2 ) / ||b||
+        vfloat ra, sinc;
+        vec_sinc_cos( bnorm_2, sinc, ra );
+        const vfloat s  = vec_mul( sinc, -0.5f );
+ 
+        const vfloat rb = vec_mul( b.x, s );
+        const vfloat rc = vec_mul( b.y, s );
+        const vfloat rd = vec_mul( b.z, s );
+  
+        const vfloat r11 = vec_sub( vec_fmadd( ra, ra, vec_mul( rb, rb ) ),
+                                    vec_fmadd( rc, rc, vec_mul( rd, rd ) ) );
+        const vfloat r12 = vec_mul( vec_fmadd(  rb, rc, vec_mul( ra, rd ) ), 2.f );
+        const vfloat r13 = vec_mul( vec_fnmadd( ra, rc, vec_mul( rb, rd ) ), 2.f );
+ 
+        const vfloat r21 = vec_mul( vec_fnmadd( ra, rd, vec_mul( rb, rc ) ), 2.f );
+        const vfloat r22 = vec_sub( vec_fmadd( ra, ra, vec_mul( rc, rc ) ),
+                                    vec_fmadd( rb, rb, vec_mul( rd, rd ) ) );
+        const vfloat r23 = vec_mul( vec_fmadd(  rc, rd, vec_mul( ra, rb ) ), 2.f );
+ 
+        const vfloat r31 = vec_mul( vec_fmadd(  rb, rd, vec_mul( ra, rc ) ), 2.f );
+        const vfloat r32 = vec_mul( vec_fnmadd( ra, rb, vec_mul( rc, rd ) ), 2.f );
+        const vfloat r33 = vec_sub( vec_fmadd( ra, ra, vec_mul( rd, rd ) ),
+                                    vec_fmadd( rb, rb, vec_mul( rc, rc ) ) );
+ 
+        u.x = vec_fmadd( r11, ut.x, vec_fmadd( r21, ut.y, vec_mul( r31, ut.z ) ) );
+        u.y = vec_fmadd( r12, ut.x, vec_fmadd( r22, ut.y, vec_mul( r32, ut.z ) ) );
+        u.z = vec_fmadd( r13, ut.x, vec_fmadd( r23, ut.y, vec_mul( r33, ut.z ) ) );
+    }
+ 
+    // Second half of acceleration
+    u.x = vec_add( u.x, e.x );
+    u.y = vec_add( u.y, e.y );
+    u.z = vec_add( u.z, e.z );
+ 
+    return u;
+}
+
+/**
+ * @brief Linear interpolation weights for the staggered E / B grids (SIMD)
+ * 
+ * Same as interp_weights. Cell indices are linear (cell) indices into the
+ * tile, i + j * jstride, for the 4 combinations of regular / half-shifted
+ * cells used by the E and B components.
+ */
+struct vinterp_weights {
+    vint i_j, i_jh, ih_j, ih_jh;
+    vfloat s0z, s1z, s0r, s1r;
+    vfloat s0zh, s1zh, s0rh, s1rh;
+
+    vinterp_weights( const vint2 ix, const vfloat2 x, const int jstride ) {
+        const vfloat c_1_2 = vec_float( 0.5f );
+
+        s0z = vec_sub( c_1_2, x.x );
+        s1z = vec_add( c_1_2, x.x );
+
+        s0r = vec_sub( c_1_2, x.y );
+        s1r = vec_add( c_1_2, x.y );
+
+        const vint c_1i = vec_int( 1 );
+
+        const vint hz = vec_lt( x.x, vec_zero_float(), c_1i );
+        const vint hr = vec_lt( x.y, vec_zero_float(), c_1i );
+
+        const vint ih = vec_sub( ix.x, hz );
+        const vint jh = vec_sub( ix.y, hr );
+
+        s0zh = vec_sub( vec_float( vec_sub( c_1i, hz ) ), x.x );
+        s1zh = vec_add( vec_float(                hz  ), x.x );
+
+        s0rh = vec_sub( vec_float( vec_sub( c_1i, hr ) ), x.y );
+        s1rh = vec_add( vec_float(                hr  ), x.y );
+
+        const vint j  = vec_mul( ix.y, jstride );
+        const vint jhs = vec_mul( jh, jstride );
+
+        i_j   = vec_add( ix.x, j );
+        i_jh  = vec_add( ix.x, jhs );
+        ih_j  = vec_add( ih, j );
+        ih_jh = vec_add( ih, jhs );
+    }
+};
+
+/**
+ * @brief Bilinear interpolation of one field component (SIMD)
+ * 
+ * @param base      Address of the component of cell (0,0), as float *
+ * @param idx       (simd vector) Linear index (in floats) of the lower cell
+ * @param sx        Distance (in floats) between consecutive cells along z
+ * @param sy        Distance (in floats) between consecutive cells along r
+ * @param w0z, w1z  (simd vector) z weights
+ * @param w0r, w1r  (simd vector) r weights
+ * @return vfloat   (simd vector) Interpolated value
+ */
+inline vfloat vinterp( const float * __restrict__ base, const vint idx,
+    const int sx, const int sy,
+    const vfloat w0z, const vfloat w1z, const vfloat w0r, const vfloat w1r )
+{
+    vfloat f0 = vec_mul(   vec_gather( base,      idx ), w0z );
+    f0 = vec_fmadd( vec_gather( base + sx,      idx ), w1z, f0 );
+    vfloat f1 = vec_mul(   vec_gather( base + sy, idx ), w0z );
+    f1 = vec_fmadd( vec_gather( base + sx + sy, idx ), w1z, f1 );
+    return vec_fmadd( f1, w1r, vec_mul( f0, w0r ) );
+}
+
+/**
+ * @brief Interpolate E and B at the particle positions (SIMD)
+ * 
+ * @tparam NF       Number of floats per field component (1 - real, 2 - complex)
+ * @param E         E field tile, cell (0,0), as float *
+ * @param B         B field tile, cell (0,0), as float *
+ * @param jstride   Field tile y stride (in cells)
+ * @param w         Interpolation weights
+ * @param part      Real (0) or imaginary (1) part (complex fields only)
+ * @param e[out]    (simd vector) E field (z, r, θ in x, y, z)
+ * @param b[out]    (simd vector) B field (z, r, θ in x, y, z)
+ */
+template< int NF >
+inline void vinterpolate_fld( const float * __restrict__ E, const float * __restrict__ B,
+    const int jstride, const vinterp_weights & w, const int part,
+    vfloat3 & e, vfloat3 & b )
+{
+    // Floats per cell and strides (in floats)
+    constexpr int cell = 3 * NF;
+    const int sy = cell * jstride;
+
+    const vint i_j   = vec_mul( w.i_j,   cell );
+    const vint i_jh  = vec_mul( w.i_jh,  cell );
+    const vint ih_j  = vec_mul( w.ih_j,  cell );
+    const vint ih_jh = vec_mul( w.ih_jh, cell );
+
+    // Component offsets (z, r, θ)
+    const int oz = 0 * NF + part, or_ = 1 * NF + part, ot = 2 * NF + part;
+
+    e.x = vinterp( E + oz,  ih_j,  cell, sy, w.s0zh, w.s1zh, w.s0r,  w.s1r  );
+    e.y = vinterp( E + or_, i_jh,  cell, sy, w.s0z,  w.s1z,  w.s0rh, w.s1rh );
+    e.z = vinterp( E + ot,  i_j,   cell, sy, w.s0z,  w.s1z,  w.s0r,  w.s1r  );
+
+    b.x = vinterp( B + oz,  i_jh,  cell, sy, w.s0z,  w.s1z,  w.s0rh, w.s1rh );
+    b.y = vinterp( B + or_, ih_j,  cell, sy, w.s0zh, w.s1zh, w.s0r,  w.s1r  );
+    b.z = vinterp( B + ot,  ih_jh, cell, sy, w.s0zh, w.s1zh, w.s0rh, w.s1rh );
+}
+
+/**
+ * @brief Bilinear interpolation of one complex field component (SIMD)
+ * 
+ * The (real, imaginary) pairs are gathered together using vec_gather_c()
+ * 
+ * @param base      Address of the component of cell (0,0)
+ * @param idx       (simd vector) Linear index (in complex values) of the lower cell
+ * @param sx        Distance (in complex values) between consecutive cells along z
+ * @param sy        Distance (in complex values) between consecutive cells along r
+ * @param w0z, w1z  (simd vector) z weights
+ * @param w0r, w1r  (simd vector) r weights
+ * @return vcomplex (simd vector) Interpolated value
+ */
+inline vcomplex vinterp_c( const complex_t * __restrict__ base, const vint idx,
+    const int sx, const int sy,
+    const vfloat w0z, const vfloat w1z, const vfloat w0r, const vfloat w1r )
+{
+    vcomplex f0 = vec_mul(   vec_gather_c( base,           idx ), w0z );
+    f0 = vec_fmadd( vec_gather_c( base + sx,      idx ), w1z, f0 );
+    vcomplex f1 = vec_mul(   vec_gather_c( base + sy,      idx ), w0z );
+    f1 = vec_fmadd( vec_gather_c( base + sx + sy, idx ), w1z, f1 );
+    return vec_fmadd( f1, w1r, vec_mul( f0, w0r ) );
+}
+
+/**
+ * @brief SIMD vector of cylindrical complex vectors
+ */
+struct vcomplex3 {
+    vcomplex z, r, th;
+};
+
+/**
+ * @brief Interpolate E and B (complex, mode m > 0) at the particle
+ *        positions (SIMD)
+ * 
+ * @param E         E field tile, cell (0,0)
+ * @param B         B field tile, cell (0,0)
+ * @param jstride   Field tile y stride (in cells)
+ * @param w         Interpolation weights
+ * @param e[out]    (simd vector) E field
+ * @param b[out]    (simd vector) B field
+ */
+inline void vinterpolate_fld_c( const cyl3<complex_t> * __restrict__ E, const cyl3<complex_t> * __restrict__ B,
+    const int jstride, const vinterp_weights & w,
+    vcomplex3 & e, vcomplex3 & b )
+{
+    // Complex values per cell and strides (in complex values)
+    constexpr int cell = 3;
+    const int sy = cell * jstride;
+
+    const vint i_j   = vec_mul3( w.i_j   );
+    const vint i_jh  = vec_mul3( w.i_jh  );
+    const vint ih_j  = vec_mul3( w.ih_j  );
+    const vint ih_jh = vec_mul3( w.ih_jh );
+
+    const complex_t * __restrict__ Ec = reinterpret_cast< const complex_t * >( E );
+    const complex_t * __restrict__ Bc = reinterpret_cast< const complex_t * >( B );
+
+    e.z  = vinterp_c( Ec + 0, ih_j,  cell, sy, w.s0zh, w.s1zh, w.s0r,  w.s1r  );
+    e.r  = vinterp_c( Ec + 1, i_jh,  cell, sy, w.s0z,  w.s1z,  w.s0rh, w.s1rh );
+    e.th = vinterp_c( Ec + 2, i_j,   cell, sy, w.s0z,  w.s1z,  w.s0r,  w.s1r  );
+
+    b.z  = vinterp_c( Bc + 0, i_jh,  cell, sy, w.s0z,  w.s1z,  w.s0rh, w.s1rh );
+    b.r  = vinterp_c( Bc + 1, ih_j,  cell, sy, w.s0zh, w.s1zh, w.s0r,  w.s1r  );
+    b.th = vinterp_c( Bc + 2, ih_jh, cell, sy, w.s0zh, w.s1zh, w.s0rh, w.s1rh );
+}
+
+/**
+ * @brief Advance particle velocities, any number of modes (SIMD version)
+ * 
+ * Same algorithm as push_all() (also used for nmodes = 1), processing
+ * simd::width particles at a time. The fields are gathered from the field
+ * tiles (read in place); for modes m > 0 the complex values are gathered
+ * as (real, imaginary) pairs (vec_gather_c) and combined with exp( i m θ )
+ * (vcomplex).
+ * Remaining particles are processed with the scalar code.
+ * 
+ * @tparam type         Pusher type
+ * @param tile_idx      Tile index
+ * @param part          Particle data
+ * @param E_grid_m0     E field grid, mode 0
+ * @param B_grid_m0     B field grid, mode 0
+ * @param E_grid_m      E field grids, modes m > 0 (indexed by m, entry 0 unused)
+ * @param B_grid_m      B field grids, modes m > 0 (indexed by m, entry 0 unused)
+ * @param nmodes        Number of modes (including mode 0)
+ * @param alpha         Normalization parameter
+ * @param tile_energy   (out) Total particle energy in the tile
+ */
+template < species::pusher type >
+void vpush_all ( 
+    uint2 const tile_idx,
+    cyl_part::particles_view part,
+    grid::tiled_cyl3_view<float> E_grid_m0, grid::tiled_cyl3_view<float> B_grid_m0,
+    grid::tiled_cyl3_view<complex_t> const * const E_grid_m,
+    grid::tiled_cyl3_view<complex_t> const * const B_grid_m,
+    const int nmodes,
+    float const alpha, double & tile_energy )
+{
+    const int tile_id   = tile_idx.y * part.local_ntiles.x + tile_idx.x;
+    const int tile_np   = part.tile_np[ tile_id ];
+
+    const int jstride   = E_grid_m0.tile_ystride();
+
+    const int part_offset  = part.tile_offset[ tile_id ];
+    auto * __restrict__ ix = &part.ix[ part_offset ];
+    auto * __restrict__ x  = &part.x[ part_offset ];
+    auto * __restrict__ u  = &part.u[ part_offset ];
+    auto * __restrict__ th = &part.th[ part_offset ];
+    auto * __restrict__ q  = &part.q[ part_offset ];
+
+    // Pointers to (0,0) of the field tiles of each mode
+    cyl3<float> const * const E0 = E_grid_m0.tile_data( tile_id );
+    cyl3<float> const * const B0 = B_grid_m0.tile_data( tile_id );
+
+    constexpr int max_modes = max_push_modes;
+    cyl3<complex_t> const * Em[ max_modes ];
+    cyl3<complex_t> const * Bm[ max_modes ];
+    for( int m = 1; m < nmodes; m++ ) {
+        Em[m] = E_grid_m[m].tile_data( tile_id );
+        Bm[m] = B_grid_m[m].tile_data( tile_id );
+    }
+
+    double energy = 0;
+
+    const vfloat valpha = vec_float( alpha );
+    const int np_vec = ( tile_np / simd::width ) * simd::width;
+
+    for( int i = 0; i < np_vec; i += simd::width ) {
+
+        const vint2   vix = vec_load_s2( (int *)   & ix[i] );
+        const vfloat2 vx  = vec_load_s2( (float *) & x[i] );
+        const vfloat2 vth = vec_load_s2( (float *) & th[i] );
+
+        const vinterp_weights w( vix, vx, jstride );
+
+        // Mode 0 (z, r, θ components in x, y, z)
+        vfloat3 e, b;
+        vinterpolate_fld<1>( (const float *) E0, (const float *) B0, jstride, w, 0, e, b );
+
+        // Modes m > 0
+        vcomplex em = vec_complex( 1.0f, 0.0f );
+        const vcomplex eth = vec_complex( vth.x, vth.y );
+        for( int m = 1; m < nmodes; m++ ) {
+            // exp( i m θ ) = exp( i (m-1) θ ) * ( cos θ + i sin θ )
+            em = vec_mul( em, eth );
+
+            vcomplex3 ec, bc;
+            vinterpolate_fld_c( Em[m], Bm[m], jstride, w, ec, bc );
+
+            // Re( F_m exp( i m θ ) )
+            e.x = vec_add( e.x, vec_real_mul( em, ec.z  ) );
+            e.y = vec_add( e.y, vec_real_mul( em, ec.r  ) );
+            e.z = vec_add( e.z, vec_real_mul( em, ec.th ) );
+
+            b.x = vec_add( b.x, vec_real_mul( em, bc.z  ) );
+            b.y = vec_add( b.y, vec_real_mul( em, bc.r  ) );
+            b.z = vec_add( b.z, vec_real_mul( em, bc.th ) );
+        }
+
+        // Convert to cartesian components
+        const vfloat3 cart_e {
+            vec_fmsub( e.y, vth.x, vec_mul( e.z, vth.y ) ),
+            vec_fmadd( e.y, vth.y, vec_mul( e.z, vth.x ) ),
+            e.x
+        };
+
+        const vfloat3 cart_b {
+            vec_fmsub( b.y, vth.x, vec_mul( b.z, vth.y ) ),
+            vec_fmadd( b.y, vth.y, vec_mul( b.z, vth.x ) ),
+            b.x
+        };
+
+        vfloat3 pu = vec_load_s3( (float *) & u[i] );
+
+        vfloat ekin;
+        if constexpr ( type == species::pusher::boris ) pu = vdudt_boris( valpha, cart_e, cart_b, pu, ekin );
+        if constexpr ( type == species::pusher::euler ) pu = vdudt_boris_euler( valpha, cart_e, cart_b, pu, ekin );
+
+        vec_store_s3( (float *) & u[i], pu );
+
+        // Particles have different weights (charge q ∝ r)
+        energy += vec_reduce_add( vec_mul( vec_loadu( & q[i] ), ekin ) );
+    }
+
+    // Remaining particles (scalar code, see push_all())
+    for( int i = np_vec; i < tile_np; i++ ) {
+
+        const interp_weights w( ix[i], x[i] );
+        const float2 t = th[i];
+
+        cyl3<float> e, b;
+        interpolate_fld_w( E0, B0, jstride, w, e, b );
+
+        float emr = 1, emi = 0;
+        for( int m = 1; m < nmodes; m++ ) {
+            const float re = ops::fma( emr, t.x, - emi * t.y );
+            const float im = ops::fma( emr, t.y,   emi * t.x );
+            emr = re; emi = im;
+
+            cyl3<complex_t> ve, vb;
+            interpolate_fld_w( Em[m], Bm[m], jstride, w, ve, vb );
+
+            e.z  += ops::fma( emr, ve.z.real(),  -emi * ve.z.imag()  );
+            e.r  += ops::fma( emr, ve.r.real(),  -emi * ve.r.imag()  );
+            e.th += ops::fma( emr, ve.th.real(), -emi * ve.th.imag() );
+
+            b.z  += ops::fma( emr, vb.z.real(),  -emi * vb.z.imag()  );
+            b.r  += ops::fma( emr, vb.r.real(),  -emi * vb.r.imag()  );
+            b.th += ops::fma( emr, vb.th.real(), -emi * vb.th.imag() );
+        }
+
+        float3 cart_e = make_float3(
+            ops::fma( e.r, t.x, - e.th * t.y ),
+            ops::fma( e.r, t.y, + e.th * t.x ),
+            e.z
+        );
+
+        float3 cart_b = make_float3(
+            ops::fma( b.r, t.x, - b.th * t.y ),
+            ops::fma( b.r, t.y, + b.th * t.x ),
+            b.z
+        );
+
+        float3 pu = u[i];
+
+        double ekin = 0;
+        if constexpr ( type == species::pusher::boris ) u[i] = dudt_boris( alpha, cart_e, cart_b, pu, ekin );
+        if constexpr ( type == species::pusher::euler ) u[i] = dudt_boris_euler( alpha, cart_e, cart_b, pu, ekin );
+
+        energy += q[i] * ekin;
+    }
+
+    tile_energy = energy;
+}
+
+#endif // SIMD
 
 /**
  * @brief Physical boundary conditions for the x direction 
@@ -2092,55 +2358,31 @@ void species::move( cyl_modes::tiled_cyl3<float> & current, const int2 shift )
         }
     } break;
 
-    // Optimized verion for nmodes = 2
-    case 2: {
-        auto & J1 = current.mode(1);
-        #pragma omp parallel for collapse(2) schedule( dynamic ) reduction(+:_nmove)
-        for( int ty = 0; ty < ntiles.y; ty ++ ) {
-            for( int tx = 0; tx < ntiles.x; tx ++ ) {
-                kernel::move_deposit_1( 
-                    make_uint2( tx, ty ),
-                    data, J0.view(), J1.view(),
-                    dt_dx, shift );
-                _nmove += data.tile_np[ ty * ntiles.x + tx ];
-            }
-        }
-    } break;
-
-    // General version
+    // Any number of modes (single pass)
     default: {
-        // Deposit the current of modes m > 0, one mode per pass, before the
-        // particles are moved (same strategy as the CUDA version). Each thread
-        // uses its own scratch buffer for the tile current.
-        auto const tile_vol = current.mode(1).tile_vol;
+        // Single pass: move particles and deposit the current of all modes
+        std::vector< grid::tiled_cyl3_view<complex_t> > Jm;
+        Jm.reserve( nmodes );
+        Jm.push_back( current.mode(1).view() );     // entry 0 is unused
+        for( int m = 1; m < nmodes; m++ ) Jm.push_back( current.mode(m).view() );
 
-        #pragma omp parallel
+        auto const tile_vol = J0.tile_vol;
+
+        #pragma omp parallel reduction(+:_nmove)
         {
-            std::vector< cyl3<complex_t> > buffer( tile_vol );
+            // Per thread scratch buffers for the tile current
+            std::vector< cyl3<float> >     buffer_m0( tile_vol );
+            std::vector< cyl3<complex_t> > buffer_m( ( nmodes - 1 ) * tile_vol );
 
-            for( int m = 1; m < nmodes; m++ ) {
-                auto Jm = current.mode(m).view();
-
-                #pragma omp for collapse(2) schedule( dynamic )
-                for( int ty = 0; ty < ntiles.y; ty ++ ) {
-                    for( int tx = 0; tx < ntiles.x; tx ++ ) {
-                        kernel::deposit_m( 
-                            make_uint2( tx, ty ), m,
-                            data, Jm, dt_dx, buffer.data() );
-                    }
+            #pragma omp for collapse(2) schedule( dynamic )
+            for( int ty = 0; ty < ntiles.y; ty ++ ) {
+                for( int tx = 0; tx < ntiles.x; tx ++ ) {
+                    kernel::move_deposit_n( 
+                        make_uint2( tx, ty ),
+                        data, J0.view(), Jm.data(), nmodes,
+                        dt_dx, shift, buffer_m0.data(), buffer_m.data() );
+                    _nmove += data.tile_np[ ty * ntiles.x + tx ];
                 }
-            }
-        }
-
-        // Deposit J0 current and move particles
-        #pragma omp parallel for collapse(2) schedule( dynamic ) reduction(+:_nmove)
-        for( int ty = 0; ty < ntiles.y; ty ++ ) {
-            for( int tx = 0; tx < ntiles.x; tx ++ ) {
-                kernel::move_deposit_0( 
-                    make_uint2( tx, ty ),
-                    data, J0.view(),
-                    dt_dx, shift );
-                _nmove += data.tile_np[ ty * ntiles.x + tx ];
             }
         }
     } break;
@@ -2199,10 +2441,37 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
     auto & E0 = E.mode0();
     auto & B0 = B.mode0();
 
+    // Views of the modes m > 0, indexed by m (entry 0 is unused)
+    std::vector< grid::tiled_cyl3_view<complex_t> > Em, Bm;
+    if ( nmodes > 1 ) {
+        Em.reserve( nmodes ); Bm.reserve( nmodes );
+        Em.push_back( E.mode(1).view() ); Bm.push_back( B.mode(1).view() );
+        for( int m = 1; m < nmodes; m++ ) {
+            Em.push_back( E.mode(m).view() );
+            Bm.push_back( B.mode(m).view() );
+        }
+    }
+
     // Launch the push kernels for the selected pusher type
     auto launch = [&]( auto type_c ) {
         constexpr species::pusher type = decltype( type_c )::value;
 
+#ifdef SIMD
+        // SIMD version, any number of modes
+        #pragma omp parallel for collapse(2) schedule(dynamic) reduction(+:_energy)
+        for( int ty = 0; ty < ntiles.y; ty++ ) {
+            for( int tx = 0; tx < ntiles.x; tx++ ) {
+                double tile_energy;
+                kernel::vpush_all <type> ( make_uint2(tx,ty), 
+                    particles -> view(),
+                    E0.view(), B0.view(), 
+                    Em.data(), Bm.data(), nmodes,
+                    alpha, tile_energy
+                );
+                _energy += tile_energy;
+            }
+        }
+#else
         switch (nmodes) {
         case 1: {
             #pragma omp parallel for collapse(2) schedule(dynamic) reduction(+:_energy)
@@ -2218,41 +2487,13 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
             }
         } break;
 
-        case 2: {
-            auto & E1 = E.mode(1);
-            auto & B1 = B.mode(1);
-
-            #pragma omp parallel for collapse(2) schedule(dynamic) reduction(+:_energy)
-            for( int ty = 0; ty < ntiles.y; ty++ ) {
-                for( int tx = 0; tx < ntiles.x; tx++ ) {
-                    double tile_energy;
-                    kernel::push_1 <type> ( make_uint2(tx,ty), 
-                        particles -> view(),
-                        E0.view(), B0.view(), 
-                        E1.view(), B1.view(),
-                        alpha, tile_energy
-                    );
-                    _energy += tile_energy;
-                }
-            }
-        } break;
-
-        // General version (streamed push)
+        // Any number of modes (single pass)
         default: {
-            // Views of the modes m > 0, indexed by m (entry 0 is unused)
-            std::vector< grid::tiled_cyl3_view<complex_t> > Em, Bm;
-            Em.reserve( nmodes ); Bm.reserve( nmodes );
-            Em.push_back( E.mode(1).view() ); Bm.push_back( B.mode(1).view() );
-            for( int m = 1; m < nmodes; m++ ) {
-                Em.push_back( E.mode(m).view() );
-                Bm.push_back( B.mode(m).view() );
-            }
-
             #pragma omp parallel for collapse(2) schedule(dynamic) reduction(+:_energy)
             for( int ty = 0; ty < ntiles.y; ty++ ) {
                 for( int tx = 0; tx < ntiles.x; tx++ ) {
                     double tile_energy;
-                    kernel::push_n <type> ( make_uint2(tx,ty), 
+                    kernel::push_all <type> ( make_uint2(tx,ty), 
                         particles -> view(),
                         E0.view(), B0.view(), 
                         Em.data(), Bm.data(), nmodes,
@@ -2263,6 +2504,7 @@ void species::push( cyl_modes::tiled_cyl3<float> & E, cyl_modes::tiled_cyl3<floa
             }
         } break;
         }
+#endif
     };
 
     switch ( push_type ) {

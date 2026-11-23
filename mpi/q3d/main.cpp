@@ -559,7 +559,9 @@ void test_lwfa() {
     int nmodes = 2;
     uint2 dims { 1024, 128 };
     float2 box { 20.48, 12.8 };
-    uint2 partition { 2, 2 };
+    
+    uint2 partition { 1, 1 }; // No MPI, OpenMP only
+    // uint2 partition { 2, 2 };
 
     uint2 nx { 32, 32 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
@@ -592,6 +594,8 @@ void test_lwfa() {
     sim.set_moving_window();
     sim.current.set_filter( filter::compensated( filter::axis::z, 4 ));
 
+    // Disable diagnostics for performance tests
+#if 0
     auto diag = [& sim, & electrons ]( ) {
         sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
         sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
@@ -612,6 +616,9 @@ void test_lwfa() {
         electrons.save_charge( 0 );
         electrons.save_charge( 1 );
     };
+#else
+    auto diag = [ ]( ) {};
+#endif
 
     if ( mpi::root() )
         std::cout << "Starting simulation, dt = " << dt << '\n';
@@ -633,6 +640,9 @@ void test_lwfa() {
     if ( mpi::root() ) {
         std::cout << "Simulation run up to t = " << sim.get_t()
                 << " in " << t0.elapsed(timer::units::s) << " s\n";
+
+        auto perf = sim.get_nmove() / t0.elapsed(timer::units::s) / 1.e9;
+        std::cout << "Performance : " << perf << " GPart/s\n";
 
         std::cout << ansi::bold;
         std::cout << "Done!\n";
