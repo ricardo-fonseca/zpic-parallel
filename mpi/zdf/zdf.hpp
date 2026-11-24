@@ -21,6 +21,12 @@
 
 #include "zdf.h"
 
+// util::complex64 / util::complex128 (see common/util/complex.hpp), if available
+#if __has_include( "util/complex.hpp" )
+#include "util/complex.hpp"
+#define ZDF_HAS_UTIL_COMPLEX
+#endif
+
 namespace zdf {
 
 // C interface names, also available in the zdf namespace
@@ -123,6 +129,12 @@ template<> constexpr t_zdf_data_type data_type<double  >() { return zdf_float64;
 // Complex datatypes (std::complex)
 template<> constexpr t_zdf_data_type data_type<std::complex<float >>() { return zdf_complex64; };
 template<> constexpr t_zdf_data_type data_type<std::complex<double>>() { return zdf_complex128; };
+
+#if defined( ZDF_HAS_UTIL_COMPLEX ) && ! defined( USE_STD_COMPLEX )
+// Complex datatypes (util::complex, when not mapped to std::complex)
+template<> constexpr t_zdf_data_type data_type<util::complex64 >() { return zdf_complex64; };
+template<> constexpr t_zdf_data_type data_type<util::complex128>() { return zdf_complex128; };
+#endif
 
 /**
  * @brief Save grid data to disk

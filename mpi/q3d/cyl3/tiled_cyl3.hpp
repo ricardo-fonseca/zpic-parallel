@@ -14,13 +14,13 @@ namespace mpi {
 template<> inline MPI_Datatype data_type< cyl3<float>  >() { return data_type<float3>(); }
 template<> inline MPI_Datatype data_type< cyl3<double> >() { return data_type<double3>(); }
 
-template<> inline MPI_Datatype data_type< cyl3< std::complex<float> >>() {
-    static const MPI_Datatype t = detail::contiguous_type( 3, data_type<std::complex<float>>() );
+template<> inline MPI_Datatype data_type< cyl3< util::complex64 > >() {
+    static const MPI_Datatype t = detail::contiguous_type( 3, data_type<util::complex64>() );
     return t;
 }
 
-template<> inline MPI_Datatype data_type< cyl3<std::complex<double>> >() {
-    static const MPI_Datatype t = detail::contiguous_type( 3, data_type<std::complex<double>>() );
+template<> inline MPI_Datatype data_type< cyl3< util::complex128 > >() {
+    static const MPI_Datatype t = detail::contiguous_type( 3, data_type<util::complex128>() );
     return t;
 }
 
@@ -272,8 +272,8 @@ void scatter(
  *       guard cells on the node holding the axis, since there is no lower
  *       neighbour. Any axis boundary condition must be applied separately.
  *
- * @tparam S    Component datatype: float, double, std::complex<float> or
- *              std::complex<double>
+ * @tparam S    Component datatype: float, double, util::complex64 or
+ *              util::complex128
  */
 template < typename S >
 class tiled_cyl3 : public grid::tiled< cyl3<S> >

@@ -1,8 +1,8 @@
 #include "emf.hpp"
-#include <complex>
+#include "util/complex.hpp"
 #include <iostream>
 
-using complex_t = std::complex<float>;
+using complex_t = util::complex<float>;
 
 namespace kernel {
 

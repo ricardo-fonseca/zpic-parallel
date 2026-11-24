@@ -1,12 +1,12 @@
 #pragma once
 
 #include "emf.hpp"
-#include <complex>
+#include "util/complex.hpp"
 
 namespace laser {
 
-using complex_t        = std::complex<float>;
-using complex_double_t = std::complex<double>;
+using complex_t        = util::complex64;
+using complex_double_t = util::complex128;
 
 /**
  * @brief Longitudinal laser envelope (resolved parameters)

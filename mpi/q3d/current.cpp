@@ -289,7 +289,7 @@ void tile_bc( cyl3<T> * const tile, const grid::tiled_cyl3_view<T> & view,
  * with Jr on the axis set to 0.
  *
  * @param tile_idx      Tile index
- * @tparam T            float (m = 0) or std::complex<float> (m > 0)
+ * @tparam T            float (m = 0) or util::complex64 (m > 0)
  * @param J_grid        View of the mode m current grid
  * @param local_bc      Local rank boundary conditions
  * @param m             Mode number

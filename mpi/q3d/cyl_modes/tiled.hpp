@@ -7,6 +7,7 @@
 
 #include "core/bounds.hpp"
 #include "parallel/partition.hpp"
+#include "util/complex.hpp"
 
 #include "grid/tiled.hpp"
 
@@ -40,7 +41,7 @@ class tiled {
     using grid0_type = Grid< T >;
 
     /// @brief Mode m > 0 (complex) grid type
-    using gridm_type = Grid< std::complex<T> >;
+    using gridm_type = Grid< util::complex<T> >;
 
     /// @brief Number of cylindrical modes (including fundamental mode)
     const int nmodes;

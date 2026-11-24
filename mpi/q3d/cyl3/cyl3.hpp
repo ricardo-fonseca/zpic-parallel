@@ -3,8 +3,8 @@
 #include <iostream>
 #include <string>
 #include <type_traits>
-#include <complex>
 
+#include "util/complex.hpp"
 #include "core/vec_types.hpp"
 
 /**
@@ -237,8 +237,8 @@ struct cyl3 {
 
 using cyl_float3   = cyl3< float >;
 using cyl_double3  = cyl3< double >;
-using cyl_cfloat3  = cyl3< std::complex<float> >;
-using cyl_cdouble3 = cyl3< std::complex<double> >;
+using cyl_cfloat3  = cyl3< util::complex64 >;
+using cyl_cdouble3 = cyl3< util::complex128 >;
 
 // -------------------------------------------------------------------------
 // Layout checks
@@ -261,9 +261,12 @@ constexpr bool layout_ok =
 static_assert( detail_cyl3::layout_ok< float > );
 static_assert( detail_cyl3::layout_ok< double > );
 
-// Not sure why this is breaking
-// static_assert( detail_cyl3::layout_ok< std::complex<float> >);
-// static_assert( detail_cyl3::layout_ok< std::complex<double> >);
+// std::complex is not trivially default constructible, so this check only
+// applies to util::complex (the default, see util/complex.hpp)
+#ifndef USE_STD_COMPLEX
+static_assert( detail_cyl3::layout_ok< util::complex64 > );
+static_assert( detail_cyl3::layout_ok< util::complex128 > );
+#endif
 
 static_assert( sizeof( cyl_float3 )  == sizeof( float3 )  && alignof( cyl_float3 )  == alignof( float3 ) );
 static_assert( sizeof( cyl_double3 ) == sizeof( double3 ) && alignof( cyl_double3 ) == alignof( double3 ) );

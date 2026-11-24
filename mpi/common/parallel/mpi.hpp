@@ -12,6 +12,7 @@
 
 
 #include "../core/vec_types.hpp"
+#include "../util/complex.hpp"
 
 
 namespace mpi {
@@ -86,6 +87,12 @@ template<> inline MPI_Datatype data_type<double  >(void) { return MPI_DOUBLE; };
 
 template<> inline MPI_Datatype data_type<std::complex<float >>(void) { return MPI_C_FLOAT_COMPLEX ; };
 template<> inline MPI_Datatype data_type<std::complex<double >>(void) { return MPI_C_DOUBLE_COMPLEX ; };
+
+#ifndef USE_STD_COMPLEX
+// util::complex (when not mapped to std::complex, see util/complex.hpp)
+template<> inline MPI_Datatype data_type<util::complex64 >(void) { return MPI_C_FLOAT_COMPLEX ; };
+template<> inline MPI_Datatype data_type<util::complex128>(void) { return MPI_C_DOUBLE_COMPLEX ; };
+#endif
 
 inline const MPI_Op sum = MPI_SUM;
 inline const MPI_Op max = MPI_MAX;

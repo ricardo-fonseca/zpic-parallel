@@ -19,7 +19,7 @@
 
 #include "simd.hpp"
 
-#include <complex>
+#include "../util/complex.hpp"
 
 #ifdef SIMD
 
@@ -107,15 +107,15 @@ inline vfloat vec_real_mul( const vcomplex a, const vcomplex b ) {
 /**
  * @brief Gathers complex values from an (interleaved) complex array
  * 
- * Uses vec_gather_2() (architecture specific) to gather the (real, imaginary)
+ * Uses vec_gather_s2() (architecture specific) to gather the (real, imaginary)
  * pairs with 64 bit gathers / loads
  * 
  * @param base      Base address
  * @param vindex    Element indices (in complex elements)
  * @return vcomplex 
  */
-inline vcomplex vec_gather_c( std::complex<float> const * base, const vint vindex ) {
-    const vfloat2 v = vec_gather_2( reinterpret_cast< const float * >( base ), vec_add( vindex, vindex ) );
+inline vcomplex vec_gather_c( util::complex<float> const * base, const vint vindex ) {
+    const vfloat2 v = vec_gather_s2( reinterpret_cast< const float * >( base ), vec_add( vindex, vindex ) );
     return vcomplex{ v.x, v.y };
 }
 
@@ -123,15 +123,15 @@ inline vcomplex vec_gather_c( std::complex<float> const * base, const vint vinde
  * @brief Extracts a single complex value from a complex vector
  */
 template< int imm > 
-inline std::complex<float> vec_extract( const vcomplex a ) {
-    return std::complex<float>( vec_extract<imm>( a.re ), vec_extract<imm>( a.im ) );
+inline util::complex<float> vec_extract( const vcomplex a ) {
+    return util::complex<float>( vec_extract<imm>( a.re ), vec_extract<imm>( a.im ) );
 }
 
 /**
  * @brief Extracts a single complex value from a complex vector
  */
-inline std::complex<float> vec_extract( const vcomplex a, const int i ) {
-    return std::complex<float>( vec_extract( a.re, i ), vec_extract( a.im, i ) );
+inline util::complex<float> vec_extract( const vcomplex a, const int i ) {
+    return util::complex<float>( vec_extract( a.re, i ), vec_extract( a.im, i ) );
 }
 
 

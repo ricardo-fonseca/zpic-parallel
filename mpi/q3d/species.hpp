@@ -55,7 +55,7 @@ class species {
 
 public:
 
-    using complex_t = std::complex<float>;
+    using complex_t = util::complex64;
 
     enum class pusher{ boris = 0, euler };
 
