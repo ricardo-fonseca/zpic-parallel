@@ -1249,7 +1249,7 @@ struct alignas(vec_mask) vmask2 {
  * @param vindex        Index (in elements) of the first value of each pair
  * @return vfloat2      .x - first values, .y - second values
  */
-inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
+inline vfloat2 vec_gather_s2( float const * base_addr, vec_i32 vindex ) {
     // 64 bit gathers (byte offsets), half the vector elements each
     const svbool_t pg = svptrue_b64();
     const svint64_t off_lo = svlsl_n_s64_x( pg, svunpklo_s64( vindex ), 2 );
@@ -1275,8 +1275,8 @@ inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
  * @param vindex        Index (in elements) of the first value of each pair
  * @return vint2        .x - first values, .y - second values
  */
-inline vint2 vec_gather_2( int const * base_addr, vec_i32 vindex ) {
-    const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
+inline vint2 vec_gather_s2( int const * base_addr, vec_i32 vindex ) {
+    const vfloat2 v = vec_gather_s2( (float const *) base_addr, vindex );
     return vint2{ svreinterpret_s32_f32( v.x ), svreinterpret_s32_f32( v.y ) };
 }
 

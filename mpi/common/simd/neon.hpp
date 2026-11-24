@@ -1165,7 +1165,7 @@ struct alignas(vec_mask32) vmask2 {
  * @param vindex        Index (in elements) of the first value of each pair
  * @return vfloat2      .x - first values, .y - second values
  */
-inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
+inline vfloat2 vec_gather_s2( float const * base_addr, vec_i32 vindex ) {
     // Pairs are loaded with 64 bit loads
     const float32x4_t v01 = vcombine_f32(
         vld1_f32( base_addr + vgetq_lane_s32( vindex, 0 ) ),
@@ -1189,7 +1189,7 @@ inline vfloat2 vec_gather_2( float const * base_addr, vec_i32 vindex ) {
  * @param vindex        Index (in elements) of the first value of each pair
  * @return vint2        .x - first values, .y - second values
  */
-inline vint2 vec_gather_2( int const * base_addr, vec_i32 vindex ) {
+inline vint2 vec_gather_s2( int const * base_addr, vec_i32 vindex ) {
     const int32x4_t v01 = vcombine_s32(
         vld1_s32( base_addr + vgetq_lane_s32( vindex, 0 ) ),
         vld1_s32( base_addr + vgetq_lane_s32( vindex, 1 ) ) );

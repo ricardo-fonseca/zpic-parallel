@@ -1434,7 +1434,7 @@ struct alignas(__mmask16) vmask2 {
  * @param vindex        Index (in elements) of the first value of each pair
  * @return vfloat2      .x - first values, .y - second values
  */
-inline vfloat2 vec_gather_2( float const * base_addr, __m512i vindex ) {
+inline vfloat2 vec_gather_s2( float const * base_addr, __m512i vindex ) {
     // 64 bit gathers, 8 pairs each
     const __m512i lo = _mm512_i32gather_epi64( _mm512_castsi512_si256( vindex ), base_addr, 4 );
     const __m512i hi = _mm512_i32gather_epi64( _mm512_extracti64x4_epi64( vindex, 1 ), base_addr, 4 );
@@ -1463,8 +1463,8 @@ inline vfloat2 vec_gather_2( float const * base_addr, __m512i vindex ) {
  * @param vindex        Index (in elements) of the first value of each pair
  * @return vint2        .x - first values, .y - second values
  */
-inline vint2 vec_gather_2( int const * base_addr, __m512i vindex ) {
-    const vfloat2 v = vec_gather_2( (float const *) base_addr, vindex );
+inline vint2 vec_gather_s2( int const * base_addr, __m512i vindex ) {
+    const vfloat2 v = vec_gather_s2( (float const *) base_addr, vindex );
     return vint2{ _mm512_castps_si512( v.x ), _mm512_castps_si512( v.y ) };
 }
 
