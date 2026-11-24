@@ -4,7 +4,7 @@
 
 namespace laser {
 
-using complex_t = std::complex<float>;
+using complex_t = util::complex<float>;
 
 /**
  * @brief Longitudinal laser envelope (resolved parameters)

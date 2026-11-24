@@ -11,7 +11,7 @@ class current {
     public:
 
     // Complex values to use
-    using complex_t = std::complex<float>;
+    using complex_t = util::complex<float>;
 
     enum class quantity { j = 0, fj };
     struct bc {

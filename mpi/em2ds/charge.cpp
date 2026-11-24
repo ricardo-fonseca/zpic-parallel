@@ -177,7 +177,7 @@ void charge::save( const quantity quant ) {
     std::string label = "\\rho";    // Dataset label (for plots)
 
     grid::tiled<float> * f = nullptr;
-    grid::flat<std::complex<float>> * cf = nullptr;
+    grid::flat<complex_t> * cf = nullptr;
 
     switch (quant) {
         case quantity::rho :

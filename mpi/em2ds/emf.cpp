@@ -343,7 +343,7 @@ void emf::save( const quantity quant, fcomp::cart const fc ) const {
     std::string vflabel; // Dataset label (for plots)
 
     grid::tiled_vec3<float> * f = nullptr;
-    grid::flat3<std::complex<float>> * cf = nullptr;
+    grid::flat3<complex_t> * cf = nullptr;
 
     switch ( quant ) {
         case quantity::e :

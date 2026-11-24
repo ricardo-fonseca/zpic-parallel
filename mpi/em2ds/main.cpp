@@ -7,6 +7,10 @@
 #include "core/bounds.hpp"
 #include "grid/grid.hpp"
 
+#include "util/complex.hpp"
+
+using complex_t = util::complex<float>;
+
 void test_tiled_grid( ) {
     
     if ( mpi::root() ) {
@@ -390,7 +394,7 @@ void set_charge( grid::tiled<float> & charge, const float2 dx, const float2 cent
     }
 }
 
-void poisson( grid::flat<std::complex<float>> & potential, const float2 dk )
+void poisson( grid::flat<complex_t> & potential, const float2 dk )
 {
     auto start  = potential.get_local_start();
     auto dims   = potential.get_local_dims();
@@ -748,11 +752,11 @@ void test_weibel( )
 
     // Create simulation box
     uint2 ntiles{16, 16};
-    uint2 nx{32, 32};                                                                                                                                                                     
-    float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
+    uint2 tile_dims{32, 32};
+    float2 box = {tile_dims.x * ntiles.x * 0.1f, tile_dims.y * ntiles.y * 0.1f};
     float dt = 0.07;
                                         
-    zpic::simulation sim( ntiles, nx, box, dt, partition );
+    zpic::simulation sim( ntiles, tile_dims, box, dt, partition );
                             
     uint2 ppc{4, 4};
 

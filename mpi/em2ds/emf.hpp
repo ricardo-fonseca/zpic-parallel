@@ -16,7 +16,7 @@ class emf {
 
     public:
 
-    using complex_t = std::complex<float>;
+    using complex_t = util::complex<float>;
 
     enum class quantity {e = 0, b, fe, fet, fb};
     struct bc { 

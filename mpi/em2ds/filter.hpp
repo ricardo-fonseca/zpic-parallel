@@ -10,7 +10,7 @@
 
 namespace filter {
 
-using complex_t = std::complex<float>;
+using complex_t = util::complex<float>;
 
 class digital {
     public:

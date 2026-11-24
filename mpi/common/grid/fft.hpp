@@ -3,13 +3,13 @@
 #include <iostream>
 #include <cstddef>
 #include <string>
-#include <complex>
 #include <algorithm>
 
 #include <mpi.h>
 #include <fftw3.h>
 #include <fftw3-mpi.h>
 
+#include "../util/complex.hpp"
 #include "../parallel/parallel.hpp"
 #include "../zdf/zdf-parallel.hpp"
 
@@ -27,7 +27,7 @@ namespace grid {
 
 namespace fft {
 
-using complex_t = std::complex<float>;
+using complex_t = util::complex<float>;
 
 static_assert( sizeof( complex_t ) == sizeof( fftwf_complex ),
     "complex_t must be layout compatible with fftwf_complex" );

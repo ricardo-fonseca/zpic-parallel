@@ -3,13 +3,14 @@
 #include "grid/tiled.hpp"
 #include "grid/fft.hpp"
 
+#include "util/complex.hpp"
 #include "filter.hpp"
 
 class charge {
 
     public:
 
-    using complex_t = std::complex<float>;
+    using complex_t = util::complex<float>;
 
     enum class quantity  { rho = 0, frho };
 
