@@ -1198,12 +1198,12 @@ void move_deposit_n(
         );
         
         // Deposit current (mode 0)
-                                  dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
+        dep_current_seg_0( v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, J0, jstride );
         if ( cross.x || cross.y ) dep_current_seg_0( v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, J0, jstride );
         if ( cross.x && cross.y ) dep_current_seg_0( v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, J0, jstride );
 
         // Deposit current (modes m > 0)
-                                  dep_current_seg_n( nmodes, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, Jm, jstride, tile_vol );
+        dep_current_seg_n( nmodes, v0_ix, v0_x0, v0_x1, v0_t0, v0_t1, pq, Jm, jstride, tile_vol );
         if ( cross.x || cross.y ) dep_current_seg_n( nmodes, v1_ix, v1_x0, v1_x1, v1_t0, v1_t1, pq, Jm, jstride, tile_vol );
         if ( cross.x && cross.y ) dep_current_seg_n( nmodes, v2_ix, v2_x0, v2_x1, v2_t0, v2_t1, pq, Jm, jstride, tile_vol );
 
@@ -2234,71 +2234,38 @@ inline void vdep_weights_0( const vsegment & s, const vfloat q, vfloat w[8] )
 }
 
 /**
- * @brief Geometry of a segment for the deposit of modes m > 0 (SIMD version
- *        of the first part of dep_current_seg_n())
+ * @brief Mode n current weights of a segment (SIMD version of
+ *.       dep_current_seg_n(), weights only)
+ * 
+ * @param s         (simd vector) Segment
+ * @param e0        (simd vector) for the initial angle
+ * @param e1        (simd vector) for the final angle
+ * @param em        (simd vector) for the mid point angle
+ * @param q         (simd vector) Particle charge
+ * @param w[out]    (simd vector) Weights: Jz(i,j), Jz(i,j+1), Jr(i,j),
+ *                  Jr(i+1,j), Jθ(i,j), Jθ(i+1,j), Jθ(i,j+1), Jθ(i+1,j+1)
  */
-struct vseg_m {
-    /// @brief exp( -i θ ) at the initial, final and mid points
-    vcomplex e1_0, e1_1, e1_m;
-    /// @brief exp( -i m θ ) at the initial, final and mid points (current m)
-    vcomplex e0, e1, em;
-    vfloat S0z0, S0z1, S1z0, S1z1, S0r0, S0r1, S1r0, S1r1;
-    vfloat dz, dr, wp10, wp11, wp20, wp21;
-
-    vseg_m() = default;
-
-    vseg_m( const vsegment & s ) {
+inline void vdep_weights_n( const vsegment & s, const vcomplex e0, const vcomplex e1, const vcomplex em, const vfloat q, vcomplex w[8] )
+{
         const vfloat c_1_2 = vec_float( 0.5f );
-        const vfloat c_1   = vec_float( 1.0f );
 
-        const vfloat rcr0 = vec_div( c_1, vec_sqrt( vec_fmadd( s.t0.x, s.t0.x, vec_mul( s.t0.y, s.t0.y ) ) ) );
-        const vfloat rcr1 = vec_div( c_1, vec_sqrt( vec_fmadd( s.t1.x, s.t1.x, vec_mul( s.t1.y, s.t1.y ) ) ) );
+        const vfloat S0z0 = vec_sub( c_1_2, s.x0.x );
+        const vfloat S0z1 = vec_add( c_1_2, s.x0.x );
+        const vfloat S1z0 = vec_sub( c_1_2, s.x1.x );
+        const vfloat S1z1 = vec_add( c_1_2, s.x1.x );
+        const vfloat S0r0 = vec_sub( c_1_2, s.x0.y );
+        const vfloat S0r1 = vec_add( c_1_2, s.x0.y );
+        const vfloat S1r0 = vec_sub( c_1_2, s.x1.y );
+        const vfloat S1r1 = vec_add( c_1_2, s.x1.y );
 
-        const vfloat xif = vec_add( s.t0.x, s.t1.x );
-        const vfloat yif = vec_add( s.t0.y, s.t1.y );
-        const vfloat rrm2 = vec_div( c_1, vec_sqrt( vec_fmadd( xif, xif, vec_mul( yif, yif ) ) ) );
+        const vfloat dz = vec_sub( s.x1.x, s.x0.x );
+        const vfloat dr = vec_sub( s.x1.y, s.x0.y );
 
-        // exp( -i θ ) = cos θ - i sin θ
-        e1_0 = vec_complex( vec_mul( s.t0.x, rcr0 ), vec_neg( vec_mul( s.t0.y, rcr0 ) ) );
-        e1_1 = vec_complex( vec_mul( s.t1.x, rcr1 ), vec_neg( vec_mul( s.t1.y, rcr1 ) ) );
-        e1_m = vec_complex( vec_mul( xif, rrm2 ),    vec_neg( vec_mul( yif, rrm2 ) ) );
+        const vfloat wp10 = vec_mul( c_1_2, vec_add( S0r0, S1r0 ) );
+        const vfloat wp11 = vec_mul( c_1_2, vec_add( S0r1, S1r1 ) );
+        const vfloat wp20 = vec_mul( c_1_2, vec_add( S0z0, S1z0 ) );
+        const vfloat wp21 = vec_mul( c_1_2, vec_add( S0z1, S1z1 ) );
 
-        e0 = e1_0; e1 = e1_1; em = e1_m;
-
-        S0z0 = vec_sub( c_1_2, s.x0.x );
-        S0z1 = vec_add( c_1_2, s.x0.x );
-        S1z0 = vec_sub( c_1_2, s.x1.x );
-        S1z1 = vec_add( c_1_2, s.x1.x );
-        S0r0 = vec_sub( c_1_2, s.x0.y );
-        S0r1 = vec_add( c_1_2, s.x0.y );
-        S1r0 = vec_sub( c_1_2, s.x1.y );
-        S1r1 = vec_add( c_1_2, s.x1.y );
-
-        dz = vec_sub( s.x1.x, s.x0.x );
-        dr = vec_sub( s.x1.y, s.x0.y );
-
-        wp10 = vec_mul( c_1_2, vec_add( S0r0, S1r0 ) );
-        wp11 = vec_mul( c_1_2, vec_add( S0r1, S1r1 ) );
-        wp20 = vec_mul( c_1_2, vec_add( S0z0, S1z0 ) );
-        wp21 = vec_mul( c_1_2, vec_add( S0z1, S1z1 ) );
-    }
-
-    /**
-     * @brief Advance the angular factors to the next mode, exp( -i (m+1) θ )
-     */
-    void next_mode() {
-        e0 = vec_mul( e0, e1_0 );
-        e1 = vec_mul( e1, e1_1 );
-        em = vec_mul( em, e1_m );
-    }
-
-    /**
-     * @brief Current weights for the current mode
-     * 
-     * @param q         (simd vector) Particle charge
-     * @param w[out]    (simd vector) Weights, same order as vdep_weights_0()
-     */
-    void weights( const vfloat q, vcomplex w[8] ) const {
         const vcomplex c0 = vec_sub( e0, em );
         const vcomplex c1 = vec_sub( e1, em );
 
@@ -2317,8 +2284,7 @@ struct vseg_m {
         w[5] = wth( S0z1, S1z1, S0r0, S1r0 );
         w[6] = wth( S0z0, S1z0, S0r1, S1r1 );
         w[7] = wth( S0z1, S1z1, S0r1, S1r1 );
-    }
-};
+}
 
 /**
  * @brief Deposit the mode 0 current of a segment, masked SIMD version
@@ -2394,25 +2360,51 @@ inline void vdep_current_seg_n( const int nmodes, const vsegment & s, const vflo
     if ( vec_any( mask ) ) {
         constexpr int W = simd::width;
 
-        alignas(local_align) float wr_s[8][W];
-        alignas(local_align) float wi_s[8][W];
-        alignas(local_align) int   idx_s[W];
-        alignas(local_align) int   act_s[W];
+        // Memory buffers for accessing vector values
+        alignas(local_align) float w_re[8][W];
+        alignas(local_align) float w_im[8][W];
+        alignas(local_align) int   idx[W];
+        alignas(local_align) int   deposit[W];
 
-        vec_store( idx_s, vec_add( s.ix.x, vec_mul( s.ix.y, stride ) ) );
-        vec_store( act_s, vec_select( vec_int( 0 ), vec_int( 1 ), mask ) );
+        vec_store( idx, vec_add( s.ix.x, vec_mul( s.ix.y, stride ) ) );
+        vec_store( deposit, vec_select( vec_int( 0 ), vec_int( 1 ), mask ) );
 
-        vseg_m g( s );
+        const vfloat c_1   = vec_float( 1.0f );
+
+        const vfloat rcr0 = vec_div( c_1, vec_sqrt( vec_fmadd( s.t0.x, s.t0.x, vec_mul( s.t0.y, s.t0.y ) ) ) );
+        const vfloat rcr1 = vec_div( c_1, vec_sqrt( vec_fmadd( s.t1.x, s.t1.x, vec_mul( s.t1.y, s.t1.y ) ) ) );
+
+        const vfloat xif = vec_add( s.t0.x, s.t1.x );
+        const vfloat yif = vec_add( s.t0.y, s.t1.y );
+        const vfloat rrm2 = vec_div( c_1, vec_sqrt( vec_fmadd( xif, xif, vec_mul( yif, yif ) ) ) );
+
+        /// @brief exp( -i θ ) for the initial, final and mid point angles
+        const vcomplex e0_1 = vec_complex( vec_mul( s.t0.x, rcr0 ), vec_neg( vec_mul( s.t0.y, rcr0 ) ) );
+        const vcomplex e1_1 = vec_complex( vec_mul( s.t1.x, rcr1 ), vec_neg( vec_mul( s.t1.y, rcr1 ) ) );
+        const vcomplex em_1 = vec_complex( vec_mul( xif, rrm2 ),    vec_neg( vec_mul( yif, rrm2 ) ) );
+
+        vcomplex e0 = e0_1;
+        vcomplex e1 = e1_1;
+        vcomplex em = em_1;
 
         for( int m = 1; m < nmodes; m++ ) {
-            if ( m > 1 ) g.next_mode();
+            
+            /// @brief exp( -i m θ ) for the initial, final and mid point angles
+            if ( m > 1 ) {
+                e0 = vec_mul( e0, e0_1 );
+                e1 = vec_mul( e1, e1_1 );
+                em = vec_mul( em, em_1 );
+            }
 
-            {
+            {   // Get deposition weights for all 8 components
                 vcomplex w[8];
-                g.weights( q, w );
+                vdep_weights_n(s, e0, e1, em, q, w );
+                
+                // Store them in memory
+                #pragma unroll 8
                 for( int c = 0; c < 8; c++ ) {
-                    vec_store( wr_s[c], w[c].re );
-                    vec_store( wi_s[c], w[c].im );
+                    vec_store( w_re[c], w[c].re );
+                    vec_store( w_im[c], w[c].im );
                 }
             }
 
@@ -2420,16 +2412,16 @@ inline void vdep_current_seg_n( const int nmodes, const vsegment & s, const vflo
 
             for( int k = 0; k < W; k++ ) {
                 // Only deposit particles with active mask
-                if ( act_s[k] ) {
-                    cyl3<complex_t> * __restrict__ const Js = & Jm[ idx_s[k] ];
-                    Js[ 0          ].z  += complex_t( wr_s[0][k], wi_s[0][k] );
-                    Js[ stride     ].z  += complex_t( wr_s[1][k], wi_s[1][k] );
-                    Js[ 0          ].r  += complex_t( wr_s[2][k], wi_s[2][k] );
-                    Js[ 1          ].r  += complex_t( wr_s[3][k], wi_s[3][k] );
-                    Js[ 0          ].th += complex_t( wr_s[4][k], wi_s[4][k] );
-                    Js[ 1          ].th += complex_t( wr_s[5][k], wi_s[5][k] );
-                    Js[ stride     ].th += complex_t( wr_s[6][k], wi_s[6][k] );
-                    Js[ stride + 1 ].th += complex_t( wr_s[7][k], wi_s[7][k] );
+                if ( deposit[k] ) {
+                    cyl3<complex_t> * __restrict__ const Js = & Jm[ idx[k] ];
+                    Js[ 0          ].z  += complex_t( w_re[0][k], w_im[0][k] );
+                    Js[ stride     ].z  += complex_t( w_re[1][k], w_im[1][k] );
+                    Js[ 0          ].r  += complex_t( w_re[2][k], w_im[2][k] );
+                    Js[ 1          ].r  += complex_t( w_re[3][k], w_im[3][k] );
+                    Js[ 0          ].th += complex_t( w_re[4][k], w_im[4][k] );
+                    Js[ 1          ].th += complex_t( w_re[5][k], w_im[5][k] );
+                    Js[ stride     ].th += complex_t( w_re[6][k], w_im[6][k] );
+                    Js[ stride + 1 ].th += complex_t( w_re[7][k], w_im[7][k] );
                 }
             }
         }
@@ -2553,18 +2545,17 @@ void vmove_deposit_n(
         // Masked deposit (as in mpi/em2d): segment by segment, from the vector
         // registers, lanes selected by the segment masks
         {
-            const vmask act0 = vec_eq( ix0.x, ix0.x );      // all lanes
-            const vmask act1 = vec_or( cross_z, cross_r );
-            const vmask act2 = vec_and( cross_z, cross_r );
+            const vmask use_seg1 = vec_or( cross_z, cross_r );
+            const vmask use_seg2 = vec_and( cross_z, cross_r );
 
-            vdep_current_seg_0( seg0, pq, J0, jstride, act0 );
-            vdep_current_seg_0( seg1, pq, J0, jstride, act1 );
-            vdep_current_seg_0( seg2, pq, J0, jstride, act2 );
+            vdep_current_seg_0( seg0, pq, J0, jstride, vec_true() ); // all lanes
+            vdep_current_seg_0( seg1, pq, J0, jstride, use_seg1 );
+            vdep_current_seg_0( seg2, pq, J0, jstride, use_seg2 );
 
             if ( nmodes > 1 ) {
-                vdep_current_seg_n( nmodes, seg0, pq, Jm, jstride, tile_vol, act0 );
-                vdep_current_seg_n( nmodes, seg1, pq, Jm, jstride, tile_vol, act1 );
-                vdep_current_seg_n( nmodes, seg2, pq, Jm, jstride, tile_vol, act2 );
+                vdep_current_seg_n( nmodes, seg0, pq, Jm, jstride, tile_vol, vec_true() );
+                vdep_current_seg_n( nmodes, seg1, pq, Jm, jstride, tile_vol, use_seg1 );
+                vdep_current_seg_n( nmodes, seg2, pq, Jm, jstride, tile_vol, use_seg2 );
             }
         }
 

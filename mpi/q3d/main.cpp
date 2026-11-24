@@ -560,8 +560,8 @@ void test_lwfa() {
     uint2 dims { 1024, 128 };
     float2 box { 20.48, 12.8 };
     
-    uint2 partition { 1, 1 }; // No MPI, OpenMP only
-    // uint2 partition { 2, 2 };
+    // uint2 partition { 1, 1 }; // No MPI, OpenMP only
+    uint2 partition { 2, 2 };
 
     uint2 nx { 32, 32 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
@@ -595,7 +595,7 @@ void test_lwfa() {
     sim.current.set_filter( filter::compensated( filter::axis::z, 4 ));
 
     // Disable diagnostics for performance tests
-#if 0
+#if 1
     auto diag = [& sim, & electrons ]( ) {
         sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
         sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
@@ -626,7 +626,7 @@ void test_lwfa() {
     timer::clock t0("test");
     t0.start();
 
-    while( sim.get_t() <= 1.05 * box.x ) {
+    while( sim.get_t() <= 2.00 * box.x ) {
         if ( sim.get_iter() % 100 == 0 ) {
             if ( mpi::root() )
                 std::cout << "i = " << sim.get_iter() << '\n';
