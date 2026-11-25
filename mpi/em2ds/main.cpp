@@ -748,6 +748,7 @@ void test_weibel( )
     }
 
     // Parallel partition, must be 1 along x
+    //uint2 partition = make_uint2( 1, 1 );
     uint2 partition = make_uint2( 1, 4 );
 
     // Create simulation box
@@ -782,6 +783,7 @@ void test_weibel( )
 
     sim.add_species( positrons );
 
+#if 1
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
         sim.emf.save(emf::quantity::b, fcomp::x);
@@ -798,6 +800,9 @@ void test_weibel( )
 
         sim.energy_info();
     };
+#else
+    auto diag = [ ]( ) {};
+#endif
 
     // Run simulation    
     int const imax = 500;
@@ -829,7 +834,7 @@ void test_weibel( )
         auto time = timer.elapsed(timer::units::s);
         std::cout << "Elapsed time: " << time << " s\n";
         auto perf = nmove / time / 1.e9;
-        std::cout << "Performance : " << perf << " GPart/s\n";
+        std::cerr << "Performance : " << perf << " GPart/s\n";
     }                  
 }
 

@@ -19,6 +19,16 @@
 constexpr int local_align = 64;
 
 /**
+ * @brief Force inlining of the small per-particle routines used inside the
+ *        multi-mode loops
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define __always_inline__ __attribute__((always_inline)) inline
+#else
+#define __always_inline__ inline
+#endif
+
+/**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
  * $ \frac{1}{\sqrt{u_x^2 + u_y^2 + u_z^2 + 1 }} $
@@ -535,7 +545,7 @@ inline vfloat3 vdudt_boris_euler( const vfloat alpha, vfloat3 e, vfloat3 b, vflo
  * @param delta     Particle motion normalized to cell size
  * @param q         Particle charge
  */
-void vdep_current(
+__always_inline__ void vdep_current(
     float3 * const __restrict__ J, const int ystride, 
     const vint2 ix0, const vfloat2 x0, const vfloat3 u,
     const vfloat rg, const vfloat2 delta, const float q )
@@ -612,7 +622,7 @@ void vdep_current(
  * @param x         Particle position inside cell
  * @param q         Particle charge
  */
-inline void vdep_charge( 
+__always_inline__ void vdep_charge( 
     float * const __restrict__ rho, const int ystride, 
     const vint2 ix, const vfloat2 x, const float q )
 {
