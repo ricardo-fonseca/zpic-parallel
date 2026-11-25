@@ -19,16 +19,6 @@
 constexpr int local_align = 64;
 
 /**
- * @brief Choice of vector algorithm for extracting individual lanes
- *
- * 0 (default) - Store vectors to temp. memory, use scalar load
- * 1           - Use vec_extract() SIMD function
- */
-#ifndef USE_VEC_EXTRACT
-#define USE_VEC_EXTRACT 0
-#endif
-
-/**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
  * $ \frac{1}{\sqrt{u_x^2 + u_y^2 + u_z^2 + 1 }} $
@@ -74,8 +64,6 @@ void interpolate_fld(
 
 
     // Interpolate E field
-
-
     e.x = ( E[i +    j *ystride].x * s0x + E[i+1 +    j *ystride].x * s1x ) * s0y +
           ( E[i + (j+1)*ystride].x * s0x + E[i+1 + (j+1)*ystride].x * s1x ) * s1y;
 
@@ -592,81 +580,25 @@ void vdep_current(
 
     constexpr int W = simd::width;
 
-#if USE_VEC_EXTRACT
-
-    for ( int i = 0; i < W; i++ ) {
-
-        float3 * __restrict__ Js = &J[ vec_extract( idx, i)];
-
-        float w00 = vec_extract( a00, i );
-        float w01 = vec_extract( a01, i );
-        float w10 = vec_extract( a10, i );
-        float w11 = vec_extract( a11, i );
-
-        float pjx = vec_extract( jx, i );
-        float pjy = vec_extract( jy, i );
-        float pjz = vec_extract( jz, i );
-
-        Js[      0 + 0 ].x += w00 * pjx;
-        Js[      0 + 0 ].y += w00 * pjy;
-        Js[      0 + 0 ].z += w00 * pjz;
-
-        Js[      0 + 1 ].x += w01 * pjx;
-        Js[      0 + 1 ].y += w01 * pjy;
-        Js[      0 + 1 ].z += w01 * pjz;
-
-        Js[ ystride + 0 ].x += w10 * pjx;
-        Js[ ystride + 0 ].y += w10 * pjy;
-        Js[ ystride + 0 ].z += w10 * pjz;
-
-        Js[ ystride + 1 ].x += w11 * pjx;
-        Js[ ystride + 1 ].y += w11 * pjy;
-        Js[ ystride + 1 ].z += w11 * pjz;
-    }
-
-#else
-    alignas(local_align) float w_s[12][W];
+    alignas(local_align) float a_s[4][W];
+    alignas(local_align) float j_s[3][W];
     alignas(local_align) int   idx_s[W];
 
-    vec_store( w_s[0], vec_mul( a00, jx ) );
-    vec_store( w_s[1], vec_mul( a00, jy ) );
-    vec_store( w_s[2], vec_mul( a00, jz ) );
-
-    vec_store( w_s[3], vec_mul( a01, jx ) );
-    vec_store( w_s[4], vec_mul( a01, jy ) );
-    vec_store( w_s[5], vec_mul( a01, jz ) );
-
-    vec_store( w_s[6], vec_mul( a10, jx ) );
-    vec_store( w_s[7], vec_mul( a10, jy ) );
-    vec_store( w_s[8], vec_mul( a10, jz ) );
-
-    vec_store( w_s[ 9], vec_mul( a11, jx ) );
-    vec_store( w_s[10], vec_mul( a11, jy ) );
-    vec_store( w_s[11], vec_mul( a11, jz ) );
-
+    vec_store( a_s[0], a00 ); vec_store( a_s[1], a01 );
+    vec_store( a_s[2], a10 ); vec_store( a_s[3], a11 );
+    vec_store( j_s[0], jx );  vec_store( j_s[1], jy );  vec_store( j_s[2], jz );
     vec_store( idx_s, idx );
 
     for ( int k = 0; k < W; k++ ) {
-
         float3 * __restrict__ const Js = & J [ idx_s[k] ];
+        const float pjx = j_s[0][k], pjy = j_s[1][k], pjz = j_s[2][k];
+        const float w00 = a_s[0][k], w01 = a_s[1][k], w10 = a_s[2][k], w11 = a_s[3][k];
 
-        Js[           0 ].x += w_s[0][k];
-        Js[           0 ].y += w_s[1][k];
-        Js[           0 ].z += w_s[2][k];
-
-        Js[           1 ].x += w_s[3][k];
-        Js[           1 ].y += w_s[4][k];
-        Js[           1 ].z += w_s[5][k];
-
-        Js[ ystride     ].x += w_s[6][k];
-        Js[ ystride     ].y += w_s[7][k];
-        Js[ ystride     ].z += w_s[8][k];
-
-        Js[ ystride + 1 ].x += w_s[ 9][k];
-        Js[ ystride + 1 ].y += w_s[10][k];
-        Js[ ystride + 1 ].z += w_s[11][k];
+        Js[           0 ].x += w00 * pjx;  Js[           0 ].y += w00 * pjy;  Js[           0 ].z += w00 * pjz;
+        Js[           1 ].x += w01 * pjx;  Js[           1 ].y += w01 * pjy;  Js[           1 ].z += w01 * pjz;
+        Js[ ystride     ].x += w10 * pjx;  Js[ ystride     ].y += w10 * pjy;  Js[ ystride     ].z += w10 * pjz;
+        Js[ ystride + 1 ].x += w11 * pjx;  Js[ ystride + 1 ].y += w11 * pjy;  Js[ ystride + 1 ].z += w11 * pjz;
     }
-#endif
 
 }
 
@@ -700,16 +632,6 @@ inline void vdep_charge(
     const vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
     constexpr int W = simd::width;
 
-#if USE_VEC_EXTRACT
-    for ( int i = 0; i < W; i++ ) {
-        float * __restrict__ rhos = & rho[ vec_extract( idx, i ) ];
-
-        rhos[           0 ] += vec_extract( rho00, i );
-        rhos[           1 ] += vec_extract( rho01, i );
-        rhos[ ystride + 0 ] += vec_extract( rho10, i );
-        rhos[ ystride + 1 ] += vec_extract( rho11, i );
-    }
-#else
     alignas(local_align) float w_s[4][W];
     alignas(local_align) int   idx_s[W];
 
@@ -728,7 +650,6 @@ inline void vdep_charge(
         rhos[ ystride + 0 ] += w_s[2][k];
         rhos[ ystride + 1 ] += w_s[3][k];
     }
-#endif
 }
 
 /**
