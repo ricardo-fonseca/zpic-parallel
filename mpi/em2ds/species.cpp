@@ -19,6 +19,16 @@
 constexpr int local_align = 64;
 
 /**
+ * @brief Choice of vector algorithm for extracting individual lanes
+ *
+ * 0 (default) - Store vectors to temp. memory, use scalar load
+ * 1           - Use vec_extract() SIMD function
+ */
+#ifndef USE_VEC_EXTRACT
+#define USE_VEC_EXTRACT 0
+#endif
+
+/**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
  * $ \frac{1}{\sqrt{u_x^2 + u_y^2 + u_z^2 + 1 }} $
@@ -523,7 +533,6 @@ inline vfloat3 vdudt_boris_euler( const vfloat alpha, vfloat3 e, vfloat3 b, vflo
     return u;
 }
 
-
 /**
  * @brief Deposit current from single particle (vector version)
  * 
@@ -548,43 +557,46 @@ void vdep_current(
     const vfloat cm1_2 = vec_float(-.5f);
 
     // Find position time centered with velocity
-    vfloat2 x1 {
+    const vfloat2 x1 {
         vec_fmadd( c1_2, delta.x, x0.x ),
         vec_fmadd( c1_2, delta.y, x0.y )
     };
 
-    vint2 deltai{
+    const vint2 deltai{
         vec_sub( vec_ge( x1.x, c1_2, c1i ), vec_lt( x1.x, cm1_2, c1i ) ),
         vec_sub( vec_ge( x1.y, c1_2, c1i ), vec_lt( x1.y, cm1_2, c1i ) )
     };
 
-    vint2 ix{ vec_add( ix0.x, deltai.x ), vec_add( ix0.y, deltai.y ) };
-    vfloat2 x {
+    const vint2 ix{ vec_add( ix0.x, deltai.x ), vec_add( ix0.y, deltai.y ) };
+    const vfloat2 x {
         vec_sub( x1.x, vec_float(deltai.x ) ),
         vec_sub( x1.y, vec_float(deltai.y ) )
     };
 
-    vfloat S0x = vec_sub( c1_2, x.x );
-    vfloat S1x = vec_add( c1_2, x.x );
+    const vfloat S0x = vec_sub( c1_2, x.x );
+    const vfloat S1x = vec_add( c1_2, x.x );
 
-    vfloat S0y = vec_sub( c1_2, x.y );
-    vfloat S1y = vec_add( c1_2, x.y );
+    const vfloat S0y = vec_sub( c1_2, x.y );
+    const vfloat S1y = vec_add( c1_2, x.y );
 
-    vfloat jx = vec_mul( vec_mul( u.x, rg ), q );
-    vfloat jy = vec_mul( vec_mul( u.y, rg ), q );
-    vfloat jz = vec_mul( vec_mul( u.z, rg ), q );
+    const vfloat jx = vec_mul( vec_mul( u.x, rg ), q );
+    const vfloat jy = vec_mul( vec_mul( u.y, rg ), q );
+    const vfloat jz = vec_mul( vec_mul( u.z, rg ), q );
 
-    vfloat a00 = vec_mul( S0y, S0x );
-    vfloat a01 = vec_mul( S0y, S1x );
-    vfloat a10 = vec_mul( S1y, S0x );
-    vfloat a11 = vec_mul( S1y, S1x );
+    const vfloat a00 = vec_mul( S0y, S0x );
+    const vfloat a01 = vec_mul( S0y, S1x );
+    const vfloat a10 = vec_mul( S1y, S0x );
+    const vfloat a11 = vec_mul( S1y, S1x );
 
-    vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
+    const vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
 
-    for ( int i = 0; i < simd::width; i++ ) {
+    constexpr int W = simd::width;
 
-        float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
-        int const stride3 = 3 * ystride;
+#if USE_VEC_EXTRACT
+
+    for ( int i = 0; i < W; i++ ) {
+
+        float3 * __restrict__ Js = &J[ vec_extract( idx, i)];
 
         float w00 = vec_extract( a00, i );
         float w01 = vec_extract( a01, i );
@@ -595,23 +607,66 @@ void vdep_current(
         float pjy = vec_extract( jy, i );
         float pjz = vec_extract( jz, i );
 
-        Js[       0 + 0 + 0 ] += w00 * pjx;
-        Js[       0 + 0 + 1 ] += w00 * pjy;
-        Js[       0 + 0 + 2 ] += w00 * pjz;
+        Js[      0 + 0 ].x += w00 * pjx;
+        Js[      0 + 0 ].y += w00 * pjy;
+        Js[      0 + 0 ].z += w00 * pjz;
 
-        Js[       0 + 3 + 0 ] += w01 * pjx;
-        Js[       0 + 3 + 1 ] += w01 * pjy;
-        Js[       0 + 3 + 2 ] += w01 * pjz;
+        Js[      0 + 1 ].x += w01 * pjx;
+        Js[      0 + 1 ].y += w01 * pjy;
+        Js[      0 + 1 ].z += w01 * pjz;
 
-        Js[ stride3 + 0 + 0 ] += w10 * pjx;
-        Js[ stride3 + 0 + 1 ] += w10 * pjy;
-        Js[ stride3 + 0 + 2 ] += w10 * pjz;
+        Js[ ystride + 0 ].x += w10 * pjx;
+        Js[ ystride + 0 ].y += w10 * pjy;
+        Js[ ystride + 0 ].z += w10 * pjz;
 
-        Js[ stride3 + 3 + 0 ] += w11 * pjx;
-        Js[ stride3 + 3 + 1 ] += w11 * pjy;
-        Js[ stride3 + 3 + 2 ] += w11 * pjz;
+        Js[ ystride + 1 ].x += w11 * pjx;
+        Js[ ystride + 1 ].y += w11 * pjy;
+        Js[ ystride + 1 ].z += w11 * pjz;
     }
 
+#else
+    alignas(local_align) float w_s[12][W];
+    alignas(local_align) int   idx_s[W];
+
+    vec_store( w_s[0], vec_mul( a00, jx ) );
+    vec_store( w_s[1], vec_mul( a00, jy ) );
+    vec_store( w_s[2], vec_mul( a00, jz ) );
+
+    vec_store( w_s[3], vec_mul( a01, jx ) );
+    vec_store( w_s[4], vec_mul( a01, jy ) );
+    vec_store( w_s[5], vec_mul( a01, jz ) );
+
+    vec_store( w_s[6], vec_mul( a10, jx ) );
+    vec_store( w_s[7], vec_mul( a10, jy ) );
+    vec_store( w_s[8], vec_mul( a10, jz ) );
+
+    vec_store( w_s[ 9], vec_mul( a11, jx ) );
+    vec_store( w_s[10], vec_mul( a11, jy ) );
+    vec_store( w_s[11], vec_mul( a11, jz ) );
+
+    vec_store( idx_s, idx );
+
+    for ( int k = 0; k < W; k++ ) {
+
+        float3 * __restrict__ const Js = & J [ idx_s[k] ];
+
+        Js[           0 ].x += w_s[0][k];
+        Js[           0 ].y += w_s[1][k];
+        Js[           0 ].z += w_s[2][k];
+
+        Js[           1 ].x += w_s[3][k];
+        Js[           1 ].y += w_s[4][k];
+        Js[           1 ].z += w_s[5][k];
+
+        Js[ ystride     ].x += w_s[6][k];
+        Js[ ystride     ].y += w_s[7][k];
+        Js[ ystride     ].z += w_s[8][k];
+
+        Js[ ystride + 1 ].x += w_s[ 9][k];
+        Js[ ystride + 1 ].y += w_s[10][k];
+        Js[ ystride + 1 ].z += w_s[11][k];
+    }
+#endif
 
 }
 
@@ -631,20 +686,22 @@ inline void vdep_charge(
 {
     const vfloat c1_2  = vec_float(.5f);
 
-    vfloat S0x = vec_sub( c1_2, x.x );
-    vfloat S1x = vec_add( c1_2, x.x );
+    const vfloat S0x = vec_sub( c1_2, x.x );
+    const vfloat S1x = vec_add( c1_2, x.x );
 
-    vfloat S0y = vec_sub( c1_2, x.y );
-    vfloat S1y = vec_add( c1_2, x.y );
+    const vfloat S0y = vec_sub( c1_2, x.y );
+    const vfloat S1y = vec_add( c1_2, x.y );
 
-    vfloat rho00 = vec_mul( vec_mul( S0y, S0x ), q );
-    vfloat rho01 = vec_mul( vec_mul( S0y, S1x ), q );
-    vfloat rho10 = vec_mul( vec_mul( S1y, S0x ), q );
-    vfloat rho11 = vec_mul( vec_mul( S1y, S1x ), q );
+    const vfloat rho00 = vec_mul( vec_mul( S0y, S0x ), q );
+    const vfloat rho01 = vec_mul( vec_mul( S0y, S1x ), q );
+    const vfloat rho10 = vec_mul( vec_mul( S1y, S0x ), q );
+    const vfloat rho11 = vec_mul( vec_mul( S1y, S1x ), q );
 
-    vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
+    const vint idx = vec_add( ix.x, vec_mul( ix.y, ystride ) );
+    constexpr int W = simd::width;
 
-    for ( int i = 0; i < simd::width; i++ ) {
+#if USE_VEC_EXTRACT
+    for ( int i = 0; i < W; i++ ) {
         float * __restrict__ rhos = & rho[ vec_extract( idx, i ) ];
 
         rhos[           0 ] += vec_extract( rho00, i );
@@ -652,6 +709,26 @@ inline void vdep_charge(
         rhos[ ystride + 0 ] += vec_extract( rho10, i );
         rhos[ ystride + 1 ] += vec_extract( rho11, i );
     }
+#else
+    alignas(local_align) float w_s[4][W];
+    alignas(local_align) int   idx_s[W];
+
+    vec_store( w_s[0], rho00);
+    vec_store( w_s[1], rho01);
+    vec_store( w_s[2], rho10);
+    vec_store( w_s[3], rho11);
+
+    vec_store( idx_s, idx );
+
+    for ( int k = 0; k < W; k++ ) {
+        float * __restrict__ rhos = & rho[ idx_s[ k ] ];
+
+        rhos[           0 ] += w_s[0][k];
+        rhos[           1 ] += w_s[1][k];
+        rhos[ ystride + 0 ] += w_s[2][k];
+        rhos[ ystride + 1 ] += w_s[3][k];
+    }
+#endif
 }
 
 /**
