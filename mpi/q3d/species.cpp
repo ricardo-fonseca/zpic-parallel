@@ -2039,14 +2039,20 @@ struct vsegment {
 
 /**
  * @brief Split particle trajectories into segments fully contained in a
- *        cell (SIMD version of split2d_cyl(), curved path splitter)
- * 
- * @note Same algorithm and operation order as the (new) split2d_cyl(). All
- *       possible split positions are computed for every particle and the
- *       segments are assembled using vec_select(). Values computed for lanes
- *       that do not use them (e.g. the z-split position of a particle that
- *       does not cross a z edge) may be inf / NaN, and are discarded.
- * 
+ *        cell (SIMD version of split2d_cyl(), curved path splitter), with
+ *        early exits (same approach as mpi/em2d vsplit2d())
+ *
+ * @note Same results as the branchless version: the z-split (r-split)
+ *       positions are only computed if at least one lane crosses a z (r)
+ *       cell edge, and the function returns early if no lane crosses any
+ *       cell edge. In that case v1 / v2 are set to v0 (they are not used,
+ *       the deposit is masked by cross_z / cross_r).
+ *
+ * @note Same algorithm and operation order as the (new) split2d_cyl(). Values
+ *       computed for lanes that do not use them (e.g. the z-split position of
+ *       a particle that does not cross a z edge) may be inf / NaN, and are
+ *       discarded.
+ *
  * @param ir0       Radial cell index of tile lower edge
  * @param ix        (simd vector) Initial particle cell
  * @param x0        (simd vector) Initial particle position (z,r)
@@ -2084,6 +2090,19 @@ inline void vsplit2d_cyl(
     cross_z = vec_ne( deltai.x, c_0i );
     cross_r = vec_ne( deltai.y, c_0i );
 
+    // 1st segment, assuming no splits
+    v0.ix = ix; v0.x0 = x0; v0.t0 = t0;
+    v0.x1 = x1; v0.t1 = t1;
+
+    const bool any_z = vec_any( cross_z );
+    const bool any_r = vec_any( cross_r );
+
+    // No cell crossings in any lane
+    if ( ! ( any_z || any_r ) ) {
+        v1 = v0; v2 = v0;
+        return;
+    }
+
     const vfloat fdeltai_x = vec_float( deltai.x );
     const vfloat fdeltai_y = vec_float( deltai.y );
 
@@ -2099,24 +2118,26 @@ inline void vsplit2d_cyl(
 
     /// @brief ir0 + ix.y
     const vint ir = vec_add( vec_int( ir0 ), ix.y );
-    /// @brief initial radial position (cell based, as in the move kernels)
-    const vfloat r0 = vec_add( vec_float( ir ), x0.y );
 
-    // z-split
-    const vfloat εz = vec_div( vec_sub( zs, x0.x ), delta.x );
-    const vfloat xz = vec_fmadd( εz, tdelta.x, t0.x );
-    const vfloat yz = vec_fmadd( εz, tdelta.y, t0.y );
-    vfloat rz;
-    {
+    // z-split (only computed if any lane crosses a z edge; the values are
+    // only used for lanes with cross_z set)
+    vfloat εz = vec_float( 1.0f ), xz = t1.x, yz = t1.y, rz = x1.y;
+    if ( any_z ) {
+        /// @brief initial radial position (cell based, as in the move kernels)
+        const vfloat r0 = vec_add( vec_float( ir ), x0.y );
+        εz = vec_div( vec_sub( zs, x0.x ), delta.x );
+        xz = vec_fmadd( εz, tdelta.x, t0.x );
+        yz = vec_fmadd( εz, tdelta.y, t0.y );
         const vfloat den = vec_add( vec_sqrt( vec_fmadd( xz, xz, vec_mul( yz, yz ) ) ), r0 );
         const vfloat drz = vec_div( vec_mul( εz, vec_fmadd( εz, a, vec_add( b, b ) ) ), den );
         const vmask  use = vec_and( vec_ne( delta.y, vec_zero_float() ), vec_gt( den, vec_zero_float() ) );
         rz = vec_select( x0.y, vec_add( x0.y, drz ), use );
     }
 
-    // r-split
-    vfloat εr;
-    {
+    // r-split (only computed if any lane crosses an r edge; the values are
+    // only used for lanes with cross_r set)
+    vfloat εr = vec_float( 1.0f ), xr = t1.x, yr = t1.y, zr = x1.x;
+    if ( any_r ) {
         const vfloat c = vec_mul( vec_sub( x0.y, rs ),
             vec_add( vec_add( vec_float( vec_add( ir, ir ) ), x0.y ), rs ) );
         const vfloat disc = vec_max( vec_fmadd( b, b, vec_neg( vec_mul( a, c ) ) ), vec_zero_float() );
@@ -2127,10 +2148,10 @@ inline void vsplit2d_cyl(
         const vfloat hi = vec_max( e1, e2 );
         const vfloat root = vec_select( hi, lo, vec_ge( lo, vec_zero_float() ) );
         εr = vec_min( vec_max( root, vec_zero_float() ), vec_float( 1.0f ) );
+        xr = vec_fmadd( εr, tdelta.x, t0.x );
+        yr = vec_fmadd( εr, tdelta.y, t0.y );
+        zr = vec_fmadd( εr, delta.x, x0.x );
     }
-    const vfloat xr = vec_fmadd( εr, tdelta.x, t0.x );
-    const vfloat yr = vec_fmadd( εr, tdelta.y, t0.y );
-    const vfloat zr = vec_fmadd( εr, delta.x, x0.x );
 
     // Crossing cases
     const vmask both   = vec_and( cross_z, cross_r );
@@ -2148,7 +2169,6 @@ inline void vsplit2d_cyl(
     const vfloat x1r = vec_sub( x1.y, fdeltai_y );
 
     // 1st segment
-    v0.ix = ix; v0.x0 = x0; v0.t0 = t0;
     v0.x1.x = vec_select( vec_select( x1.x, zr, rsplit ), zs, zsplit );
     v0.x1.y = vec_select( vec_select( x1.y, rs, rsplit ), rz, zsplit );
     v0.t1.x = vec_select( vec_select( t1.x, xr, rsplit ), xz, zsplit );
