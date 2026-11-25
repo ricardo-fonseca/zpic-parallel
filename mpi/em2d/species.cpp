@@ -20,6 +20,16 @@
 constexpr int local_align = 64;
 
 /**
+ * @brief Force inlining of the small per-particle routines used inside the
+ *        multi-mode loops
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define __always_inline__ __attribute__((always_inline)) inline
+#else
+#define __always_inline__ inline
+#endif
+
+/**
  * @brief Returns reciprocal Lorentz gamma factor
  * 
  * $ \frac{1}{\sqrt{u_x^2 + u_y^2 + u_z^2 + 1 }} $
@@ -634,83 +644,6 @@ inline vfloat3 vdudt_boris_euler( const vfloat alpha, vfloat3 e, vfloat3 b, vflo
 }
 
 /**
- * @brief Deposit (charge conserving) current for 1 segment inside a cell (vector version)
- * 
- * @note Current will be deposited for all vector elements
- * 
- * @param ix        Particle cell
- * @param x0        Initial particle position
- * @param x1        Final particle position
- * @param qnx       Normalization values for in plane current deposition
- * @param qvz       Out of plane current
- * @param J         current(J) grid (should be in shared memory)
- * @param stride    current(J) grid stride 
- */
-void vdep_current_seg(
-    const vint2 ix, const vfloat2 x0, const vfloat2 x1,
-    const vfloat2 qnx, const vfloat qvz,
-    float3 * __restrict__ J, const int stride )
-{
-    vfloat c1_2  = vec_float(.5);
-
-    vfloat S0x0 = vec_sub( c1_2, x0.x );
-    vfloat S0x1 = vec_add( c1_2, x0.x );
-
-    vfloat S1x0 = vec_sub( c1_2, x1.x );
-    vfloat S1x1 = vec_add( c1_2, x1.x );
-
-    vfloat S0y0 = vec_sub( c1_2, x0.y );
-    vfloat S0y1 = vec_add( c1_2, x0.y );
-
-    vfloat S1y0 = vec_sub( c1_2, x1.y );
-    vfloat S1y1 = vec_add( c1_2, x1.y );
-
-    vfloat wl1 = vec_mul( qnx.x, vec_sub(x1.x, x0.x) );
-    vfloat wl2 = vec_mul( qnx.y, vec_sub(x1.y, x0.y) );
-    vfloat wp10 = vec_mul( c1_2, vec_add(S0y0, S1y0) );
-    vfloat wp11 = vec_mul( c1_2, vec_add(S0y1, S1y1) );
-    vfloat wp20 = vec_mul( c1_2, vec_add(S0x0, S1x0) );
-    vfloat wp21 = vec_mul( c1_2, vec_add(S0x1, S1x1) );
-
-
-    vfloat a00x = vec_mul( wl1, wp10 );
-    vfloat a00y = vec_mul( wl2, wp20 );
-
-    // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 + S1x0 * S0y0)/2.0f );
-    vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmadd( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
-
-    vfloat a01y = vec_mul( wl2, wp21 );
-    // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 + S1x1 * S0y0)/2.0f );
-    vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmadd( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
-
-    vfloat a10x = vec_mul( wl1, wp11 );
-    // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 + S1x0 * S0y1)/2.0f );
-    vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmadd( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
-    // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 + S1x1 * S0y1)/2.0f );
-    vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmadd( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
-
-    vint idx = vec_add( ix.x, vec_mul( ix.y, stride ) );
-
-    for ( int i = 0; i < simd::width; i++ ) {
-
-        float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
-        int const stride3 = 3 * stride;
-
-        Js[       0 + 0 + 0 ] += vec_extract( a00x, i );
-        Js[       0 + 0 + 1 ] += vec_extract( a00y, i );
-        Js[       0 + 0 + 2 ] += vec_extract( a00z, i );
-
-        Js[       0 + 3 + 1 ] += vec_extract( a01y, i );
-        Js[       0 + 3 + 2 ] += vec_extract( a01z, i );
-
-        Js[ stride3 + 0 + 0 ] += vec_extract( a10x, i );
-        Js[ stride3 + 0 + 2 ] += vec_extract( a10z, i );
-
-        Js[ stride3 + 3 + 2 ] += vec_extract( a11z, i );
-    }
-}
-
-/**
  * @brief Deposit (charge conserving) current for 1 segment inside a cell using a mask
  * 
  * @param ix        Particle cell
@@ -722,70 +655,84 @@ void vdep_current_seg(
  * @param stride    current(J) grid stride
  * @param mask      Vector mask, current will only be deposited for mask elements equal true
  */
-inline void vdep_current_seg(
+__always_inline__ void vdep_current_seg(
     const vint2 ix, const vfloat2 x0, const vfloat2 x1,
     const vfloat2 qnx, const vfloat qvz,
     float3 * __restrict__ J, const int stride,
     const vmask mask )
 {
     if ( vec_any( mask ) ) {
-        vfloat c1_2  = vec_float(.5);
+        const vfloat c1_2  = vec_float(.5);
 
-        vfloat S0x0 = vec_sub( c1_2, x0.x );
-        vfloat S0x1 = vec_add( c1_2, x0.x );
+        const vfloat S0x0 = vec_sub( c1_2, x0.x );
+        const vfloat S0x1 = vec_add( c1_2, x0.x );
 
-        vfloat S1x0 = vec_sub( c1_2, x1.x );
-        vfloat S1x1 = vec_add( c1_2, x1.x );
+        const vfloat S1x0 = vec_sub( c1_2, x1.x );
+        const vfloat S1x1 = vec_add( c1_2, x1.x );
 
-        vfloat S0y0 = vec_sub( c1_2, x0.y );
-        vfloat S0y1 = vec_add( c1_2, x0.y );
+        const vfloat S0y0 = vec_sub( c1_2, x0.y );
+        const vfloat S0y1 = vec_add( c1_2, x0.y );
 
-        vfloat S1y0 = vec_sub( c1_2, x1.y );
-        vfloat S1y1 = vec_add( c1_2, x1.y );
+        const vfloat S1y0 = vec_sub( c1_2, x1.y );
+        const vfloat S1y1 = vec_add( c1_2, x1.y );
 
-        vfloat wl1 = vec_mul( qnx.x, vec_sub(x1.x, x0.x) );
-        vfloat wl2 = vec_mul( qnx.y, vec_sub(x1.y, x0.y) );
-        vfloat wp10 = vec_mul( c1_2, vec_add(S0y0, S1y0) );
-        vfloat wp11 = vec_mul( c1_2, vec_add(S0y1, S1y1) );
-        vfloat wp20 = vec_mul( c1_2, vec_add(S0x0, S1x0) );
-        vfloat wp21 = vec_mul( c1_2, vec_add(S0x1, S1x1) );
+        const vfloat wl1 = vec_mul( qnx.x, vec_sub(x1.x, x0.x) );
+        const vfloat wl2 = vec_mul( qnx.y, vec_sub(x1.y, x0.y) );
+        const vfloat wp10 = vec_mul( c1_2, vec_add(S0y0, S1y0) );
+        const vfloat wp11 = vec_mul( c1_2, vec_add(S0y1, S1y1) );
+        const vfloat wp20 = vec_mul( c1_2, vec_add(S0x0, S1x0) );
+        const vfloat wp21 = vec_mul( c1_2, vec_add(S0x1, S1x1) );
 
-        vfloat a00x = vec_mul( wl1, wp10 );
-        vfloat a00y = vec_mul( wl2, wp20 );
+        const vfloat a00x = vec_mul( wl1, wp10 );
+        const vfloat a00y = vec_mul( wl2, wp20 );
+        const vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmadd( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
 
-        // a00z = qvz * ( S0x0 * S0y0 + S1x0 * S1y0 + (S0x0 * S1y0 + S1x0 * S0y0)/2.0f );
-        vfloat a00z = vec_mul( qvz, vec_fmadd( S0x0, S0y0, vec_fmadd( S1x0, S1y0, vec_mul( c1_2, vec_fmadd( S0x0, S1y0, vec_mul( S1x0, S0y0 ) ) ) ) ) );
+        const vfloat a01y = vec_mul( wl2, wp21 );
+        const vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmadd( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
 
-        vfloat a01y = vec_mul( wl2, wp21 );
-        // a01z = qvz * ( S0x1 * S0y0 + S1x1 * S1y0 + (S0x1 * S1y0 + S1x1 * S0y0)/2.0f );
-        vfloat a01z = vec_mul( qvz, vec_fmadd( S0x1, S0y0, vec_fmadd( S1x1, S1y0, vec_mul( c1_2, vec_fmadd( S0x1, S1y0, vec_mul( S1x1, S0y0 ) ) ) ) ) );
+        const vfloat a10x = vec_mul( wl1, wp11 );
+        const vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmadd( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
 
-        vfloat a10x = vec_mul( wl1, wp11 );
-        // a10z = qvz * ( S0x0 * S0y1 + S1x0 * S1y1 + (S0x0 * S1y1 + S1x0 * S0y1)/2.0f );
-        vfloat a10z = vec_mul( qvz, vec_fmadd( S0x0, S0y1, vec_fmadd( S1x0, S1y1, vec_mul( c1_2, vec_fmadd( S0x0, S1y1, vec_mul( S1x0, S0y1 ) ) ) ) ) );
-        // a11z = qvz * ( S0x1 * S0y1 + S1x1 * S1y1 + (S0x1 * S1y1 + S1x1 * S0y1)/2.0f );
-        vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmadd( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
+        const vfloat a11z = vec_mul( qvz, vec_fmadd( S0x1, S0y1, vec_fmadd( S1x1, S1y1, vec_mul( c1_2, vec_fmadd( S0x1, S1y1, vec_mul( S1x1, S0y1 ) ) ) ) ) );
 
-        vint idx = vec_add( ix.x, vec_mul( ix.y, stride) );
-        vmask deposit = mask;
+        constexpr int W = simd::width;
 
-        for ( int i = 0; i < simd::width; i++ ) {
+        // Memory buffers for accessing vector values
+        alignas(local_align) float w_s[8][W];
+        alignas(local_align) int   idx[W];
+        alignas(local_align) int   deposit[W];
+
+        vec_store( idx, vec_add( ix.x, vec_mul( ix.y, stride) ) );
+        vec_store( deposit, vec_select( vec_int( 0 ), vec_int( 1 ), mask ) );
+
+        vec_store( w_s[0], a00x );
+        vec_store( w_s[1], a00y );
+        vec_store( w_s[2], a00z );
+
+        vec_store( w_s[3], a01y );
+        vec_store( w_s[4], a01z );
+
+        vec_store( w_s[5], a10x );
+        vec_store( w_s[6], a10z );
+
+        vec_store( w_s[7], a11z );
+
+        for ( int k = 0; k < W; k++ ) {
             // Only deposit particles with active mask
-            if ( vec_extract( deposit, i ) ) {
-                float * __restrict__ Js = (float *) (&J[ vec_extract( idx, i)]);
-                int const stride3 = 3 * stride;
+            if ( deposit[k] ) {
+                float3 * __restrict__ Js = &J[ idx[k] ];
 
-                Js[       0 + 0 + 0 ] += vec_extract( a00x, i );
-                Js[       0 + 0 + 1 ] += vec_extract( a00y, i );
-                Js[       0 + 0 + 2 ] += vec_extract( a00z, i );
+                Js[      0 + 0 ].x += w_s[0][k];
+                Js[      0 + 0 ].y += w_s[1][k];
+                Js[      0 + 0 ].z += w_s[2][k];
 
-                Js[       0 + 3 + 1 ] += vec_extract( a01y, i );
-                Js[       0 + 3 + 2 ] += vec_extract( a01z, i );
+                Js[      0 + 1 ].y += w_s[3][k];
+                Js[      0 + 1 ].z += w_s[4][k];
 
-                Js[ stride3 + 0 + 0 ] += vec_extract( a10x, i );
-                Js[ stride3 + 0 + 2 ] += vec_extract( a10z, i );
+                Js[ stride + 0 ].x += w_s[5][k];
+                Js[ stride + 0 ].z += w_s[6][k];
 
-                Js[ stride3 + 3 + 2 ] += vec_extract( a11z, i );
+                Js[ stride + 1 ].z += w_s[7][k];
             }
         }
     }
@@ -815,7 +762,7 @@ inline void vdep_current_seg(
  * @param v2_qvz    [out] 3rd segment charge times velocity
  * @param cross     [out] Cell edge crossing
  */
-inline void vsplit2d( 
+__always_inline__ void vsplit2d( 
     const vint2 ix, const vfloat2 x0, const vfloat2 x1, const vfloat2 delta, const vfloat qvz,
     vint2 & deltai,
     vint2 & v0_ix, vfloat2 & v0_x0, vfloat2 & v0_x1, vfloat & v0_qvz,
@@ -1032,7 +979,7 @@ void move_deposit_kernel(
         );
         
         // Deposit current
-        vdep_current_seg( v0_ix, v0_x0, v0_x1, vqnx, v0_qvz, J, ystride );
+        vdep_current_seg( v0_ix, v0_x0, v0_x1, vqnx, v0_qvz, J, ystride, vec_true() );
         vdep_current_seg( v1_ix, v1_x0, v1_x1, vqnx, v1_qvz, J, ystride, vec_or(  cross.x, cross.y ) );
         vdep_current_seg( v2_ix, v2_x0, v2_x1, vqnx, v2_qvz, J, ystride, vec_and( cross.x, cross.y ) );
 
