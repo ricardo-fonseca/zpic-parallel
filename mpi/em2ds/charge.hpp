@@ -6,6 +6,8 @@
 #include "util/complex.hpp"
 #include "filter.hpp"
 
+namespace em2ds {
+
 class charge {
 
     public:
@@ -265,3 +267,5 @@ class charge {
      */
     void save( const quantity quant );
 };
+
+} // namespace em2ds

@@ -4,6 +4,8 @@
 
 #include "part/particles.hpp"
 
+namespace em2ds {
+
 namespace udist {
 
     class type {
@@ -70,3 +72,5 @@ namespace udist {
         void set( part::particles & part, unsigned int seed ) const override ;
     };
 }
+
+} // namespace em2ds

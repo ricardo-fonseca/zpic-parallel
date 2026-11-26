@@ -7,6 +7,8 @@
 #include "core/gpu.cuh"
 #include "util/complex.hpp"
 
+namespace em2ds {
+
 namespace filter {
 
 using complex_t = util::complex64;
@@ -161,3 +163,5 @@ class lowpass : public digital {
 };
 
 }
+
+} // namespace em2ds

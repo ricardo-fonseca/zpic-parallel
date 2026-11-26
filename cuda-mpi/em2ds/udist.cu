@@ -4,6 +4,8 @@
 
 #include "util/hash.hpp"
 
+namespace em2ds {
+
 namespace kernel {
 
 constexpr uint32_t udist_rnd_tag = "udist rnd tag"_hash;
@@ -231,3 +233,5 @@ void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const
     gpu::block::set_shmem_size( kernel::thermal_corr, shm_size );
     kernel::thermal_corr <<< grid, block, shm_size >>> ( part.view(), rnd_key, uth, ufl, npmin );
 }
+
+} // namespace em2ds

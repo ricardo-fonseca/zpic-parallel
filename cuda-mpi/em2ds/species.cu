@@ -10,6 +10,8 @@
 #include "parallel/partition.hpp"
 #include "util/memory.cuh"
 
+namespace em2ds {
+
 /**
  * The following values were determined experimentally using a single
  * NVIDIA A100 80GB PCIe board
@@ -1738,3 +1740,4 @@ void species::save_phasespace(
     gpu::device::free( d_data );
 }
 
+} // namespace em2ds

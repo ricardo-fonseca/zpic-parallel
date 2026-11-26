@@ -3,6 +3,8 @@
 #include <cmath>
 #include <iostream>
 
+namespace em2ds {
+
 /**
  * @note The kernel:: functions process a single tile, mirroring the CUDA
  *       kernels (one thread block per tile) in cuda-mpi/em2ds/density.cu. The
@@ -674,3 +676,5 @@ void density::sphere::np_inject( part::particles & part,
 
     kernel::np_mask_all( part, mask, range, ppc, np );
 }
+
+} // namespace em2ds

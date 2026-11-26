@@ -14,7 +14,7 @@
 #include "current.hpp"
 #include "species.hpp"
 
-namespace zpic {
+namespace em2ds {
 
 /**
  * @brief Print out system information
@@ -112,14 +112,14 @@ class simulation {
     mpi::cart2d parallel;
 
     /// @brief EM fields
-    emf emf;
+    em2ds::emf emf;
     /// @brief Electric current density
-    current current;
+    em2ds::current current;
     /// @brief Charge density
-    charge charge;
+    em2ds::charge charge;
 
     /// @brief Vector of particle species
-    std::vector <species*> species;
+    std::vector< em2ds::species * > species;
 
     /**
      * @brief Construct a new simulation object
@@ -309,5 +309,4 @@ class simulation {
     }
 };
 
-
-}
+} // namespace em2ds

@@ -12,6 +12,8 @@
 #include <cassert>
 #include <cmath>
 
+namespace em2ds {
+
 namespace laser {
 namespace kernel {
 
@@ -487,3 +489,5 @@ int laser::gaussian::lon_x( grid::flat3<complex_t> & fld, const float2 dk ) cons
 
     return 0;
 }
+
+} // namespace em2ds

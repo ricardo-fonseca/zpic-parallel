@@ -5,6 +5,8 @@
 
 #include "filter.hpp"
 
+namespace em2ds {
+
 
 class current {
 
@@ -255,3 +257,5 @@ class current {
      */
     void save( const quantity quant, const fcomp::cart jc );
 };
+
+} // namespace em2ds

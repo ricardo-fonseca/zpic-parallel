@@ -8,6 +8,8 @@
 #include "grid/flat3.hpp"
 #include "grid/fft.hpp"
 
+namespace em2ds {
+
 namespace filter {
 
 using complex_t = util::complex<float>;
@@ -186,3 +188,5 @@ class lowpass : public digital {
 };
 
 }
+
+} // namespace em2ds

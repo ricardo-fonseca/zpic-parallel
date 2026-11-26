@@ -9,6 +9,8 @@
 #include <cassert>
 #include <cmath>
 
+namespace em2ds {
+
 /**
  * @brief Gets longitudinal laser envelope at a given position
  * 
@@ -362,9 +364,11 @@ int laser::gaussian::launch(grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
  */
 int laser::gaussian::lon_x( grid::flat3<laser::complex_t> & fld, const float2 dk ) const {
 
-    ::lon_x( 
+    em2ds::lon_x( 
         fld.x(), fld.y(), 
         fld.get_global_dims(), fld.get_local_dims(), fld.get_local_start(), 
         dk );
     return 0;
 }
+
+} // namespace em2ds

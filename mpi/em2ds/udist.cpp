@@ -5,6 +5,8 @@
 
 #include <vector>
 
+namespace em2ds {
+
 /**
  * @note The kernel:: functions process a single tile, mirroring the CUDA
  *       kernels (one thread block per tile) in cuda-mpi/em2ds/udist.cu. They
@@ -264,3 +266,5 @@ void udist::thermal_corr::set( part::particles & part, unsigned int seed ) const
         }
     }
 }
+
+} // namespace em2ds

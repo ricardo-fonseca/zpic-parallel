@@ -6,6 +6,8 @@
 #include "util/memory.cuh"
 #include "part/particles.hpp"
 
+namespace em2ds {
+
 namespace density {
 
     /**
@@ -159,3 +161,5 @@ namespace density {
     };
 
 }
+
+} // namespace em2ds

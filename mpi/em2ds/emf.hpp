@@ -12,6 +12,8 @@
 
 #include <string>
 
+namespace em2ds {
+
 class emf {
 
     public:
@@ -169,3 +171,4 @@ class emf {
     void get_energy( double3 & ene_E, double3 & ene_b ) const;
 };
 
+} // namespace em2ds

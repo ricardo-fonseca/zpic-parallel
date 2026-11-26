@@ -1,5 +1,7 @@
 #include "current.hpp"
 
+namespace em2ds {
+
 namespace kernel {
 
 /**
@@ -333,3 +335,5 @@ void current::save( const quantity quant, const fcomp::cart jc ) {
         grid::fft::kspace_save( *cf, jc, info, iteration, "CURRENT" );
     }
 }
+
+} // namespace em2ds

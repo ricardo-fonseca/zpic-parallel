@@ -1,6 +1,8 @@
 #include "charge.hpp"
 #include "core/gpu.cuh"
 
+namespace em2ds {
+
 namespace kernel {
 
 /**
@@ -283,3 +285,5 @@ void charge::save( const quantity quant ) {
         grid::fft::kspace_save( *cf, info, iteration, "CHARGE");
     }
 }
+
+} // namespace em2ds

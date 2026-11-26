@@ -4,6 +4,8 @@
 #include <cmath>
 #include <iostream>
 
+namespace em2ds {
+
 namespace {
 
 /**
@@ -761,3 +763,5 @@ void density::sphere::np_inject( part::particles & part,
         mask, range, ppc, part.view(), np
     );
 }
+
+} // namespace em2ds

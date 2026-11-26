@@ -13,6 +13,8 @@
 
 #include <string>
 
+namespace em2ds {
+
 /**
  * @brief Electro-magnetic fields (spectral PSATD solver)
  * 
@@ -199,3 +201,5 @@ class emf {
      */
     void get_energy( double3 & ene_E, double3 & ene_B ) const;
 };
+
+} // namespace em2ds

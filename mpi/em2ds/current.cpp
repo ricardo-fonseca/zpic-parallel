@@ -1,5 +1,7 @@
 #include "current.hpp"
 
+namespace em2ds {
+
 /**
  * @brief Physical boundary conditions for the x direction 
  * 
@@ -303,3 +305,5 @@ void current::save( const quantity quant, const fcomp::cart jc ) {
         cf -> save( jc, info, iteration, "CURRENT" );
     }
 }
+
+} // namespace em2ds

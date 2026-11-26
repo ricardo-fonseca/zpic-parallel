@@ -10,6 +10,8 @@
 #include "simd/simd.hpp"
 #include "util/math.hpp"
 
+namespace em2ds {
+
 /**
  * @brief Memory alignment of local buffers
  * 
@@ -2330,3 +2332,4 @@ void species::save_phasespace(
     memory::free( d_data );
 }
 
+} // namespace em2ds

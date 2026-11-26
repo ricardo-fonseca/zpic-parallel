@@ -7,6 +7,8 @@
 #include <ostream>
 #include <sstream>
 
+namespace em2ds {
+
 /**
 * @brief Construct a new EMF object
 * 
@@ -607,3 +609,5 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
     ene_B.y = 0.5 * dx.x * dx.y * h_energy[4];
     ene_B.z = 0.5 * dx.x * dx.y * h_energy[5];
 }
+
+} // namespace em2ds

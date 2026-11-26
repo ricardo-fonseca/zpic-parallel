@@ -1,5 +1,7 @@
 #include "charge.hpp"
 
+namespace em2ds {
+
 /**
  * @brief Physical boundary conditions for the x direction 
  * 
@@ -252,3 +254,5 @@ void charge::save( const quantity quant ) {
         cf -> save( info, iteration, "CHARGE" );
     }
 }
+
+} // namespace em2ds

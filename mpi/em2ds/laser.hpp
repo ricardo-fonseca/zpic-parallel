@@ -2,6 +2,8 @@
 
 #include "emf.hpp"
 
+namespace em2ds {
+
 namespace laser {
 
 using complex_t = util::complex<float>;
@@ -224,3 +226,5 @@ class gaussian : public pulse {
 };
 
 }
+
+} // namespace em2ds
