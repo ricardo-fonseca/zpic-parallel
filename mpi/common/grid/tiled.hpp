@@ -10,7 +10,7 @@
 #include "../core/vec_types.hpp"
 #include "../core/bounds.hpp"
 #include "../parallel/parallel.hpp"
-#include "../zdf/zdf-parallel.hpp"
+#include "zdf-parallel.hpp"
 
 #include "../util/memory.hpp"
 #include "../util/math.hpp"

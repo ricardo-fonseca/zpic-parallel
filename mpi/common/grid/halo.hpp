@@ -4,7 +4,7 @@
 
 #include "../core/vec_types.hpp"
 #include "../core/bounds.hpp"
-#include "../zdf/zdf.hpp"
+#include "zdf.hpp"
 
 #include <vector>
 

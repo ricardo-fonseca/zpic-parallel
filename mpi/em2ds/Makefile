@@ -86,7 +86,7 @@ COMMON_DIR ?= ../common
 include $(COMMON_DIR)/common.mk
 
 # ZDF library (separate project, alongside common/)
-ZDF_DIR ?= ../zdf
+ZDF_DIR ?= ../../zdf
 include $(ZDF_DIR)/zdf.mk
 
 # Include search order: this project first (so shared code can pick up

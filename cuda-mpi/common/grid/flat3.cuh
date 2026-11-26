@@ -3,7 +3,7 @@
 #include "../util/memory.cuh"
 #include "../parallel/partition.hpp"
 #include "../core/vec_types.cuh"
-#include "../zdf/zdf-parallel.hpp"
+#include "zdf-parallel.hpp"
 
 #include <sstream>
 #include <string>

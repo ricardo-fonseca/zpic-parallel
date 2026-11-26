@@ -11,7 +11,7 @@
 
 #include "../util/complex.hpp"
 #include "../parallel/parallel.hpp"
-#include "../zdf/zdf-parallel.hpp"
+#include "zdf-parallel.hpp"
 
 #include "tiled.hpp"
 #include "flat.hpp"
