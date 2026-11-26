@@ -557,7 +557,7 @@ int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>
     dim3 grid( E.get_local_ntiles().x, E.get_local_ntiles().y );
 
     kernel::gaussian <<< grid, block >>> (
-        p, E.view(), B.view(), E.get_local_tile_start(), dx
+        p, E.view(), B.view(), dx
     );
 
     // lon_x() reads neighboring cells across tile / node boundaries, so the
