@@ -24,8 +24,10 @@
 /**
  * @brief  Use 2008 edition of the POSIX standard (IEEE Standard 1003.1-2008)
  * 
+ * @note Feature test macros must be defined before any system header is
+ *       included (glibc fixes the feature set on the first include), so
+ *       they must stay at the very top of this file.
  */
-#include <linux/limits.h>
 #define _POSIX_C_SOURCE 200809L
 
 /**
