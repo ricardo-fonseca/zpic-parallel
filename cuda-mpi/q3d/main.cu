@@ -14,7 +14,7 @@
 #include "core/vec_types.cuh"
 #include "grid/grid.cuh"
 
-// #include "zpic.hpp"
+// #include "q3d.hpp"
 
 void test_cylgrid( void ) {
 
@@ -131,7 +131,7 @@ void test_emf( void ) {
     float2 box{ 12.8, 12.8 };
     double dt{ 0.03 };
 
-    emf emf( 4, ntiles, nx, box, dt, parallel );
+    q3d::emf emf( 4, ntiles, nx, box, dt, parallel );
 
     if ( mpi::root() ) {
         std::cout << "field: " << emf << '\n';
@@ -149,7 +149,7 @@ void test_emf( void ) {
 
 
 #include "laser.hpp"
-#include "zpic.hpp"
+#include "q3d.hpp"
 
 
 void test_laser( void ) {
@@ -167,17 +167,17 @@ void test_laser( void ) {
     float2 box{ 20.48, 25.6 };
 
     // double dt = 0.01;
-    auto dt = 0.9 * zpic::simulation::courant( 2, ntiles, tile_dims, box );
+    auto dt = 0.9 * q3d::simulation::courant( 2, ntiles, tile_dims, box );
 
     if ( mpi::root() )
         std::cout << "Using dt = " << dt << '\n';
 
     // Create simulation
-    zpic::simulation sim( 2, ntiles, tile_dims, box, dt, partition, false );
+    q3d::simulation sim( 2, ntiles, tile_dims, box, dt, partition, false );
 
 //    Laser::PlaneWave laser;
 
-    laser::gaussian laser;
+    q3d::laser::gaussian laser;
     laser.W0 = 4.0;
     laser.focus = 20.48;
 
@@ -196,13 +196,13 @@ void test_laser( void ) {
     sim.set_moving_window();
 
     auto diag = [& sim ]( ) {
-        sim.emf.save( emf::quantity::e, fcomp::cyl::r, 1 );
-        sim.emf.save( emf::quantity::e, fcomp::cyl::th, 1 );
-        sim.emf.save( emf::quantity::e, fcomp::cyl::z, 1 );
+        sim.emf.save( q3d::emf::quantity::e, fcomp::cyl::r, 1 );
+        sim.emf.save( q3d::emf::quantity::e, fcomp::cyl::th, 1 );
+        sim.emf.save( q3d::emf::quantity::e, fcomp::cyl::z, 1 );
 
-        sim.emf.save( emf::quantity::b, fcomp::cyl::r, 1 );
-        sim.emf.save( emf::quantity::b, fcomp::cyl::th, 1 );
-        sim.emf.save( emf::quantity::b, fcomp::cyl::z, 1 );
+        sim.emf.save( q3d::emf::quantity::b, fcomp::cyl::r, 1 );
+        sim.emf.save( q3d::emf::quantity::b, fcomp::cyl::th, 1 );
+        sim.emf.save( q3d::emf::quantity::b, fcomp::cyl::z, 1 );
     };
 
     diag();
@@ -235,18 +235,18 @@ void test_inj( void ) {
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 16, 16 };
     float2 box{ 4, 4 };
-    auto dt = 0.99 * zpic::simulation::courant( nmodes, ntiles, nx, box );
+    auto dt = 0.99 * q3d::simulation::courant( nmodes, ntiles, nx, box );
 
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
     mpi::cart2d parallel( partition, make_int2(1,0) );
 
     uint3 ppc{ 2, 2, 8 };
-    species electrons( "electrons", -1.0f, ppc );
+    q3d::species electrons( "electrons", -1.0f, ppc );
 
-//    electrons.set_density(density::step(coord::cyl::z, 1.0, 2.0));
-//    electrons.set_density( density::slab(coord::cyl::z, 1.0, 2.0, 3.0)); 
-    electrons.set_density( density::sphere(1.0, float2{2,2}, 1.0)); 
+//    electrons.set_density(q3d::density::step(coord::cyl::z, 1.0, 2.0));
+//    electrons.set_density( q3d::density::slab(coord::cyl::z, 1.0, 2.0, 3.0));
+    electrons.set_density( q3d::density::sphere(1.0, float2{2,2}, 1.0));
 
     electrons.initialize( nmodes, box, ntiles, nx, dt, 0, parallel );
     electrons.save( );
@@ -277,15 +277,15 @@ void test_mov( void ) {
     uint2 partition = make_uint2( 2, 2 );
     mpi::cart2d parallel( partition, make_int2(1,0) );
 
-    auto dt = 0.99 * zpic::simulation::courant( 2, ntiles, nx, box );
+    auto dt = 0.99 * q3d::simulation::courant( 2, ntiles, nx, box );
 
     uint3 ppc{ 2, 2, 8 };
-    species electrons( "electrons", -1.0f, ppc );
+    q3d::species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( density::sphere(1.0, float2{2,2}, 1.0)); 
+    electrons.set_density( q3d::density::sphere(1.0, float2{2,2}, 1.0));
 
-    // electrons.set_udist( udist::cold( float3{ 0, 0, 1.e6 } ) );
-    electrons.set_udist( udist::cold( float3{ 1e6, 0, 0 } ) );
+    // electrons.set_udist( q3d::udist::cold( float3{ 0, 0, 1.e6 } ) );
+    electrons.set_udist( q3d::udist::cold( float3{ 1e6, 0, 0 } ) );
 
     electrons.initialize( nmodes, box, ntiles, nx, dt, 0, parallel );
 
@@ -324,27 +324,27 @@ void test_current( void ) {
     // Parallel partition
     uint2 partition = make_uint2( 2, 2 );
 
-    // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    // auto dt = 0.99 * q3d::courant( ntiles, nx, box );
     
     auto dt = 0.05;
 
     // Create simulation
-    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition );
+    q3d::simulation sim( nmodes, ntiles, nx, box, dt, partition );
 
     uint3 ppc{ 2, 2, 8 };
-    species electrons( "electrons", -1.0f, ppc );
-//    electrons.set_density( density::sphere(1.0, float2{6.4,6.4}, 3.2)); 
-//    electrons.set_density( density::sphere(1.0, float2{6.4,0.0}, 3.2)); 
+    q3d::species electrons( "electrons", -1.0f, ppc );
+//    electrons.set_density( q3d::density::sphere(1.0, float2{6.4,6.4}, 3.2));
+//    electrons.set_density( q3d::density::sphere(1.0, float2{6.4,0.0}, 3.2));
 
-//    electrons.set_udist( udist::cold( float3{ 1e6, 1e6, 1.e6 } ) );
-//    electrons.set_udist( udist::cold( float3{ 0, 0, 1e6 } ) );
+//    electrons.set_udist( q3d::udist::cold( float3{ 1e6, 1e6, 1.e6 } ) );
+//    electrons.set_udist( q3d::udist::cold( float3{ 0, 0, 1e6 } ) );
 
     // ux, uy, uz
-    // electrons.set_udist( udist::cold( float3{ 1e6, 0, 0 } ) );
-    // electrons.set_udist( udist::cold( float3{ 0, 1e6, 0 } ) );
-    // electrons.set_udist( udist::cold( float3{ -1e6, 1e6, -1.e6 } ) );
+    // electrons.set_udist( q3d::udist::cold( float3{ 1e6, 0, 0 } ) );
+    // electrons.set_udist( q3d::udist::cold( float3{ 0, 1e6, 0 } ) );
+    // electrons.set_udist( q3d::udist::cold( float3{ -1e6, 1e6, -1.e6 } ) );
 
-  electrons.set_udist( udist::cold( float3{ -1e-1, 1e-1, -1e-1 } ) );
+  electrons.set_udist( q3d::udist::cold( float3{ -1e-1, 1e-1, -1e-1 } ) );
 
     sim.add_species( electrons );
 
@@ -362,21 +362,21 @@ void test_current( void ) {
         sim.current.save( fcomp::cyl::r, 1 );
         sim.current.save( fcomp::cyl::th, 1 );
 
-        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::quantity::b, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 1);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 1);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 1);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::z, 1);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::r, 1);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::th, 1);
 
-        sim.emf.save(emf::quantity::b, fcomp::cyl::z, 1);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::r, 1);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 1);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::z, 1);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::r, 1);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::th, 1);
     };
 
     diag();
@@ -405,12 +405,12 @@ void test_beam( void ) {
     float2 box { 25.6, 25.6 };
     uint2 partition { 2, 2 };
 
-    // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    // auto dt = 0.99 * q3d::courant( ntiles, nx, box );
 
     uint2 nx { 32, 32 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
-    // auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.9f;
+    // auto dt = q3d::simulation::courant( nmodes, dims, box ) * 0.9f;
 
     // For comparison with the CPU version
     double dt     = 0.03;
@@ -421,14 +421,14 @@ void test_beam( void ) {
     }
 
     // Create simulation
-    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition );
+    q3d::simulation sim( nmodes, ntiles, nx, box, dt, partition );
 
 
     uint3 ppc{ 2, 2, static_cast<unsigned int>((nmodes == 1) ? 1 : 4) };
-    species electrons( "electrons", -1.0f, ppc );
+    q3d::species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( density::sphere(1.0, float2{20.0,0.0}, 1.6)); 
-    electrons.set_udist( udist::cold( float3{ 0, 0, 1e6 } ) );
+    electrons.set_density( q3d::density::sphere(1.0, float2{20.0,0.0}, 1.6));
+    electrons.set_udist( q3d::udist::cold( float3{ 0, 0, 1e6 } ) );
 
     sim.add_species( electrons );
     sim.set_moving_window();
@@ -439,13 +439,13 @@ void test_beam( void ) {
         // Save mode 0
         electrons.save_charge(0);
 
-        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::quantity::b, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::th, 0);
 
         sim.current.save( fcomp::cyl::z, 0 );
         sim.current.save( fcomp::cyl::r, 0 );
@@ -489,12 +489,12 @@ void test_pwfa( void ) {
     uint2 partition{ 1, 1 }; // single GPU
     // uint2 partition { 2, 2 };
 
-    // auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    // auto dt = 0.99 * q3d::courant( ntiles, nx, box );
 
     uint2 tile_dims { 32, 32 };
     uint2 ntiles { dims.x / tile_dims.x, dims.y / tile_dims.y };
 
-    auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.9f;
+    auto dt = q3d::simulation::courant( nmodes, dims, box ) * 0.9f;
 
     if ( mpi::root() ) {
         std::cout << "dt     = " << dt << '\n';
@@ -502,17 +502,17 @@ void test_pwfa( void ) {
     }
 
     // Create simulation
-    zpic::simulation sim( nmodes, ntiles, tile_dims, box, dt, partition);
+    q3d::simulation sim( nmodes, ntiles, tile_dims, box, dt, partition);
 
     uint3 ppc{ 4, 4, 1 };
 
-    species beam( "beam", -1.0f, ppc );
-    beam.set_density( density::sphere(1.0, float2{23.0,0.0}, 1.6)); 
-    beam.set_udist( udist::cold( float3{ 0, 0, 1e6 } ) );
+    q3d::species beam( "beam", -1.0f, ppc );
+    beam.set_density( q3d::density::sphere(1.0, float2{23.0,0.0}, 1.6));
+    beam.set_udist( q3d::udist::cold( float3{ 0, 0, 1e6 } ) );
     sim.add_species( beam );
 
-    species plasma( "plasma", -1.0f, ppc );
-    plasma.set_density( density::step( coord::cyl::z, 1.0, 40.96 ) ); 
+    q3d::species plasma( "plasma", -1.0f, ppc );
+    plasma.set_density( q3d::density::step( coord::cyl::z, 1.0, 40.96 ) );
     sim.add_species( plasma );
 
     sim.set_moving_window();
@@ -524,13 +524,13 @@ void test_pwfa( void ) {
         plasma.save_charge(0);
         plasma.save();
 
-        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::quantity::b, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::b, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::b, fcomp::cyl::th, 0);
 
         sim.current.save( fcomp::cyl::z, 0 );
         sim.current.save( fcomp::cyl::r, 0 );
@@ -585,19 +585,19 @@ void test_lwfa() {
     uint2 nx { 16, 16 };
     uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
 
-    auto dt = zpic::simulation::courant( nmodes, dims, box ) * 0.9f;
+    auto dt = q3d::simulation::courant( nmodes, dims, box ) * 0.9f;
 
     // Create simulation
-    zpic::simulation sim( nmodes, ntiles, nx, box, dt, partition );
+    q3d::simulation sim( nmodes, ntiles, nx, box, dt, partition );
 
     // Add electrons
-    species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
-    electrons.set_density( density::step( coord::cyl::z, 1.0, 20.48 ) );
-    electrons.push_type = species::pusher::euler; 
+    q3d::species electrons("electrons", -1.0f, make_uint3( 2, 2, 8 ));
+    electrons.set_density( q3d::density::step( coord::cyl::z, 1.0, 20.48 ) );
+    electrons.push_type = q3d::species::pusher::euler;
     sim.add_species( electrons );
     
     // Add Laser
-    laser::gaussian laser;
+    q3d::laser::gaussian laser;
     laser.start   = 20.0;
     laser.fwhm    = 2.0;
     laser.a0      = 2.0;
@@ -612,18 +612,18 @@ void test_lwfa() {
 
     // Set moving window and current filtering
     sim.set_moving_window();
-    sim.current.set_filter( filter::compensated( filter::axis::z, 4 ) );
+    sim.current.set_filter( q3d::filter::compensated( q3d::filter::axis::z, 4 ) );
 
 #if 1
     // Enable diagnostic output
     auto diag = [& sim, & electrons ]( ) {
-        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 0);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::z, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::r, 0);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::th, 0);
 
-        sim.emf.save(emf::quantity::e, fcomp::cyl::z, 1);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::r, 1);
-        sim.emf.save(emf::quantity::e, fcomp::cyl::th, 1);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::z, 1);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::r, 1);
+        sim.emf.save(q3d::emf::quantity::e, fcomp::cyl::th, 1);
 
         sim.current.save( fcomp::cyl::z, 0);
         sim.current.save( fcomp::cyl::r, 0);
@@ -676,7 +676,7 @@ int main( int argc, char *argv[] ) {
     // Initialize the gpu device
     gpu::parallel_init( MPI_COMM_WORLD );
 
-    zpic::sys_info();
+    q3d::sys_info();
 
     // test_cylgrid();
     // test_cyl3_cylgrid();

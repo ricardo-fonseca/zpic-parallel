@@ -5,6 +5,8 @@
 // Also provides coord::cart and mpi::fatal()
 #include "grid/tiled_vec3.hpp"
 
+namespace q3d {
+
 /**
  * @brief Digital filters for grid quantities (typically the current density)
  *
@@ -240,3 +242,5 @@ class compensated final : public binomial {
 };
 
 } // namespace filter
+
+} // namespace q3d

@@ -4,6 +4,8 @@
 
 #include "cyl_part/particles.hpp"
 
+namespace q3d {
+
 namespace udist {
 
     class type {
@@ -70,3 +72,5 @@ namespace udist {
         void set( cyl_part::particles & part, unsigned int seed ) const override ;
     };
 } // namespace udist
+
+} // namespace q3d

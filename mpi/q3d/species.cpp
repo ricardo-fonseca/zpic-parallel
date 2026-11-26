@@ -6,6 +6,8 @@
 #include "simd/simd.hpp"
 #include "simd/vec_complex.hpp"
 
+namespace q3d {
+
 using complex_t = species::complex_t;
 
 /**
@@ -3970,3 +3972,5 @@ void species::save_phasespace(
 
     memory::free( h_data );
 }
+
+} // namespace q3d

@@ -2,6 +2,8 @@
 #include "species.hpp"
 #include <type_traits>
 
+namespace q3d {
+
 using complex_t = species::complex_t;
 
 /**
@@ -3308,3 +3310,4 @@ void species::save_phasespace(
     gpu::device::free( d_data );
 }
 
+} // namespace q3d

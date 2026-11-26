@@ -12,6 +12,8 @@
 #include <sstream>
 #include <string>
 
+namespace q3d {
+
 
 class emf {
 
@@ -346,3 +348,4 @@ class emf {
 
 };
 
+} // namespace q3d

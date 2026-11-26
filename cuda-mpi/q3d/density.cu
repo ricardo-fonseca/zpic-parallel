@@ -4,6 +4,8 @@
 #include <cmath>
 #include <iostream>
 
+namespace q3d {
+
 namespace {
 
 /**
@@ -921,3 +923,5 @@ void density::none::np_inject( cyl_part::particles & part,
     auto ntiles = part.get_local_ntiles();
     gpu::device::zero( np, ntiles.x * ntiles.y );
 }
+
+} // namespace q3d

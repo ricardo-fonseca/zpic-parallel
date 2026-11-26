@@ -5,6 +5,8 @@
 
 #include <vector>
 
+namespace q3d {
+
 /**
  * @note The kernel:: functions process a single tile, mirroring the CUDA
  *       kernels (one thread block per tile) in cuda-mpi/q3d/udist.cu. They
@@ -264,3 +266,5 @@ void udist::thermal_corr::set( cyl_part::particles & part, unsigned int seed ) c
         }
     }
 }
+
+} // namespace q3d

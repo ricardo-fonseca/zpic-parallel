@@ -78,7 +78,7 @@ ZDF_DIR ?= ../zdf
 include $(ZDF_DIR)/zdf.mk
 
 # Include search order: this project first (so shared code can pick up
-# project-level headers such as zpic.hpp), then common/, then ZDF
+# project-level headers such as q3d.hpp), then common/, then ZDF
 INCLUDES := -I. $(COMMON_INC) $(ZDF_INC)
 
 CXXFLAGS += $(INCLUDES)

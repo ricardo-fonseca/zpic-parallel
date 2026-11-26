@@ -3,6 +3,8 @@
 #include <cmath>
 #include <iostream>
 
+namespace q3d {
+
 /**
  * @note The kernel:: functions process a single tile, mirroring the CUDA
  *       kernels (one thread block per tile) in cuda-mpi/q3d/density.cu. The
@@ -842,3 +844,5 @@ void density::none::np_inject( cyl_part::particles & part,
     auto ntiles = part.get_local_ntiles();
     memory::zero( np, ntiles.x * ntiles.y );
 }
+
+} // namespace q3d

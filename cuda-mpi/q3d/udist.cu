@@ -3,6 +3,8 @@
 
 #include "util/hash.hpp"
 
+namespace q3d {
+
 namespace kernel {
 
 constexpr uint32_t udist_rnd_tag = "udist rnd tag"_hash;
@@ -230,3 +232,5 @@ void udist::thermal_corr::set( cyl_part::particles & part, unsigned int seed ) c
     gpu::block::set_shmem_size( kernel::thermal_corr, shm_size );
     kernel::thermal_corr <<< grid, block, shm_size >>> ( part.view(), rnd_key, uth, ufl, npmin );
 }
+
+} // namespace q3d

@@ -1,5 +1,7 @@
 #pragma once
 
+namespace q3d {
+
 class moving_window {
     private:
     bool active_;
@@ -61,3 +63,5 @@ class moving_window {
         return active_ && (t > dx_*(n_move_+1));
     }
 };
+
+} // namespace q3d

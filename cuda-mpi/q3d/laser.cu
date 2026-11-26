@@ -8,6 +8,8 @@
 
 #include "filter.hpp"
 
+namespace q3d {
+
 namespace laser {
 namespace kernel {
 
@@ -815,3 +817,5 @@ int laser::gaussian::lon_z( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<com
 
     return 0;
 }
+
+} // namespace q3d

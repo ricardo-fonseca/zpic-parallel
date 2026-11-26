@@ -3,6 +3,8 @@
 
 #define opt_yee_block 256
 
+namespace q3d {
+
 using complex_t = util::complex<float>;
 
 namespace kernel {
@@ -1450,3 +1452,5 @@ void emf::get_energy( cyl_double3 & ene_E, cyl_double3 & ene_B, const int m ) co
     ene_E *= norm;
     ene_B *= norm;
 }
+
+} // namespace q3d

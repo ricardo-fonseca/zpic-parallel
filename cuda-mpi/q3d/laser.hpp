@@ -3,6 +3,8 @@
 #include "emf.hpp"
 #include "util/complex.hpp"
 
+namespace q3d {
+
 namespace laser {
 
 using complex_t        = util::complex64;
@@ -231,3 +233,5 @@ class gaussian : public pulse {
 };
 
 }
+
+} // namespace q3d

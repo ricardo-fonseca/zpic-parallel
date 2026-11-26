@@ -650,8 +650,8 @@ void test_weibel( ) {
     }
 
     // Parallel partition, must be 1 along x
-    uint2 partition = make_uint2( 1, 1 );
-//    uint2 partition = make_uint2( 2, 2 );
+//    uint2 partition = make_uint2( 1, 1 );
+    uint2 partition = make_uint2( 2, 2 );
 
     // Create simulation box
     uint2 ntiles{16, 16};
@@ -686,7 +686,7 @@ void test_weibel( ) {
     sim.add_species( positrons );
 
     // Disable diagnostics for performance benchmark
-#if 0
+#if 1
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
         sim.emf.save(em2d::emf::quantity::b, fcomp::x);

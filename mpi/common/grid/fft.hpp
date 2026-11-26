@@ -334,11 +334,11 @@ class fft_plan {
         switch( type ) {
         case kind::r2c:
             plan = fftwf_mpi_plan_dft_r2c_2d( ny, nx, data_r, data_c,
-                part.get_comm(), flag | FFTW_MPI_TRANSPOSED_OUT );
+                part.get_comm(), plan::measure | FFTW_MPI_TRANSPOSED_OUT );
             break;
         case kind::c2r:
             plan = fftwf_mpi_plan_dft_c2r_2d( ny, nx, data_c, data_r,
-                part.get_comm(), flag | FFTW_MPI_TRANSPOSED_IN );
+                part.get_comm(), plan::measure | FFTW_MPI_TRANSPOSED_IN );
             break;
         }
 
@@ -347,6 +347,12 @@ class fft_plan {
 
         if ( plan == nullptr ) {
             mpi::fatal( "FFTW plan creation failed" );
+        }
+
+        if ( part.root() )  {
+            std::cout << "Created FFTW plan:\n";
+            fftwf_print_plan( plan ); 
+            std::printf("\n");
         }
     }
 

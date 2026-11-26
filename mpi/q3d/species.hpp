@@ -23,6 +23,8 @@ namespace cyl_part {
 enum class quantity { z, r, cos_th, sin_th, q, ux, uy, uz };
 }
 
+namespace q3d {
+
 namespace phasespace {
     enum class quantity { z = 0, r, ux, uy, uz };
 
@@ -813,3 +815,5 @@ public:
         particles -> validate( msg, over );
     }
 };
+
+} // namespace q3d

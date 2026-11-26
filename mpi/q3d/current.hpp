@@ -8,6 +8,8 @@
 
 #include "cyl_modes/tiled_cyl3.hpp"
 
+namespace q3d {
+
 
 class current {
 
@@ -344,3 +346,5 @@ class current {
         filter.apply( *J, true, [this]{ set_images(); } );
     }
 };
+
+} // namespace q3d

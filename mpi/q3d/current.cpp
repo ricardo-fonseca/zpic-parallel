@@ -3,6 +3,8 @@
 #include <string>
 #include <type_traits>
 
+namespace q3d {
+
 
 namespace kernel {
 
@@ -547,3 +549,5 @@ void current::save( const fcomp::cyl jc, unsigned m ) {
 
     J -> save( m, jc, info, iteration, path );
 }
+
+} // namespace q3d

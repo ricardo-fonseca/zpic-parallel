@@ -2,17 +2,19 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
-#include "core/vec_types.cuh"
+#include "core/vec_types.hpp"
 #include "parallel/mpi.hpp"
 #include "parallel/partition.hpp"
-#include "core/gpu.cuh"
+#include "parallel/omp.hpp"
+#include "simd/simd.hpp"
 
 #include "emf.hpp"
 #include "current.hpp"
 #include "species.hpp"
 
-namespace zpic {
+namespace q3d {
 
 /**
  * @brief Print out system information
@@ -22,13 +24,9 @@ namespace zpic {
  */
 inline void sys_info() {
     if ( mpi::root() ) {
-
         std::cout << "MPI running on " << mpi::size() << " processes\n";
-
-        char name[MPI_MAX_PROCESSOR_NAME];
-        int len; MPI_Get_processor_name(name, &len);
-        std::cout << "GPU devices on rank 0 (" << name << "):\n";
-        gpu::print_info();
+        simd::info();
+        omp::info();
     }
 }
 
@@ -100,12 +98,12 @@ class simulation {
     mpi::cart2d parallel;
 
     /// @brief EM fields
-    emf emf;
+    q3d::emf emf;
     /// @brief Electric current density
-    current current;
+    q3d::current current;
 
     /// @brief Vector of particle species
-    std::vector <species*> species;
+    std::vector< q3d::species * > species;
 
     /**
      * @brief Construct a new simulation object
@@ -185,9 +183,6 @@ class simulation {
         auto it = std::find_if( species.begin(), species.end(),
             [&name]( const auto & s ) { return s->name == name; } );
         return ( it != species.end() ) ? *it : nullptr;
-    }
-
-    }
     }
 
     /**
@@ -337,4 +332,4 @@ class simulation {
     }
 };
 
-} // namespace zpic
+} // namespace q3d

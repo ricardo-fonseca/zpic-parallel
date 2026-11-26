@@ -4,6 +4,8 @@
 
 #include "cyl_modes/tiled_cyl3.cuh"
 
+namespace q3d {
+
 /**
  * @brief Digital filters for grid quantities (typically the current density)
  *
@@ -239,3 +241,5 @@ class compensated final : public binomial {
 };
 
 } // namespace filter
+
+} // namespace q3d

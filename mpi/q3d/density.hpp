@@ -8,6 +8,8 @@
 
 #include "cyl3/cyl3.hpp"
 
+namespace q3d {
+
 namespace density {
 
     /**
@@ -173,3 +175,5 @@ namespace density {
         void np_inject( cyl_part::particles & part, uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range, int * np ) const override;
     };
 }
+
+} // namespace q3d
