@@ -23,6 +23,20 @@
 #include <omp.h>
 #endif
 
+/**
+ * @brief Multi-threaded FFTW support
+ * 
+ * @note By default FFTW transforms run on a single thread: for small grids
+ *       the threaded FFTW transforms were found to be slower than the serial
+ *       ones. Define USE_FFTW_THREADS (e.g. CXXFLAGS += -DUSE_FFTW_THREADS)
+ *       to have FFTW use omp_get_max_threads() threads. This requires
+ *       OpenMP support and linking with the FFTW OpenMP library
+ *       (-lfftw3f_omp), which is otherwise not needed.
+ */
+#if defined( USE_FFTW_THREADS ) && defined( _OPENMP )
+#define FFTW_THREADS_ENABLED 1
+#endif
+
 namespace grid {
 
 namespace fft {
@@ -64,7 +78,7 @@ inline float2 k( const int2 gix, const uint2 gdims, const float2 dk ) {
  * @note Must be called after MPI initialization and before creating any plan
  */
 inline void init( ) {
-    #ifdef _OPENMP
+    #ifdef FFTW_THREADS_ENABLED
     fftwf_init_threads();
     #endif
 
@@ -80,7 +94,7 @@ inline void init( ) {
 inline void cleanup( ) {
     fftwf_mpi_cleanup();
 
-    #ifdef _OPENMP
+    #ifdef FFTW_THREADS_ENABLED
     fftwf_cleanup_threads();
     #endif
 }
@@ -326,8 +340,9 @@ class fft_plan {
         const ptrdiff_t nx = global_dims.x;
         const ptrdiff_t ny = global_dims.y;
 
-        #ifdef _OPENMP
-        // See note in Makefile for macOS homebrew builds
+        #ifdef FFTW_THREADS_ENABLED
+        // Multi-threaded transforms, see USE_FFTW_THREADS note at the top
+        // of this file, and the note in Makefile for macOS homebrew builds
         fftwf_plan_with_nthreads( omp_get_max_threads() );
         #endif
 
