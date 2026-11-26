@@ -5,6 +5,8 @@
 
 #define opt_yee_block 256
 
+namespace em2d {
+
 namespace kernel {
 
 /**
@@ -846,3 +848,5 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
     ene_B.y = 0.5 * dx.x * dx.y * h_energy[4];
     ene_B.z = 0.5 * dx.x * dx.y * h_energy[5];
 }
+
+} // namespace em2d

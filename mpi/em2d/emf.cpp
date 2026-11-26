@@ -4,6 +4,8 @@
 #include <ostream>
 #include <sstream>
 
+namespace em2d {
+
 namespace {
 
 /**
@@ -767,3 +769,5 @@ void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
     ene_B.y *= 0.5 * dx.x * dx.y;
     ene_B.z *= 0.5 * dx.x * dx.y;
 }
+
+} // namespace em2d

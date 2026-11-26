@@ -7,6 +7,8 @@
 #include "filter.hpp"
 #include "moving_window.hpp"
 
+namespace em2d {
+
 
 class current {
 
@@ -339,3 +341,5 @@ class current {
      */
     void save( fcomp::cart const jc ) const;
 };
+
+} // namespace em2d

@@ -7,6 +7,8 @@
 #include "util/random.hpp"
 #include "util/hash.hpp"
 
+namespace em2d {
+
 /**
  * ## Cathode algorithm
  * 
@@ -551,3 +553,5 @@ void cathode::advance( emf const & emf, current & current ) {
     // Increase internal iteration number
     iter++;
 }
+
+} // namespace em2d

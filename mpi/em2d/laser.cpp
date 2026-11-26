@@ -6,6 +6,8 @@
 #include <iostream>
 #include <cassert>
 
+namespace em2d {
+
 namespace {
 
 /**
@@ -593,3 +595,5 @@ int laser::gaussian::lon_x( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
 
     return 0;
 }
+
+} // namespace em2d

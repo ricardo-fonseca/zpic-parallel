@@ -23,6 +23,8 @@ namespace part {
 enum class quantity { x, y, ux, uy, uz };
 }
 
+namespace em2d {
+
 namespace phasespace {
     enum class quantity { x = 0, y, ux, uy, uz };
 
@@ -811,3 +813,5 @@ public:
         particles->info_np( msg );
     }
 };
+
+} // namespace em2d

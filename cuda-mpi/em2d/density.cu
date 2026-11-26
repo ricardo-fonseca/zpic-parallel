@@ -4,6 +4,8 @@
 #include <cmath>
 #include <iostream>
 
+namespace em2d {
+
 namespace {
 
 /**
@@ -123,7 +125,7 @@ inline int2 tile_shift( part::particles_view const & part, int2 const tile_idx )
  * @param part      Particle data 
  */
 __global__
-inline void inject_uniform_mk1( 
+void inject_uniform_mk1( 
     bounds_2d<unsigned int> range,
     uint2 const ppc,
     part::particles_view const part )
@@ -185,7 +187,7 @@ inline void inject_uniform_mk1(
  * @param part      Particle data 
  */
 __global__
-inline void inject_uniform( 
+void inject_uniform( 
     bounds_2d<unsigned int> range,
     uint2 const ppc,
     part::particles_view const part )
@@ -252,7 +254,7 @@ inline void inject_uniform(
  * @param tile_np   (out) Number of particles to inject per tile
  */
 __global__
-inline void np_uniform( 
+void np_uniform( 
     bounds_2d<unsigned int> range,
     uint2 const ppc,
     part::particles_view const part,
@@ -761,3 +763,5 @@ void density::sphere::np_inject( part::particles & part,
         mask, range, ppc, part.view(), np
     );
 }
+
+} // namespace em2d

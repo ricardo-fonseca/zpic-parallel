@@ -3,6 +3,8 @@
 
 #include <string>
 
+namespace em2d {
+
 namespace kernel {
 
 namespace current_bc {
@@ -404,3 +406,5 @@ void current::save( const fcomp::cart jc ) const {
     info.axis = axis;
     J -> save( jc, info, iteration, "CURRENT" );
 }
+
+} // namespace em2d

@@ -2,6 +2,8 @@
 
 #include "emf.hpp"
 
+namespace em2d {
+
 namespace laser {
 
 /**
@@ -224,3 +226,5 @@ class gaussian : public pulse {
 };
 
 }
+
+} // namespace em2d

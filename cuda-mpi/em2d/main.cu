@@ -12,7 +12,7 @@
 #include "core/vec_types.cuh"
 #include "grid/grid.cuh"
 
-#include "zpic.hpp"
+#include "em2d.hpp"
 
 namespace kernel {
 
@@ -223,27 +223,27 @@ void test_laser( ) {
 
     mpi::cart2d parallel( partition );
 
-    emf emf( ntiles, nx, box, dt, parallel );
+    em2d::emf emf( ntiles, nx, box, dt, parallel );
 
     auto save_emf = [ & emf ]( ) {
-        emf.save( emf::quantity::e, fcomp::x );
-        emf.save( emf::quantity::e, fcomp::y );
-        emf.save( emf::quantity::e, fcomp::z );
+        emf.save( em2d::emf::quantity::e, fcomp::x );
+        emf.save( em2d::emf::quantity::e, fcomp::y );
+        emf.save( em2d::emf::quantity::e, fcomp::z );
 
-        emf.save( emf::quantity::b, fcomp::x );
-        emf.save( emf::quantity::b, fcomp::y );
-        emf.save( emf::quantity::b, fcomp::z );
+        emf.save( em2d::emf::quantity::b, fcomp::x );
+        emf.save( em2d::emf::quantity::b, fcomp::y );
+        emf.save( em2d::emf::quantity::b, fcomp::z );
     };
 
 /*
-    laser::plane_wave laser;
+    em2d::laser::plane_wave laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
 */
 
-    laser::gaussian laser;
+    em2d::laser::gaussian laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
@@ -308,19 +308,19 @@ void test_inj( ) {
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    species electrons( "electrons", -1.0f, ppc );
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
     parallel.barrier();
     if ( mpi::root() ) std::cout << "Created species\n";
 
-    // electrons.set_density(density::step(coord::x, 1.0, 5.0));
-    // electrons.set_density(density::slab(coord::y, 1.0, 5.0, 8.0));
-    electrons.set_density( density::sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
+    // electrons.set_density(em2d::density::step(coord::x, 1.0, 5.0));
+    // electrons.set_density(em2d::density::slab(coord::y, 1.0, 5.0, 8.0));
+    electrons.set_density( em2d::density::sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
 
-    electrons.set_udist( udist::thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+    electrons.set_udist( em2d::udist::thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
 
     parallel.barrier();
     if ( mpi::root() ) std::cout << "Initializing species...\n";
@@ -334,8 +334,8 @@ void test_inj( ) {
 
     electrons.save();
     electrons.save_phasespace(
-        phasespace::quantity::ux, float2{-1, 3}, 256,
-        phasespace::quantity::uz, float2{-1, 1}, 128
+        em2d::phasespace::quantity::ux, float2{-1, 3}, 256,
+        em2d::phasespace::quantity::uz, float2{-1, 1}, 128
     );
 
     parallel.barrier();
@@ -364,13 +364,13 @@ void test_mov( ) {
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    species electrons( "electrons", -1.0f, ppc );
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( density::sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
-    electrons.set_udist( udist::cold( float3{ -1, -2, -3 } ) );
+    electrons.set_density( em2d::density::sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
+    electrons.set_udist( em2d::udist::cold( float3{ -1, -2, -3 } ) );
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
     electrons.save_charge();
@@ -412,17 +412,17 @@ void test_current( ) {
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    species electrons( "electrons", -1.0f, ppc );
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( density::sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
-    electrons.set_udist( udist::cold( float3{ 1, 2, 3 } ) );
+    electrons.set_density( em2d::density::sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
+    electrons.set_udist( em2d::udist::cold( float3{ 1, 2, 3 } ) );
 
     electrons.initialize( box, ntiles, nx, dt, 0, parallel );
 
-    current current( ntiles, nx, box, dt, parallel );
+    em2d::current current( ntiles, nx, box, dt, parallel );
 
     electrons.advance( current );
 
@@ -457,44 +457,44 @@ void test_weibel( )
     float2 box = {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
     float dt = 0.07;
                                         
-    zpic::simulation sim( ntiles, nx, box, dt, partition );
+    em2d::simulation sim( ntiles, nx, box, dt, partition );
                             
     uint2 ppc{4, 4};
 
-    species electrons("electrons", -1.0f, ppc);
+    em2d::species electrons("electrons", -1.0f, ppc);
     electrons.set_udist(
-        udist::thermal_corr( 
+        em2d::udist::thermal_corr( 
             float3{ 0.1, 0.1, 0.1 },
             float3{ 0, 0, 0.6 }
         )
     );
-    electrons.push_type = species::pusher::euler;
+    electrons.push_type = em2d::species::pusher::euler;
 
     sim.add_species( electrons );
 
-    species positrons("positrons", +1.0f, ppc);
+    em2d::species positrons("positrons", +1.0f, ppc);
     positrons.set_udist(
-        udist::thermal_corr( 
+        em2d::udist::thermal_corr( 
             float3{ 0.1, 0.1, 0.1 },
             float3{ 0, 0, -0.6 }
         )
     );
-    positrons.push_type = species::pusher::euler;
+    positrons.push_type = em2d::species::pusher::euler;
 
     sim.add_species( positrons );
 
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
-        sim.emf.save(emf::quantity::b, fcomp::x);
-        sim.emf.save(emf::quantity::b, fcomp::y);
-        sim.emf.save(emf::quantity::b, fcomp::z);
+        sim.emf.save(em2d::emf::quantity::b, fcomp::x);
+        sim.emf.save(em2d::emf::quantity::b, fcomp::y);
+        sim.emf.save(em2d::emf::quantity::b, fcomp::z);
 
         electrons.save_charge();
         positrons.save_charge();
 
         electrons.save_phasespace(
-            phasespace::quantity::ux, float2{-2, 2}, 256,
-            phasespace::quantity::uy, float2{-2, 2}, 256
+            em2d::phasespace::quantity::ux, float2{-2, 2}, 256,
+            em2d::phasespace::quantity::uy, float2{-2, 2}, 256
         );
 
         sim.energy_info();
@@ -557,23 +557,23 @@ void test_mov_window_emf( ) {
     int2 periodic = { 0, 1 };
 
     // Create simulation object
-    zpic::simulation sim( ntiles, nx, box, dt, partition, periodic );
+    em2d::simulation sim( ntiles, nx, box, dt, partition, periodic );
 
     // Set moving window along x
     sim.set_moving_window();
 
 
     auto save_emf = [ & sim ]( ) {
-        sim.emf.save( emf::quantity::e, fcomp::x );
-        sim.emf.save( emf::quantity::e, fcomp::y );
-        sim.emf.save( emf::quantity::e, fcomp::z );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::y );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::z );
 
-        sim.emf.save( emf::quantity::b, fcomp::x );
-        sim.emf.save( emf::quantity::b, fcomp::y );
-        sim.emf.save( emf::quantity::b, fcomp::z );
+        sim.emf.save( em2d::emf::quantity::b, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::b, fcomp::y );
+        sim.emf.save( em2d::emf::quantity::b, fcomp::z );
     };
 
-    laser::gaussian laser;
+    em2d::laser::gaussian laser;
     laser.start = 20.0;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
@@ -639,21 +639,21 @@ void test_mov_window_inj( ) {
 
     float2 box{ 30.72, 25.6 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
     // Disable periodic boundaries along x
     int2 periodic = { 0, 1 };
 
     if ( mpi::root() ) std::cout << "Creating simulation object...\n";
-    zpic::simulation sim( ntiles, nx, box, dt, partition, periodic );
+    em2d::simulation sim( ntiles, nx, box, dt, partition, periodic );
 
     if ( mpi::root() ) std::cout << "Creating electron species...\n";
     uint2 ppc{ 1, 1 };
-    species electrons( "electrons", -1.0f, ppc );
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
     if ( mpi::root() ) std::cout << "Setting species density...\n";
     // electrons.set_density(Density::Step(coord::x, 1.0, box.x - 0.25));
-    electrons.set_density( density::sphere( 1.0, float2{ box.x, 12.8}, 6.4 ) );
+    electrons.set_density( em2d::density::sphere( 1.0, float2{ box.x, 12.8}, 6.4 ) );
 
     if ( mpi::root() ) std::cout << "Adding electron species to simulation...\n";
     sim.add_species( electrons );
@@ -717,7 +717,7 @@ void test_lwfa()
 
     float2 box{ 30.72, 25.6 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
     if ( mpi::root() ) 
         std::cout << "(*info*) dt = " << dt << '\n';
@@ -726,16 +726,16 @@ void test_lwfa()
     int2 periodic = { 0, 1 };
 
     // Create simulation object
-    zpic::simulation sim( ntiles, nx, box, dt, partition, periodic );
+    em2d::simulation sim( ntiles, nx, box, dt, partition, periodic );
 
     // Add background plasma
     uint2 ppc{ 4, 4 };
-    species electrons( "electrons", -1.0f, ppc );
-    electrons.set_density(density::step(coord::x, 1.0, box.x - 0.25));
+    em2d::species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density(em2d::density::step(coord::x, 1.0, box.x - 0.25));
     sim.add_species( electrons );
     
     // Add laser pulse
-    laser::gaussian laser;
+    em2d::laser::gaussian laser;
     laser.start = box.x - .25;
     laser.fwhm = 2.0;
     laser.a0 = 2.0;
@@ -759,9 +759,9 @@ void test_lwfa()
 #if 1
     // Diagnostics
     auto diag = [ & sim, & electrons ]( ) {
-        sim.emf.save( emf::quantity::e, fcomp::x );
-        sim.emf.save( emf::quantity::e, fcomp::y );
-        sim.emf.save( emf::quantity::e, fcomp::z );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::y );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::z );
 
         sim.current.save( fcomp::x );
         sim.current.save( fcomp::y );
@@ -821,32 +821,32 @@ void test_cathode_inj( ) {
     uint2 nx{ 32, 32 };
     float2 box{ 25.6, 12.8 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
     double const dx = box.x / ( ntiles.x * nx.x );
 
     uint2 ppc{ 8, 2 };
 
     // Lower wall cathode, starting inside a time step. The y/z temperature
     // moves particles across tiles / nodes along y but never back to the wall
-    cathode lower( "cathode-lower", -1.0f, ppc, edge::lower, 2.0f );
+    em2d::cathode lower( "cathode-lower", -1.0f, ppc, edge::lower, 2.0f );
     lower.start = 1.234;
     lower.uth   = make_float3( 0, 0.05, 0.05 );
 
     // Upper wall cathode, preloaded (start < 0), stopping inside a time step
-    cathode upper( "cathode-upper", -1.0f, ppc, edge::upper, 1.0f );
+    em2d::cathode upper( "cathode-upper", -1.0f, ppc, edge::upper, 1.0f );
     upper.start = -3.0;
     upper.end   = 7.3;
 
     lower.initialize( box, ntiles, nx, dt, 0, parallel );
     upper.initialize( box, ntiles, nx, dt, 1, parallel );
 
-    current current( ntiles, nx, box, dt, parallel );
+    em2d::current current( ntiles, nx, box, dt, parallel );
 
     // Number of particle rows along y (global)
     uint64_t const rows = static_cast<uint64_t>( ntiles.y ) * nx.y * ppc.y;
 
     // Expected number of particles injected by time t (no particles lost)
-    auto n_injected = [&]( cathode const & c, double const t ) -> uint64_t {
+    auto n_injected = [&]( em2d::cathode const & c, double const t ) -> uint64_t {
         double const vel  = c.ufl / std::sqrt( 1.0 + static_cast<double>( c.ufl ) * c.ufl );
         double const t_on = std::max( c.start, 0.0 );
         double const D    = vel * ( std::min( t, c.end ) - t_on ) / dx;
@@ -939,13 +939,13 @@ void test_cathode_inj( ) {
  * @return float        Maximum E_x error normalized to the E_x value at
  *                      the wall (same value on all ranks)
  */
-float test_cathode_emf( edge::pos const wall, current::bc::type const wall_bc,
+float test_cathode_emf( edge::pos const wall, em2d::current::bc::type const wall_bc,
     bool const inj_current = true, bool const save = false ) {
 
     if ( mpi::root() ) {
         std::cout << ansi::bold;
         std::cout << "Running " << __func__ << "( wall = " << edge::name( wall )
-                  << ", bc = " << current::bc::name( wall_bc )
+                  << ", bc = " << em2d::current::bc::name( wall_bc )
                   << ", inj_current = " << inj_current << " )...";
         std::cout << ansi::reset << std::endl;
     }
@@ -957,9 +957,9 @@ float test_cathode_emf( edge::pos const wall, current::bc::type const wall_bc,
     uint2 nx{ 32, 32 };
     float2 box{ 25.6, 12.8 };
 
-    auto dt = 0.99 * zpic::simulation::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
-    zpic::simulation sim( ntiles, nx, box, dt, partition, periodic );
+    em2d::simulation sim( ntiles, nx, box, dt, partition, periodic );
 
     // Set the boundary conditions at the injection wall
     {
@@ -970,13 +970,13 @@ float test_cathode_emf( edge::pos const wall, current::bc::type const wall_bc,
         auto & jw = ( wall == edge::lower ) ? jbc.x.lower : jbc.x.upper;
 
         switch( wall_bc ) {
-        case current::bc::none:
-            ew = emf::bc::none; break;
-        case current::bc::pec_absorbing:
-            ew = emf::bc::pec; break;
+        case em2d::current::bc::none:
+            ew = em2d::emf::bc::none; break;
+        case em2d::current::bc::pec_absorbing:
+            ew = em2d::emf::bc::pec; break;
         default:
             mpi::fatal( "test_cathode_emf() - invalid cathode wall boundary " + 
-                current::bc::name( wall_bc ) );
+                em2d::current::bc::name( wall_bc ) );
         }
         jw = wall_bc;
 
@@ -988,14 +988,14 @@ float test_cathode_emf( edge::pos const wall, current::bc::type const wall_bc,
     // of ufl over the run, so the constant velocity solution holds
     uint2 ppc{ 8, 2 };
     float const ufl = 2.0f;
-    cathode beam( "beam", -1.0f, ppc, wall, ufl );
+    em2d::cathode beam( "beam", -1.0f, ppc, wall, ufl );
     beam.n0 = 1.e-4;
     beam.inj_current = inj_current;
 
     sim.add_species( beam );
 
     auto diag = [&]( ) {
-        sim.emf.save( emf::quantity::e, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::x );
         sim.current.save( fcomp::x );
         beam.save_charge();
     };
@@ -1080,13 +1080,13 @@ void test_cathode_bc( ) {
     int nfail = 0;
 
     for( auto wall : edge::all ) {
-        for( auto bc : { current::bc::none, current::bc::pec_absorbing } ) {
+        for( auto bc : { em2d::current::bc::none, em2d::current::bc::pec_absorbing } ) {
             if ( test_cathode_emf( wall, bc ) > tol ) nfail++;
         }
     }
 
     // Control: without the injection current E_x is wrong near the wall
-    bool const control_ok = test_cathode_emf( edge::lower, current::bc::none, false ) > tol;
+    bool const control_ok = test_cathode_emf( edge::lower, em2d::current::bc::none, false ) > tol;
 
     if ( mpi::root() ) {
         std::cout << ansi::bold;
@@ -1184,9 +1184,9 @@ void test_weibel( std::string param ) {
     sim.energy_info();
 
 /*
-    sim.emf.save(emf::b, fcomp::x);
-    sim.emf.save(emf::b, fcomp::y);
-    sim.emf.save(emf::b, fcomp::z);
+    sim.emf.save(em2d::emf::b, fcomp::x);
+    sim.emf.save(em2d::emf::b, fcomp::y);
+    sim.emf.save(em2d::emf::b, fcomp::z);
 */                                                                  
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 
@@ -1233,9 +1233,9 @@ void test_weibel( ) {
 
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
-        sim.emf.save(emf::b, fcomp::x);
-        sim.emf.save(emf::b, fcomp::y);
-        sim.emf.save(emf::b, fcomp::z);
+        sim.emf.save(em2d::emf::b, fcomp::x);
+        sim.emf.save(em2d::emf::b, fcomp::y);
+        sim.emf.save(em2d::emf::b, fcomp::z);
 
         electrons.save_charge();
         positrons.save_charge();
@@ -1324,9 +1324,9 @@ void test_weibel_large( )
                       
     sim.energy_info();
                                     
-    sim.emf.save(emf::b, fcomp::x);
-    sim.emf.save(emf::b, fcomp::y);
-    sim.emf.save(emf::b, fcomp::z);
+    sim.emf.save(em2d::emf::b, fcomp::x);
+    sim.emf.save(em2d::emf::b, fcomp::y);
+    sim.emf.save(em2d::emf::b, fcomp::z);
                                                                   
     auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
 

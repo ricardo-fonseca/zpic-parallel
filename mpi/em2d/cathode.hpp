@@ -5,6 +5,8 @@
 
 #include "species.hpp"
 
+namespace em2d {
+
 /**
  * @brief Cathode: species continuously injected from an x wall
  * 
@@ -183,3 +185,5 @@ public:
                     " use the uth parameter instead" );
     }
 };
+
+} // namespace em2d

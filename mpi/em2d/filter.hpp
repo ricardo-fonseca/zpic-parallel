@@ -6,6 +6,8 @@
 // Also provides coord::cart and mpi::fatal()
 #include "grid/tiled_vec3.hpp"
 
+namespace em2d {
+
 /**
  * @brief Digital filters for grid quantities (typically the current density)
  *
@@ -201,3 +203,5 @@ class compensated final : public binomial {
 };
 
 } // namespace filter
+
+} // namespace em2d

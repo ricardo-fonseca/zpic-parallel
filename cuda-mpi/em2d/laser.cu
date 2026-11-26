@@ -8,6 +8,8 @@
 
 #include "filter.hpp"
 
+namespace em2d {
+
 namespace laser {
 namespace kernel {
 
@@ -634,3 +636,5 @@ int laser::gaussian::lon_x( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>&
 
     return 0;
 }
+
+} // namespace em2d

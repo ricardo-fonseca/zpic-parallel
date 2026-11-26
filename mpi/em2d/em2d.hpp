@@ -2,17 +2,19 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
 
-#include "core/vec_types.cuh"
+#include "core/vec_types.hpp"
 #include "parallel/mpi.hpp"
 #include "parallel/partition.hpp"
-#include "core/gpu.cuh"
+#include "parallel/omp.hpp"
+#include "simd/simd.hpp"
 
 #include "emf.hpp"
 #include "current.hpp"
 #include "species.hpp"
 
-namespace zpic {
+namespace em2d {
 
 /**
  * @brief Print out system information
@@ -22,10 +24,9 @@ namespace zpic {
  */
 inline void sys_info() {
     if ( mpi::root() ) {
-
         std::cout << "MPI running on " << mpi::size() << " processes\n";
-
-        gpu::print_info();
+        simd::info();
+        omp::info();
     }
 }
 
@@ -94,12 +95,12 @@ class simulation {
     mpi::cart2d parallel;
 
     /// @brief EM fields
-    emf emf;
+    em2d::emf emf;
     /// @brief Electric current density
-    current current;
+    em2d::current current;
 
     /// @brief Vector of particle species
-    std::vector <species*> species;
+    std::vector< em2d::species * > species;
 
     /**
      * @brief Construct a new simulation object
@@ -166,8 +167,8 @@ class simulation {
     void set_moving_window() {
         emf.set_moving_window();
         current.set_moving_window();
-        for (unsigned i = 0; i < species.size(); i++)
-            species[i]->set_moving_window();
+        for ( auto & sp : species )
+            sp->set_moving_window();
     }
 
     /**
@@ -184,13 +185,18 @@ class simulation {
      * @brief Gets a pointer to a specific species object
      * 
      * @param name                species name
-     * @return species const* 
+     * @return species* (nullptr if not found)
      */
     class species * get_species( const std::string & name ) {
-        unsigned id = 0;
-        for( id = 0; id < species.size(); id++ )
-            if ( (species[id])->name == name ) break;
-        return ( id < species.size() ) ? species[id] : nullptr;
+        auto it = std::find_if( species.begin(), species.end(),
+            [&name]( const auto & s ) { return s->name == name; } );
+        return ( it != species.end() ) ? *it : nullptr;
+    }
+
+    const class species * get_species( const std::string & name ) const {
+        auto it = std::find_if( species.begin(), species.end(),
+            [&name]( const auto & s ) { return s->name == name; } );
+        return ( it != species.end() ) ? *it : nullptr;
     }
 
     /**
@@ -347,12 +353,12 @@ class simulation {
         }
         
         double part_ene = 0;
-        for (unsigned i = 0; i < species.size(); i++) {
-            double kin = species[i]->get_energy();
+         for ( auto & sp : species ) {
+            double kin = sp -> get_energy();
             parallel.reduce( &kin, 1, mpi::sum );
             
             if ( parallel.root() )
-                std::cout << "(*info*) " << species[i]->name << " = " << kin << '\n';
+                std::cout << "(*info*) " << sp->name << " = " << kin << '\n';
 
             part_ene += kin;
         }
@@ -404,4 +410,4 @@ class simulation {
     }
 };
 
-} // namespace zpic
+} // namespace em2d
