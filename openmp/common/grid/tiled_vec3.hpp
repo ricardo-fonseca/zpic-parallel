@@ -1,0 +1,413 @@
+#pragma once
+
+#include "tiled.hpp"
+#include "../core/vec_types.hpp"
+#include "../core/dims.hpp"
+
+namespace grid {
+
+template< typename S >
+using tiled_vec3_view = grid::tiled_view< vec3<S> >;
+
+template < typename S > 
+class tiled_vec3 : public grid::tiled< vec3<S> >
+{
+    private:
+
+    using V = vec3<S>;
+
+    using grid::tiled< V > :: d_buffer;
+
+    public:
+
+    using grid::tiled< V > :: name;
+
+    using grid::tiled< V > :: grid_ntiles;
+    using grid::tiled< V > :: grid_dims;
+    using grid::tiled< V > :: grid_periodic;
+    using grid::tiled< V > :: tile_dims;
+    using grid::tiled< V > :: tile_ext_dims;
+
+    using grid::tiled< V > :: gc;
+
+    using grid::tiled< V > :: tile_vol;
+
+    using grid::tiled< V > :: tiled;
+
+    using grid::tiled< V > :: set;
+
+    using grid::tiled< V > :: gather;
+    using grid::tiled< V > :: scatter;
+    using grid::tiled< V > :: copy_to_gc_x;
+    using grid::tiled< V > :: copy_to_gc_y;
+    using grid::tiled< V > :: copy_to_gc;
+
+    using grid::tiled< V > :: buffer;
+    using grid::tiled< V > :: tile_data;
+    using grid::tiled< V > :: tile_buffer;
+
+    using grid::tiled< V > :: view;
+    using grid::tiled< V > :: cview;
+
+    /**
+     * @brief Gather specific field component values from all tiles
+     * 
+     * @note
+     * The default behavior is to output data into a contiguous array of dimensions 
+     * grid_dims.y * grid_dims.x. The stride parameter can be used to specify different
+     * memory layouts.
+     *
+     * @param fc            Field component to output
+     * @param out           Scalar output buffer
+     * @return uint         Total number of elements copied
+     */
+    template< typename S2 >
+    unsigned int gather( const enum fcomp::cart fc, S2 * const __restrict__ out, 
+        uint2 stride = {0,0} ) const {
+        
+        // Default to contiguous memory layout
+        if ( stride.x == 0 ) {
+            stride = make_uint2( 1, grid_dims.x );
+        }
+
+        // Check that y stride is valid
+        assert(( stride.y > 0 ));
+
+        if ( stride.x == 1 ) {
+            // Optimized versions for x stride == 1
+            switch( fc ) {
+                case( fcomp::x ):
+                #pragma omp parallel for collapse(2)
+                for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                    for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                        V * const __restrict__ data = tile_data(tx,ty);
+
+                        const auto gix0 = tx * tile_dims.x;
+                        const auto giy0 = ty * tile_dims.y;
+
+                        // Loop inside tile
+                        for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                            for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                                out[ (giy0 + iy) * stride.y + (gix0 + ix) ] = data[ iy * tile_ext_dims.x + ix ].x;
+                            }
+                        }
+                    }
+                }
+                break;
+
+                case( fcomp::y ):
+                #pragma omp parallel for collapse(2)
+                for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                    for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                        V * const __restrict__ data = tile_data(tx,ty);
+
+                        const auto gix0 = tx * tile_dims.x;
+                        const auto giy0 = ty * tile_dims.y;
+
+                        // Loop inside tile
+                        for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                            for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                                out[ (giy0 + iy) * stride.y + (gix0 + ix) ] = data[ iy * tile_ext_dims.x + ix ].y;
+                            }
+                        }
+                    }
+                }
+                break;
+
+                case( fcomp::z ):
+                #pragma omp parallel for collapse(2)
+                for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                    for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                        V * const __restrict__ data = tile_data(tx,ty);
+
+                        const auto gix0 = tx * tile_dims.x;
+                        const auto giy0 = ty * tile_dims.y;
+
+                        // Loop inside tile
+                        for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                            for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                                out[ (giy0 + iy) * stride.y + (gix0 + ix) ] = data[ iy * tile_ext_dims.x + ix ].z;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+
+        } else {
+            // Arbitrary x stride
+            switch( fc ) {
+                case( fcomp::x ):
+                #pragma omp parallel for collapse(2)
+                for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                    for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                        V * const __restrict__ data = tile_data(tx,ty);
+
+                        const auto gix0 = tx * tile_dims.x;
+                        const auto giy0 = ty * tile_dims.y;
+
+                        // Loop inside tile
+                        for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                            for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                                out[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] = data[ iy * tile_ext_dims.x + ix ].x;
+                            }
+                        }
+                    }
+                }
+                break;
+
+                case( fcomp::y ):
+                #pragma omp parallel for collapse(2)
+                for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                    for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                        V * const __restrict__ data = tile_data(tx,ty);
+
+                        const auto gix0 = tx * tile_dims.x;
+                        const auto giy0 = ty * tile_dims.y;
+
+                        // Loop inside tile
+                        for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                            for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                                out[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] = data[ iy * tile_ext_dims.x + ix ].y;
+                            }
+                        }
+                    }
+                }
+                break;
+
+                case( fcomp::z ):
+                #pragma omp parallel for collapse(2)
+                for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                    for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                        V * const __restrict__ data = tile_data(tx,ty);
+
+                        const auto gix0 = tx * tile_dims.x;
+                        const auto giy0 = ty * tile_dims.y;
+
+                        // Loop inside tile
+                        for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                            for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                                out[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] = data[ iy * tile_ext_dims.x + ix ].z;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        return grid_dims.x * grid_dims.y;
+    }
+
+    /**
+     * @brief Gather data from tiled grid
+     *
+     * @note By default, the output buffers are assumed to use a contiguous
+     *       memory layout. Other layouts may be specified using the stride
+     *       parameter
+     * 
+     * @tparam S2               Output grids datatype
+     * @param out_x             x component buffer
+     * @param out_y             y component buffer
+     * @param out_z             z component buffer
+     * @param stride            Output buffers stride, defaults to a contiguous
+     *                          memory layout
+     * @return unsigned int     Number of cells written
+     */
+    template< typename S2 >
+    unsigned int gather( 
+        S2 * const __restrict__ out_x, 
+        S2 * const __restrict__ out_y, 
+        S2 * const __restrict__ out_z,
+        uint2 stride = {0,0} ) const {
+
+        // Default to contiguous memory layout
+        if ( stride.x == 0 ) {
+            stride = make_uint2( 1, grid_dims.x );
+        }
+
+        if ( stride.x == 1 ) {
+            // Optimized version for x stride == 1
+            #pragma omp parallel for collapse(2)
+            for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                    V * const __restrict__ data = tile_data(tx,ty);
+
+                    const auto gix0 = tx * tile_dims.x;
+                    const auto giy0 = ty * tile_dims.y;
+
+                    // Loop inside tile
+                    for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                        for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                            V val = data[ iy * tile_ext_dims.x + ix ];
+                            out_x[ (giy0 + iy) * stride.y + (gix0 + ix) ] = val.x;
+                            out_y[ (giy0 + iy) * stride.y + (gix0 + ix) ] = val.y;
+                            out_z[ (giy0 + iy) * stride.y + (gix0 + ix) ] = val.z;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Arbitrary x stride
+            #pragma omp parallel for collapse(2)
+            for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                    V * const __restrict__ data = tile_data(tx,ty);
+
+                    const auto gix0 = tx * tile_dims.x;
+                    const auto giy0 = ty * tile_dims.y;
+
+                    // Loop inside tile
+                    for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                        for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                            V val = data[ iy * tile_ext_dims.x + ix ];
+                            out_x[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] = val.x;
+                            out_y[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] = val.y;
+                            out_z[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] = val.z;
+                        }
+                    }
+                }
+            }
+        }
+
+        return grid_dims.x * grid_dims.y;
+    }
+
+    /**
+     * @brief Scatter data into the tile grid and update guard cell values
+     * 
+     * @tparam S2               Input buffer datatype
+     * @tparam S3               Scale factor datatype
+     * @param in_x              x component buffer
+     * @param in_y              y component buffer
+     * @param in_z              z component buffer
+     * @param scale             Scale factor
+     * @param stride            Input buffer stride, defaults to a
+     *                          contiguous memory layout
+     * @return unsigned int     Total number of cells
+     */
+    template< typename S2, typename S3 >
+    unsigned int scatter( 
+        const S2 * const __restrict__ in_x, 
+        const S2 * const __restrict__ in_y, 
+        const S2 * const __restrict__ in_z,
+        const S3 scale, 
+        uint2 stride = {0,0} ) {
+
+        // Default to contiguous memory layout
+        if ( stride.x == 0 ) {
+            stride = make_uint2( 1, grid_dims.x );
+        }
+
+        if ( stride.x == 1 ) {
+            // Optimized version for x stride == 1
+            #pragma omp parallel for collapse(2)
+            for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                    V * const __restrict__ data = tile_data(tx,ty);
+
+                    const auto gix0 = tx * tile_dims.x;
+                    const auto giy0 = ty * tile_dims.y;
+
+                    // Loop inside tile
+                    for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                        for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                            V val;
+                            val.x = in_x[ (giy0 + iy) * stride.y + (gix0 + ix) ] * scale;
+                            val.y = in_y[ (giy0 + iy) * stride.y + (gix0 + ix) ] * scale;
+                            val.z = in_z[ (giy0 + iy) * stride.y + (gix0 + ix) ] * scale;
+                            data[ iy * tile_ext_dims.x + ix ] = val;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Arbitrary x stride
+            #pragma omp parallel for collapse(2)
+            for( unsigned ty = 0; ty < grid_ntiles.y; ty ++ ) {
+                for( unsigned tx = 0; tx < grid_ntiles.x; tx ++ ) {
+                    V * const __restrict__ data = tile_data(tx,ty);
+
+                    const auto gix0 = tx * tile_dims.x;
+                    const auto giy0 = ty * tile_dims.y;
+
+                    // Loop inside tile
+                    for( unsigned iy = 0; iy < tile_dims.y; iy ++ ) {
+                        for( unsigned ix = 0; ix < tile_dims.x; ix ++ ) {
+                            V val;
+                            val.x = in_x[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] * scale;
+                            val.y = in_y[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] * scale;
+                            val.z = in_z[ (giy0 + iy) * stride.y + (gix0 + ix) * stride.x ] * scale;
+                            data[ iy * tile_ext_dims.x + ix ] = val;
+
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update guard cell values
+        copy_to_gc();
+
+        return grid_dims.x * grid_dims.y;
+    }
+
+    /**
+     * @brief Save specific field component to disk using full metadata
+     * 
+     * @tparam S2       Output type, defaults to same type as the grid, must
+     *                  be supported by zdf
+     * @param fc        Field component to save
+     * @param metadata  Dataset information
+     * @param iter      Iteration information
+     * @param path      Base path for saving file
+     */
+    template< typename S2 = S >
+    void save( const enum fcomp::cart fc, zdf::grid_info &metadata, zdf::iteration &iter, const std::string & path ) {
+
+        // Fill in grid dimensions
+        metadata.ndims = 2;
+        metadata.count[0] = grid_dims.x;
+        metadata.count[1] = grid_dims.y;
+
+        // Allocate buffer to gather data
+        const std::size_t bsize = grid_dims.x * grid_dims.y;
+        S2 * h_data = memory::malloc<S2>( bsize );
+
+        gather( fc, h_data );
+
+        // Save data
+        zdf::save_grid<S2>( h_data, metadata, iter, path );
+
+        memory::free( h_data );
+    }
+
+    /**
+     * @brief Save specific field component to disk using minimal description
+     * 
+     * @tparam S2       Output type, defaults to same type as the grid, must
+     *                  be supported by zdf
+     * @param fc        Field component to save
+     * @param filename  Output filename
+     */
+    template< typename S2 = S >
+    void save( const enum fcomp::cart fc, const std::string & filename ) {
+
+        // Allocate buffer to gather data
+        const std::size_t bsize = grid_dims.x * grid_dims.y;
+        S2 * h_data = memory::malloc<S2>( bsize );
+
+        // Gather data on contiguous grid
+        gather( fc, h_data );
+
+        uint64_t dims[2] = { grid_dims.x, grid_dims.y };
+
+        // Save data
+        zdf::save_grid( h_data, 2, dims, name + "-" + fcomp::name(fc), filename );
+
+        // Free remaining temporary buffer 
+        memory::free( h_data );
+    }
+};
+
+}

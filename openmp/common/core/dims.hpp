@@ -15,6 +15,7 @@ namespace coord {
             case coord::cart::x : return "x";
             case coord::cart::y : return "y";
         }
+        return "-";
     }
 }
 
