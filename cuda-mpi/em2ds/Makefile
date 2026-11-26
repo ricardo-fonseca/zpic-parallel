@@ -95,7 +95,7 @@ DEPDIR := .deps
 #   zdf/    -> $(OBJDIR)/zdf/zdf.o
 OBJS := $(patsubst %,$(OBJDIR)/%.o,$(basename $(SOURCE))) \
         $(patsubst %,$(OBJDIR)/common/%.o,$(basename $(COMMON_SRC))) \
-        $(patsubst %,$(OBJDIR)/zdf/%.o,$(basename $(ZDF_SRC)))
+        $(patsubst %,$(OBJDIR)/zdf/%.o,$(basename $(ZDF_SRC) $(ZDF_PAR_SRC)))
 
 # Set automatic dependency generation
 # The dependency file mirrors the object path, e.g.
