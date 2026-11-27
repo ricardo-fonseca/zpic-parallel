@@ -1,220 +1,313 @@
-#include "laser.h"
+#include "laser.hpp"
+
+#include "filter.hpp"
 
 #include <iostream>
 #include <cassert>
 
-#include "filter.h"
+namespace em2d {
 
-
-/**
- * @brief Sets the longitudinal field components of E and B to ensure 0 divergence
- * 
- * The algorithm assumes 0 field at the right boundary of the box
- * 
- * This version only allows parallelism on the outermost (ty) loop
- * 
- * @param E     E field
- * @param B     B field
- * @param dx    cell size
- */
-void div_corr_x( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
-
-    const int2 ntiles   = make_int2( E.ntiles.x, E.ntiles.y );
-    const auto tile_vol = E.tile_vol;
-    const int2  nx      = make_int2( E.nx.x, E.nx.y );
-    const auto offset   = E.offset;
-    const int ystride   = E.ext_nx.x; // Make sure ystride is signed because iy may be < 0
-
-    const double dx_dy = ((double) dx.x) / ((double) dx.y);
-
-    for( int ty = 0; ty < ntiles.y; ty ++ ) {
-
-        // If paralelizing over y tiles these should be defined by Y tile group (tiles with same tile.y) 
-        double divEx[ nx.y ];
-        double divBx[ nx.y ];
-
-        for( int iy = 0; iy < nx.y; iy++ ) {
-            divEx[ iy ] = divBx[ iy ] = 0;
-        }
-        
-        // Process tiles right to left
-        for( int tx = ntiles.x-1; tx >=0; tx -- ) {
-
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
-
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-            for( int iy = 0; iy < nx.y; iy++ ) {
-                double tmpDivEx = divEx[ iy ];
-                double tmpDivBx = divBx[ iy ];
-
-                for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-
-                    tmpDivEx += dx_dy * (tile_E[ix+1 + iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    tile_E[ ix + iy * ystride ].x = tmpDivEx;
-                    
-                    tmpDivBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix + iy*ystride].y);
-                    tile_B[ ix + iy * ystride ].x = tmpDivBx;
-                }
-
-                divEx[iy] = tmpDivEx;
-                divBx[iy] = tmpDivBx;
-            }
-        }
-    }
-
-}
+namespace {
 
 /**
- * @brief Sets the longitudinal field components of E and B to ensure 0 divergence
- * 
- * The algorithm assumes 0 field at the right boundary of the box
- * 
- * This version allows for more parallelism, similar to GPU versions
- * 
- * @param E     E field
- * @param B     B field
- * @param dx    cell size
+ * @brief Get cell size from box size and global grid dimensions
  */
-void div_corr_x_mk1( vec3grid<float3>& E, vec3grid<float3>& B, const float2 dx ) {
+float2 cell_size( const grid::tiled_vec3<float> & E, const float2 box ) {
+    return make_float2(
+        box.x / E.get_grid_dims().x,
+        box.y / E.get_grid_dims().y
+    );
+}
 
-    const auto ntiles   = E.ntiles;
-    const auto tile_vol = E.tile_vol;
-    const int2 nx       = make_int2(E.nx.x, E.nx.y);
-    const auto offset   = E.offset;
-    const int ystride   = E.ext_nx.x;
+} // anonymous namespace
 
-    const double dx_dy = ((double) dx.x) / ((double) dx.y);
+namespace laser {
 
-    size_t bsize = ntiles.x * (ntiles.y * nx.y);
-    double tmpE[ bsize ];
-    double tmpB[ bsize ];
+/**
+ * @brief Plane wave kernel parameters
+ */
+struct plane_wave_params {
+    /// @brief Longitudinal envelope
+    envelope env;
+    /// @brief Wavenumber (= omega0, normalized units)
+    float k;
+    /// @brief Field amplitude (omega0 * a0)
+    float amp;
+    /// @brief Cosine of the polarization angle
+    float cos_pol;
+    /// @brief Sine of the polarization angle
+    float sin_pol;
+};
 
-    // Get divergence inside each tile
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+/**
+ * @brief Gaussian beam kernel parameters
+ */
+struct gaussian_params {
+    /// @brief Longitudinal envelope
+    envelope env;
+    /// @brief Laser frequency
+    float omega0;
+    /// @brief Beam waist
+    float W0;
+    /// @brief Focal plane position
+    float focus;
+    /// @brief Beam axis position
+    float axis;
+    /// @brief Field amplitude (omega0 * a0)
+    float amp;
+    /// @brief Cosine of the polarization angle
+    float cos_pol;
+    /// @brief Sine of the polarization angle
+    float sin_pol;
+};
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
+} // namespace laser
 
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
+/**
+ * @brief Gets longitudinal laser envelope at a given position
+ * 
+ * @param env       Envelope parameters
+ * @param z         Position
+ * @return float    Laser envelope
+ */
+namespace {
 
-            for( int iy = 0; iy < nx.y; iy++ ) {
-                // Find divergence at left edge
-                double divEx = 0;
-                double divBx = 0;
-                for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-                    divEx += dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    divBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
-                }
+inline float lon_env( const laser::envelope & env, const float z ) {
 
-                const int idx = (tile_idx.y * nx.y + iy) * ntiles.x + tile_idx.x;
-                tmpE[ idx ] = divEx;
-                tmpB[ idx ] = divBx;
-            }
-        }
+    if ( z > env.start ) {
+        // Ahead of laser
+        return 0.0f;
+    } else if ( z > env.start - env.rise ) {
+        // Laser rise
+        const float csi = z - env.start;
+        const float e = std::sin( static_cast<float>(M_PI_2) * csi / env.rise );
+        return e*e;
+    } else if ( z > env.start - (env.rise + env.flat) ) {
+        // Flat-top
+        return 1.0f;
+    } else if ( z > env.start - (env.rise + env.flat + env.fall) ) {
+        // Laser fall
+        const float csi = z - (env.start - env.rise - env.flat - env.fall);
+        const float e = std::sin( static_cast<float>(M_PI_2) * csi / env.fall );
+        return e*e;
     }
 
-    // Do a left scan to find accumulated divergence
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( int iy = 0; iy < nx.y; iy++ ) {
-            double divEx = 0;
-            double divBx = 0;
-            for( int tx = ntiles.x-1; tx >= 0; tx -- ) {
-                auto tile_idx = make_uint2( tx, ty );
-                const int idx = (tile_idx.y * nx.y + iy) * ntiles.x + tile_idx.x;
+    // Before laser
+    return 0.0f;
+}
 
-                auto tE = tmpE[ idx ] + divEx;
-                auto tB = tmpB[ idx ] + divBx;
+} // anonymous namespace
 
-                tmpE[ idx ] = divEx;
-                tmpB[ idx ] = divBx;
 
-                divEx = tE;
-                divBx = tB;
+namespace laser {
+namespace kernel {
+
+/**
+ * @brief Divergence correction - Prefix scan data to get longitudinal components
+ * 
+ * @note Guard cells must be valid on entry.
+ *
+ * @param row           Cell row (y index)
+ * @param E_grid        E field grid
+ * @param B_grid        B field grid
+ * @param dx_dy         dx / dy
+ */
+void lon_x_scan (
+    const int row,
+    grid::tiled_vec3_view<float> E_grid, 
+    grid::tiled_vec3_view<float> B_grid,
+    double const dx_dy
+)
+{
+    // Get tile_idx.y
+    const int tile_idx_y = row / E_grid.tile_dims.y;
+    // Get tile iy coordinate
+    const int iy = row - tile_idx_y * E_grid.tile_dims.y;
+
+    const int ystride = E_grid.tile_ystride();
+    const int nx      = E_grid.tile_dims.x;
+
+    double divEx = 0;
+    double divBx = 0;
+    
+    // Process tiles right to left
+    for( int tile_idx_x = E_grid.grid_ntiles.x - 1; tile_idx_x >= 0; tile_idx_x-- ) {
+
+        float3 * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
+        float3 * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
+
+            for( int ix = nx - 1; ix >= 0; ix-- ) {
+
+                divEx += dx_dy * (tile_E[ix+1 + iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
+                tile_E[ ix + iy * ystride].x = divEx;
+                
+                divBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix + iy*ystride].y);
+                tile_B[ ix + iy * ystride ].x = divBx;
             }
-        }
-    }
-
-    // Correct divergence
-    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
-
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-            for( int iy = 0; iy < nx.y; iy++ ) {
-                auto idx = (tile_idx.y * nx.y + iy) * ntiles.x + tile_idx.x;
-                auto divEx = tmpE[ idx ];
-                auto divBx = tmpB[ idx ];
-
-                for( int ix = nx.x - 1; ix >= 0; ix-- ) {
-                    divEx += dx_dy * (tile_E[ix+1 +     iy*ystride].y - tile_E[ix+1 + (iy-1)*ystride].y);
-                    tile_E[ ix + iy * ystride].x = divEx;
-                    
-                    divBx += dx_dy * (tile_B[ix   + (iy+1)*ystride].y - tile_B[ix   +     iy*ystride].y);
-                    tile_B[ ix + iy * ystride ].x = divBx;
-                }
-            }
-        }
     }
 }
+
+} // namespace kernel
+} // namespace laser
 
 
 /**
  * @brief Validates laser parameters
  * 
- * @return      0 on success, -1 on error
+ * @note Invalid parameters cause the simulation to stop (util::fatal)
  */
-int Laser::Pulse::validate() {
+void laser::pulse::validate() const {
 
     if ( a0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser a0, must be > 0\n";
-        return -1;
+        util::fatal( "Invalid laser parameter (a0), must be > 0" );
     }    
 
     if ( omega0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser OMEGA0, must be > 0\n";
-        return -1;
+        util::fatal( "Invalid laser parameter (omega0), must be > 0" );
     }    
 
-    if ( fwhm > 0 ) {
-        // The fwhm parameter overrides the rise/flat/fall parameters
-        rise = fwhm;
-        fall = fwhm;
-        flat = 0.;
-    } else {
+    // If fwhm > 0 it overrides the rise/flat/fall parameters, so these are
+    // only checked when it is not set
+    if ( fwhm <= 0 ) {
         if ( rise <= 0 ) {
-            std::cerr << "(*error*) Invalid laser RISE, must be > 0\n";
-            return (-1);
+            util::fatal( "Invalid laser parameter (rise), must be > 0" );
         }
 
         if ( flat < 0 ) {
-            std::cerr << "(*error*) Invalid laser FLAT, must be >= 0\n";
-            return (-1);
+            util::fatal( "Invalid laser parameter (flat), must be >= 0" );
         }
 
         if ( fall <= 0 ) {
-            std::cerr << "(*error*) Invalid laser FALL, must be > 0\n";
-            return (-1);
+            util::fatal( "Invalid laser parameter (fall), must be > 0" );
         }
     }
-
-    return 0;
 }
 
+/**
+ * @brief Get the longitudinal envelope
+ * 
+ * @note If fwhm > 0 this returns rise = fall = fwhm and flat = 0, otherwise
+ *       the rise, flat and fall parameters are used
+ * 
+ * @return laser::envelope 
+ */
+laser::envelope laser::pulse::get_envelope() const {
+    if ( fwhm > 0 ) {
+        return laser::envelope{ start, fwhm, 0.0f, fwhm };
+    }
+    return laser::envelope{ start, rise, flat, fall };
+}
+
+
+/**
+ * @brief Get the polarization direction
+ * 
+ * @note Uses cos_pol / sin_pol if either is set, otherwise these are
+ *       calculated from the polarization angle
+ * 
+ * @return float2   { cos(polarization), sin(polarization) }
+ */
+float2 laser::pulse::get_polarization() const {
+    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
+        return make_float2( std::cos( polarization ), std::sin( polarization ) );
+    }
+    return make_float2( cos_pol, sin_pol );
+}
+
+/**
+ * @brief Adds a new laser pulse onto an EMF object
+ * 
+ * @param emf   EMF object
+ * @return      Returns 0 on success
+ */
+int laser::pulse::add( emf & emf ) const {
+
+    grid::tiled_vec3<float> tmp_E( emf.E -> grid_ntiles, emf.E -> tile_dims, emf.E -> gc, emf.E -> grid_periodic );
+    grid::tiled_vec3<float> tmp_B( emf.B -> grid_ntiles, emf.B -> tile_dims, emf.B -> gc, emf.B -> grid_periodic );
+
+    // copy_to_gc() never writes guard cells on non-periodic global
+    // boundaries, so these must start at zero
+    tmp_E.zero();
+    tmp_B.zero();
+
+    // Get laser fields
+    int ierr = launch( tmp_E, tmp_B, emf.box );
+
+    // Add laser to simulation
+    if ( ! ierr ) {
+        // Get longitudinal components if needed
+        lon_x( tmp_E, tmp_B, cell_size( tmp_E, emf.box ) );
+
+        if ( filter > 0 ) {
+            // Filtering along x commutes with the discrete divergence, so
+            // the filtered field remains divergence free
+            filter::compensated fcomp( filter::axis::x, filter );
+            fcomp.apply( tmp_E );
+            fcomp.apply( tmp_B );
+        }
+        // add() includes guard cells, and tmp_E / tmp_B have valid guard
+        // cells at this point, so no further guard cell update is required
+        emf.E->add( tmp_E );
+        emf.B->add( tmp_B );
+    }
+
+    return ierr;
+}
+
+namespace laser {
+namespace kernel {
+
+/**
+ * @brief Sets plane wave laser fields
+ * 
+ * @note Fields are set on a Yee grid: E is evaluated at z and B at z + dx/2.
+ *       Only the interior cells are set.
+ * 
+ * @param p                 Plane wave parameters
+ * @param E_fld             E field grid
+ * @param B_fld             B field grid
+ * @param dx                Cell size
+ */
+void plane_wave(
+    const uint2 tile_idx,
+    plane_wave_params const p,
+    grid::tiled_vec3_view<float> E_fld, grid::tiled_vec3_view<float> B_fld, 
+    float2 const dx )
+{
+    float3 * const __restrict__ E = E_fld.tile_data( tile_idx );
+    float3 * const __restrict__ B = B_fld.tile_data( tile_idx );
+
+    const int ix0 = tile_idx.x * E_fld.tile_dims.x;
+    const int ystride = E_fld.tile_ystride();
+
+    const auto nx = E_fld.tile_dims;
+
+    for( unsigned idx = 0; idx < nx.y * nx.x; idx ++ ) {
+        const int ix = idx % nx.x;
+        const int iy = idx / nx.x; 
+
+        const float z   = ( ix0 + ix ) * dx.x;
+        const float z_2 = ( ix0 + ix + 0.5f ) * dx.x;
+
+        const float fld   = p.amp * lon_env( p.env, z   ) * cosf( p.k * z   );
+        const float fld_2 = p.amp * lon_env( p.env, z_2 ) * cosf( p.k * z_2 );
+
+        E[ ix + iy * ystride ] = make_float3(
+            0,
+            +fld * p.cos_pol,
+            +fld * p.sin_pol
+        );
+
+        B[ ix + iy * ystride ] = make_float3(
+            0,
+            -fld_2 * p.sin_pol,
+            +fld_2 * p.cos_pol
+        );
+    }
+}
+
+} // namespace kernel
+} // namespace laser
 
 /**
  * @brief Launches a plane wave
@@ -224,85 +317,31 @@ int Laser::Pulse::validate() {
  * @param E     Electric field
  * @param B     Magnetic field
  * @param box   Box size
- * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ * @return      Returns 0 on success
  */
-int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 box ) {
+int laser::plane_wave::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 box ) const {
 
-    // std::cout << "Launching plane wave...\n";
+    validate();
 
-    if ( validate() < 0 ) return -1;
+    const float2 dx  = cell_size( E, box );
+    const float2 pol = get_polarization();
 
-    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = std::cos( polarization );
-        sin_pol = std::sin( polarization );
-    }
+    const plane_wave_params p {
+        get_envelope(), omega0, omega0 * a0, pol.x, pol.y
+    };
 
-    uint2 g_nx = E.dims;
+    auto ntiles = E.get_grid_ntiles();
 
-    float2 dx = make_float2(
-        box.x / g_nx.x,
-        box.y / g_nx.y
-    );
-
-    // Grid tile parameters
-    const auto ntiles   = E.ntiles;
-    const auto tile_vol = E.tile_vol;
-    const auto nx       = E.nx;
-    const auto offset   = E.offset;
-    const int  ystride  = E.ext_nx.x; // ystride should be signed
-
-    const float k = omega0;
-    const float amp = omega0 * a0;
-
-    // Loop over tiles
+    #pragma omp parallel for collapse(2)
     for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
         for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
-
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-            const int ix0 = tile_idx.x * nx.x;
-
-            for( unsigned iy = 0; iy < nx.y; iy++ ) {
-                for( unsigned ix = 0; ix < nx.x; ix++ ) {
-                    const float z   = ( ix0 + ix ) * dx.x;
-                    const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
-
-                    float lenv   = amp * lon_env( z   );
-                    float lenv_2 = amp * lon_env( z_2 );
-
-                    tile_E[ ix + iy * ystride ] = make_float3(
-                        0,
-                        +lenv * std::cos( k * z ) * cos_pol,
-                        +lenv * std::cos( k * z ) * sin_pol
-                    );
-
-                    tile_B[ ix + iy * ystride ] = make_float3(
-                        0,
-                        -lenv_2 * std::cos( k * z_2 ) * sin_pol,
-                        +lenv_2 * std::cos( k * z_2 ) * cos_pol
-                    );
-                }
-            }
+            uint2 tile_idx = make_uint2( tx, ty );
+            kernel::plane_wave ( tile_idx, p, E.view(), B.view(), dx );
         }
     }
 
     E.copy_to_gc();
     B.copy_to_gc();
-
-    if ( filter > 0 ) {
-
-        Filter::Compensated fcomp( coord::x, filter);
-        fcomp.apply(E);
-        fcomp.apply(B);
-    }
-
-    // std::cout << "Plane wave launched\n";
 
     return 0;
 }
@@ -310,134 +349,171 @@ int Laser::PlaneWave::launch( vec3grid<float3>& E, vec3grid<float3>& B, float2 b
 /**
  * @brief Validate Gaussian laser parameters
  * 
- * @return      0 on success, -1 on error
+ * @note Invalid parameters cause the simulation to stop (util::fatal)
  */
-int Laser::Gaussian::validate() {
+void laser::gaussian::validate() const {
     
-    if ( Laser::Pulse::validate() < 0 ) {
-        return -1;
-    }
+    laser::pulse::validate();
 
     if ( W0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser W0, must be > 0\n";
-        return (-1);
+        util::fatal( "Invalid laser parameter (W0), must be > 0" );
     }
-
-    return 0;
 }
 
+namespace laser {
+namespace kernel {
 
 /**
- * @brief Returns local phase for a gaussian beamn
+ * @brief Gaussian beam transverse profile and phase
  * 
- * @param omega0    Beam frequency
- * @param W0        Beam waist
- * @param z         Position along focal line (focal plane at z = 0)
- * @param r         Position transverse to focal line (focal line at r = 0)
- * @return          Local field value
+ * @note The amplitude factor (W0/W)^(1/2) corresponds to 2D slab geometry,
+ *       but the Gouy phase atan(z/z0) is the 3D value (the 2D value is
+ *       0.5 * atan(z/z0)). This is kept as in the original code.
+ * 
+ * @param p     Gaussian beam parameters
+ * @param z     Distance from focal plane
+ * @param r     Distance from beam axis
+ * @return      Field profile (normalized)
  */
-inline float gauss_phase( const float omega0, const float W0, const float z, const float r ) {
-    const float z0   = omega0 * ( W0 * W0 ) / 2;
+inline float gauss_phase( const gaussian_params & p, const float z, const float r ) {
+    const float z0   = p.omega0 * ( p.W0 * p.W0 ) / 2;
     const float rho2 = r*r;
-    const float curv = rho2 * z / (z0*z0 + z*z);
-    const float rWl2 = (z0*z0)/(z0*z0 + z*z);
-    const float gouy_shift = atan2( z, z0 );
+    const float curv = 0.5f * rho2 * z / ( z0*z0 + z*z );
+    const float rWl2 = ( z0*z0 ) / ( z0*z0 + z*z );
+    const float gouy_shift = 0.5f * std::atan2( z, z0 );
 
-    return std::sqrt( std::sqrt(rWl2) ) * 
-        std::exp( - rho2 * rWl2/( W0 * W0 ) ) * 
-        std::cos( omega0*( z + curv ) - gouy_shift );
+    return std::sqrt( std::sqrt( rWl2 ) ) * 
+        std::exp( - rho2 * rWl2 / ( p.W0 * p.W0 ) ) * 
+        std::cos( p.omega0 * ( z + curv ) - gouy_shift );
 }
+
+/**
+ * @brief Sets Gaussian beam laser fields (transverse components)
+ * 
+ * @note Fields are set on a Yee grid:
+ *       E.y at (z, r + dy/2), E.z at (z, r),
+ *       B.y at (z + dx/2, r), B.z at (z + dx/2, r + dy/2).
+ *       Only the interior cells are set.
+ * 
+ * @param p                 Gaussian beam parameters
+ * @param E_fld             E field grid
+ * @param B_fld             B field grid
+ * @param dx                Cell size
+ */
+void gaussian( 
+     const uint2  tile_idx, 
+    gaussian_params const p, 
+    grid::tiled_vec3_view<float> E_fld, grid::tiled_vec3_view<float> B_fld, 
+    float2 const dx )
+{
+    float3 * const __restrict__ E = E_fld.tile_data( tile_idx );
+    float3 * const __restrict__ B = B_fld.tile_data( tile_idx );
+
+
+    const int ix0 = tile_idx.x * E_fld.tile_dims.x;
+    const int iy0 = tile_idx.y * E_fld.tile_dims.y;
+    const int ystride = E_fld.tile_ystride();
+
+    const auto nx = E_fld.tile_dims;
+
+    for( unsigned idx = 0; idx < nx.y * nx.x; idx ++ ) {
+        const int ix = idx % nx.x;
+        const int iy = idx / nx.x; 
+
+        const float z   = ( ix0 + ix ) * dx.x;
+        const float z_2 = ( ix0 + ix + 0.5f ) * dx.x;
+
+        const float r   = ( iy0 + iy ) * dx.y - p.axis;
+        const float r_2 = ( iy0 + iy + 0.5f ) * dx.y - p.axis;
+
+        const float lenv   = p.amp * lon_env( p.env, z );
+        const float lenv_2 = p.amp * lon_env( p.env, z_2 );
+
+        E[ ix + iy * ystride ] = make_float3(
+            0,
+            +lenv * gauss_phase( p, z - p.focus, r_2 ) * p.cos_pol,
+            +lenv * gauss_phase( p, z - p.focus, r   ) * p.sin_pol
+        );
+
+        B[ ix + iy * ystride ] = make_float3(
+            0,
+            -lenv_2 * gauss_phase( p, z_2 - p.focus, r   ) * p.sin_pol,
+            +lenv_2 * gauss_phase( p, z_2 - p.focus, r_2 ) * p.cos_pol
+        );
+    }
+}
+
+} // namespace kernel
+} // namespace laser
 
 /**
  * @brief Launches a Gaussian pulse
  * 
- * The E and B tiled grids have the complete laser field.
+ * The E and B tiled grids have only the transverse field components
  * 
  * @param E     Electric field
  * @param B     Magnetic field
- * @param dx    Cell size
- * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ * @param box   Box size
+ * @return      Returns 0 on success
  */
-int Laser::Gaussian::launch(vec3grid<float3>& E, vec3grid<float3>& B, float2 const box ) {
+int laser::gaussian::launch( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 box ) const {
 
-    if ( validate() < 0 ) return -1;
+    validate();
 
-    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = std::cos( polarization );
-        sin_pol = std::sin( polarization );
-    }
+    const float2 dx  = cell_size( E, box );
+    const float2 pol = get_polarization();
 
-    uint2 g_nx = E.dims;
+    const gaussian_params p {
+        get_envelope(), omega0, W0, focus, axis, omega0 * a0, pol.x, pol.y
+    };
 
-    float2 dx = make_float2(
-        box.x / g_nx.x,
-        box.y / g_nx.y
-    );
+    auto ntiles = E.get_grid_ntiles();
 
-    // Grid tile parameters
-    const auto ntiles   = E.ntiles;
-    const auto tile_vol = E.tile_vol;
-    const auto nx       = E.nx;
-    const auto offset   = E.offset;
-    const int  ystride  = E.ext_nx.x;   // ystride must be signed
-
-    const float amp = omega0 * a0;
-
-    // Loop over tiles
+    #pragma omp parallel for collapse(2)
     for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
         for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol;
-
-            // Copy data to shared memory and block
-            float3 * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            float3 * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
- 
-            const int ix0 = tile_idx.x * nx.x;
-            const int iy0 = tile_idx.y * nx.y;
-
-            for( unsigned iy = 0; iy < nx.y; iy++ ) {
-                for( unsigned ix = 0; ix < nx.x; ix++ ) {
-                    const float z   = ( ix0 + ix ) * dx.x;
-                    const float z_2 = ( ix0 + ix + 0.5 ) * dx.x;
-
-                    const float r   = (iy0 + iy ) * dx.y - axis;
-                    const float r_2 = (iy0 + iy + 0.5 ) * dx.y - axis;
-
-                    const float lenv   = amp * lon_env( z   );
-                    const float lenv_2 = amp * lon_env( z_2 );
-
-                    tile_E[ ix + iy * ystride ] = make_float3(
-                        0,
-                        +lenv * gauss_phase( omega0, W0, z - focus, r_2 ) * cos_pol,
-                        +lenv * gauss_phase( omega0, W0, z - focus, r   ) * sin_pol
-                    );
-                    tile_B[ ix + iy * ystride ] = make_float3(
-                        0,
-                        -lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r   ) * sin_pol,
-                        +lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r_2 ) * cos_pol
-                    );
-
-                }
-            }
+            uint2 tile_idx = make_uint2( tx, ty );
+            kernel::gaussian ( tile_idx, p, E.view(), B.view(), dx );
         }
     }
 
+    // lon_x() reads neighboring cells across tile / node boundaries, so the
+    // guard cells must be valid first
     E.copy_to_gc();
     B.copy_to_gc();
 
-    if ( filter > 0 ) {
+    return 0;
+}
 
-        Filter::Compensated fcomp( coord::x, filter);
-        fcomp.apply(E);
-        fcomp.apply(B);
+
+/**
+ * @brief Sets the longitudinal field components of E and B to ensure 0
+ *        divergence
+ * 
+ * @note Guard cells must be valid on entry. Guard cells are updated on exit.
+ * 
+ * @warning The algorithm assumes 0 field at the right boundary of the box. If
+ *          this is not true then the field values will be wrong.
+ * 
+ * @param E     E field
+ * @param B     B field
+ * @param dx    Cell size
+ * @return      Returns 0 on success
+ */
+int laser::gaussian::lon_x( grid::tiled_vec3<float>& E, grid::tiled_vec3<float>& B, const float2 dx ) const {
+
+    const double dx_dy = (double) dx.x / (double) dx.y;
+
+    #pragma omp parallel for
+    for( int j = 0; j < static_cast<int>(E.grid_dims.y); j++ ) {
+        laser::kernel::lon_x_scan( j, E.view(), B.view(), dx_dy );
     }
 
-    div_corr_x( E, B, dx );
-
-    // std::cout << "Launched gaussian pulse\n";
+    // Correct longitudinal values on guard cells
+    E.copy_to_gc();
+    B.copy_to_gc();
 
     return 0;
 }
+
+} // namespace em2d

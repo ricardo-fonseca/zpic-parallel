@@ -1,217 +1,310 @@
-#include "current.h"
+#include "current.hpp"
 
-#include <iostream>
+#include <string>
 
+namespace em2d {
+
+namespace {
+
+namespace current_bc {
 
 /**
- * @brief Construct a new Current:: Current object
- * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- * @param box       Box size
- * @param dt        Time step
+ * @brief Normal / tangential current components for walls normal to x
+ *        (dir = 0) or y (dir = 1)
  */
-Current::Current( uint2 const ntiles, uint2 const nx, float2 const box,
-    double const dt ) : 
-    dx( make_float2( box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) ) ),
-    dt(dt), box(box)
-{
+template< coord::cart dir > struct comp;
 
-    // Guard cells (1 below, 2 above)
-    // These are required for the Yee solver AND for current deposition
-    bnd<unsigned int> gc;
-    gc.x = {1,2};
-    gc.y = {1,2};
+template<> struct comp< coord::x > {
+    static float & n ( float3 & v ) { return v.x; }
+    static float & t1( float3 & v ) { return v.y; }
+    static float & t2( float3 & v ) { return v.z; }
+};
 
-    J = new vec3grid<float3> ( ntiles, nx, gc );
-    J -> name = "Current density";
+template<> struct comp< coord::y > {
+    static float & n ( float3 & v ) { return v.y; }
+    static float & t1( float3 & v ) { return v.x; }
+    static float & t2( float3 & v ) { return v.z; }
+};
 
-    // Zero initial current
-    // This is only relevant for diagnostics, current should always zeroed before deposition
-    J -> zero();
-
-    // Set default boundary conditions to periodic
-    bc = current::bc_type (current::bc::periodic);
-
-    // Disable filtering by default
-    filter = new Filter::None();
-
-    // Reset iteration number
-    iter = 0;
-
+/**
+ * @brief Check if boundary condition is a conducting wall
+ * 
+ * @param t     Boundary condition type
+ * @return      True if t is PEC, PMC or PEC (absorbing), false otherwise
+ */
+inline bool is_conducting( current::bc::type t ) {
+    return t == current::bc::pec || t == current::bc::pmc || t == current::bc::pec_absorbing;
 }
 
 /**
- * @brief Physical boundary conditions for the x direction
+ * @brief Lower wall (pec / pmc) boundary condition for one line of cells
  * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.x.lower ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * The wall sits on node 0. Layout along the line (stride s):
+ * 
+ *  p[-s]   normal: -1/2  tangential: -1 (guard)
+ *  p[ 0]   normal: +1/2  tangential: wall node
+ *  p[+s]   normal: +3/2  tangential: +1
+ * 
+ * Fold (particle reflection, same for pec and pmc): the current deposited
+ * beyond the wall is mirrored into the domain, with the normal component
+ * reversed. The deposit on the wall node is its own mirror and is unchanged.
+ * pec_absorbing walls skip the fold: the current deposited beyond the wall
+ * is overwritten by the image values below.
+ * 
+ * Images (wall type dependent):
+ *  pec - opposite sign image charges: normal J even, tangential J odd, so
+ *        the tangential J on the wall node is 0
+ *  pmc - same sign image charges: normal J odd, tangential J even, so the
+ *        tangential J on the wall node is doubled (fold step only)
+ * 
+ * @param p     Pointer to the wall node
+ * @param s     Stride along the line normal to the wall (1 or ystride)
+ * @param type  Wall type (pec, pmc or pec_absorbing)
+ * @param fold  Fold guard cell current and correct wall node (once per step)
+ */
+template< coord::cart dir >
+void lower_conducting( float3 * const p, int const s, current::bc::type const type, bool const fold ) {
+    using C = comp<dir>;
+    // pec_absorbing walls use pec images, but particles are not reflected
+    const bool pec     = ( type != current::bc::pmc );
+    const bool reflect = ( type != current::bc::pec_absorbing );
+
+    if ( fold ) {
+        if ( reflect ) {
+            C::n ( p[ 0 ] ) -= C::n ( p[ -s ] );
+            C::t1( p[ s ] ) += C::t1( p[ -s ] );
+            C::t2( p[ s ] ) += C::t2( p[ -s ] );
+        }
+
+        if ( ! pec ) {
+            C::t1( p[ 0 ] ) *= 2;
+            C::t2( p[ 0 ] ) *= 2;
+        }
+    }
+
+    if ( pec ) {
+        C::t1( p[ 0 ] ) = 0;
+        C::t2( p[ 0 ] ) = 0;
+    }
+
+    const float pn = pec ? +1.0f : -1.0f;   // normal component parity
+    const float pt = -pn;                   // tangential component parity
+
+    C::n ( p[ -s ] ) = pn * C::n ( p[ 0 ] );
+    C::t1( p[ -s ] ) = pt * C::t1( p[ s ] );
+    C::t2( p[ -s ] ) = pt * C::t2( p[ s ] );
+}
+
+/**
+ * @brief Upper wall (pec / pmc) boundary condition for one line of cells
+ * 
+ * The wall sits on node n (first upper guard cell). Layout along the line
+ * (stride s):
+ * 
+ *  p[-2s]  normal: n-3/2         tangential: n-2
+ *  p[ -s]  normal: n-1/2         tangential: n-1
+ *  p[  0]  normal: n+1/2 (guard) tangential: wall node (guard)
+ *  p[ +s]  normal: n+3/2 (guard) tangential: n+1 (guard)
+ * 
+ * See lower_conducting() for the fold / image rules.
+ * 
+ * @param p     Pointer to the wall node
+ * @param s     Stride along the line normal to the wall (1 or ystride)
+ * @param type  Wall type (pec, pmc or pec_absorbing)
+ * @param fold  Fold guard cell current and correct wall node (once per step)
+ */
+template< coord::cart dir >
+void upper_conducting( float3 * const p, int const s, current::bc::type const type, bool const fold ) {
+    using C = comp<dir>;
+    // pec_absorbing walls use pec images, but particles are not reflected
+    const bool pec     = ( type != current::bc::pmc );
+    const bool reflect = ( type != current::bc::pec_absorbing );
+
+    if ( fold ) {
+        if ( reflect ) {
+            C::n ( p[  -s ] ) -= C::n ( p[ 0 ] );
+            C::n ( p[ -2*s] ) -= C::n ( p[ s ] );
+            C::t1( p[  -s ] ) += C::t1( p[ s ] );
+            C::t2( p[  -s ] ) += C::t2( p[ s ] );
+        }
+
+        if ( ! pec ) {
+            C::t1( p[ 0 ] ) *= 2;
+            C::t2( p[ 0 ] ) *= 2;
+        }
+    }
+
+    if ( pec ) {
+        C::t1( p[ 0 ] ) = 0;
+        C::t2( p[ 0 ] ) = 0;
+    }
+
+    const float pn = pec ? +1.0f : -1.0f;   // normal component parity
+    const float pt = -pn;                   // tangential component parity
+
+    C::n ( p[ 0 ] ) = pn * C::n ( p[  -s  ] );
+    C::n ( p[ s ] ) = pn * C::n ( p[ -2*s ] );
+    C::t1( p[ s ] ) = pt * C::t1( p[  -s  ] );
+    C::t2( p[ s ] ) = pt * C::t2( p[  -s  ] );
+}
+
+} // namespace current_bc
+
+/**
+ * @brief Wall (pec / pmc) boundary conditions for the current density along x
+ * 
+ * Staggered grid: Jx is defined at (i+1/2, j), Jy at (i, j+1/2) and Jz at
+ * (i, j). The walls sit on nodes ix = 0 (lower) and ix = nx (upper, first
+ * upper guard cell).
+ * 
+ * @note All extended rows (including y guard rows) are processed; together
+ *       with current_bcy() running afterwards this gives the correct corner
+ *       values (all operations are linear and act identically on every row /
+ *       column, so the x and y operations commute where they overlap). The
+ *       y guard rows of internal tiles are copies of neighbour tile data
+ *       that receive the exact same operations, so they remain consistent.
+ * 
+ * @note Requires tile_dims.x >= 4 and gc.x.upper >= 2 (checked in
+ *       current::validate_bc()), so that the lower and upper boundaries of a
+ *       single tile never touch the same cells and can be processed
+ *       concurrently.
+ * 
+ * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_y    Tile index along y direction
+ * @param J_grid        View of tiled current grid
+ * @param bc            Boundary conditions
+ * @param fold          See current::process_bc()
  */
 void current_bcx(
-    const uint2 tile_idx,
-    float3 * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
-    const current::bc_type bc ) {
+    unsigned bnd_x, unsigned tile_idx_y,
+    const grid::tiled_view<float3> J_grid,
+    const current::bc_type bc,
+    const bool fold ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = J_grid.tile_ystride();
 
-    if ( tile_idx.x == 0 ) {
+    if ( bnd_x == 0 ) {
         // Lower boundary
-        switch( bc.x.lower ) {
-        case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
-                // iy includes the y-stride
-                const int iy = idx * ystride;
+        const auto type = bc.x.lower;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
-                float jx0 = -J[ -1 + iy ].x + J[ 0 + iy ].x; 
-                float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
-                float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
+        // Point to ix = 0 on the first (extended) row of the lower x boundary tile
+        float3 * const J = & J_grid.tile_buffer( 0, tile_idx_y )[ J_grid.gc.x.lower ];
 
-                J[ -1 + iy ].x = J[ 0 + iy ].x = jx0;
-                J[ -1 + iy ].y = J[ 1 + iy ].y = jy1;
-                J[ -1 + iy ].z = J[ 1 + iy ].z = jz1;
-            }
-            break;
-        default:
-            break;
+        for( unsigned idx = 0;
+             idx < J_grid.tile_ext_dims.y; 
+             idx ++ ) {
+            current_bc::lower_conducting< coord::x >( & J[ idx * ystride ], 1, type, fold );
         }
     } else {
         // Upper boundary
-        switch( bc.x.upper ) {
-        case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
-                const int iy = idx * ystride;
+        const auto type = bc.x.upper;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
-                float jx0 =  J[ nx.x-1 + iy ].x - J[ nx.x + 0 + iy ].x; 
-                float jy1 =  J[ nx.x-1 + iy ].y + J[ nx.x + 1 + iy ].y;
-                float jz1 =  J[ nx.x-1 + iy ].z + J[ nx.x + 1 + iy ].z;
+        // Point to ix = nx (first upper guard cell) on the first (extended) row
+        // of the upper x boundary tile
+        float3 * const J = & J_grid.tile_buffer( J_grid.grid_ntiles.x - 1, tile_idx_y )
+            [ J_grid.gc.x.lower + J_grid.tile_dims.x ];
 
-                J[ nx.x-1 + iy ].x = J[ nx.x + 0 + iy ].x = jx0;
-                J[ nx.x-1 + iy ].y = J[ nx.x + 1 + iy ].y = jy1;
-                J[ nx.x-1 + iy ].z = J[ nx.x + 1 + iy ].z = jz1;
-            }
-            break;
-        default:
-            break;
+        for( unsigned idx = 0;
+             idx < J_grid.tile_ext_dims.y; 
+             idx ++ ) {
+            current_bc::upper_conducting< coord::x >( & J[ idx * ystride ], 1, type, fold );
         }
     }
 }
-
 
 /**
- * @brief Physical boundary conditions for the y direction
+ * @brief Wall (pec / pmc) boundary conditions for the current density along y
  * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.y.lower * ystride ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * As current_bcx() with the roles of x and y exchanged. The walls sit on
+ * nodes iy = 0 (lower) and iy = ny (upper, first upper guard row).
+ * 
+ * @note All extended columns (including x guard columns) are processed. Must
+ *       run after current_bcx(), see notes there.
+ * 
+ * @note Requires tile_dims.y >= 4 and gc.y.upper >= 2 (checked in
+ *       current::validate_bc()).
+ * 
+ * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_x    Tile index along x direction
+ * @param J_grid        View of tiled current grid
+ * @param bc            Boundary conditions
+ * @param fold          See current::process_bc()
  */
 void current_bcy( 
-    const uint2 tile_idx,
-    float3 * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
-    const current::bc_type bc ) {
+    unsigned bnd_y, unsigned tile_idx_x,
+    const grid::tiled_view<float3> J_grid,
+    const current::bc_type bc,
+    const bool fold ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = J_grid.tile_ystride();
     
-    if ( tile_idx.y == 0 ) {
+    if ( bnd_y == 0 ) {
         // Lower boundary
-        switch( bc.y.lower ) {
-        case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
-                const int ix = idx;
+        const auto type = bc.y.lower;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
-                auto jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
-                auto jy0 = -J[ ix - ystride ].y + J[ ix +       0 ].y;
-                auto jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
+        // Point to iy = 0 on the first (extended) column of the lower y boundary tile
+        float3 * const J = & J_grid.tile_buffer( tile_idx_x, 0 )[ J_grid.gc.y.lower * ystride ];
 
-                J[ ix - ystride ].x = J[ ix + ystride ].x = jx1;
-                J[ ix - ystride ].y = J[ ix +       0 ].y = jy0;
-                J[ ix - ystride ].z = J[ ix + ystride ].z = jz1;
-            }
-            break;
-        default:
-            break;
+        for( unsigned idx = 0;
+             idx < J_grid.tile_ext_dims.x; 
+             idx ++ ) {
+            current_bc::lower_conducting< coord::y >( & J[ idx ], ystride, type, fold );
         }
     } else {
         // Upper boundary
-        switch( bc.y.upper ) {
-        case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
-                const int ix = idx;
+        const auto type = bc.y.upper;
+        if ( ! current_bc::is_conducting( type ) ) return;
 
-                auto jx1 =  J[ ix + (nx.y-1)*ystride ].x + J[ ix + (nx.y + 1)*ystride ].x; 
-                auto jy0 =  J[ ix + (nx.y-1)*ystride ].y - J[ ix + (nx.y + 0)*ystride ].y;
-                auto jz1 =  J[ ix + (nx.y-1)*ystride ].z + J[ ix + (nx.y + 1)*ystride ].z;
-
-                J[ ix + (nx.y-1)*ystride ].x = J[ ix + (nx.y + 1)*ystride ].x = jx1;
-                J[ ix + (nx.y-1)*ystride ].y = J[ ix + (nx.y + 0)*ystride ].y = jy0;
-                J[ ix + (nx.y-1)*ystride ].z = J[ ix + (nx.y + 1)*ystride ].z = jz1;
-            }
-            break;
-        default:
-            break;
+        // Point to iy = ny (first upper guard row) on the first (extended)
+        // column of the upper y boundary tile
+        float3 * const J = & J_grid.tile_buffer( tile_idx_x, J_grid.grid_ntiles.y - 1 )
+            [ ( J_grid.gc.y.lower + J_grid.tile_dims.y ) * ystride ];
+        
+        for( unsigned idx = 0;
+             idx < J_grid.tile_ext_dims.x; 
+             idx ++ ) {
+            current_bc::upper_conducting< coord::y >( & J[ idx ], ystride, type, fold );
         }
     }
 }
+
+} // namespace
 
 /**
  * @brief Processes "physical" boundary conditions
  * 
+ * @note Relies on add_from_gc() and copy_to_gc() leaving the guard cells on
+ *       non-periodic physical edges untouched, so that after deposition they
+ *       still hold the current deposited beyond the wall.
+ * 
+ * @note The x and y boundaries are processed in separate parallel regions;
+ *       the implicit barrier between them provides the x-before-y ordering
+ *       required for the corner values (see current_bcx()). Do not merge
+ *       them into a single parallel region.
+ * 
+ * @param fold  See current.hpp
  */
-void Current::process_bc() {
+void current::process_bc( const bool fold ) {
 
-    const uint2 ntiles          = J -> ntiles;
-    const unsigned int tile_vol = J -> tile_vol;
-    const uint2 nx              = J -> nx;
-    const uint2 ext_nx          = J -> ext_nx;
+    const uint2 ntiles = J -> get_grid_ntiles();
 
     // x boundaries
-    if ( bc.x.lower > current::bc::periodic || bc.x.upper > current::bc::periodic ) {
-
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.x - 1 ) tiles have physical x boundaries
-
+    if ( current_bc::is_conducting( bc.x.lower ) || current_bc::is_conducting( bc.x.upper ) ) {
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx : { 0u, ntiles.x-1 } ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at x cell 0
-                const auto x_offset = J -> gc.x.lower;
-
-                float3 * const __restrict__ tile_J = & J->d_buffer[ tile_off + x_offset ];
-
-                current_bcx( tile_idx, tile_J, nx, ext_nx, bc );
+            for( unsigned bnd_x : {0,1} ) {
+                current_bcx( bnd_x, ty, J -> view(), bc, fold );
             }
         }
     }
 
-    // y boundaries
-    if ( bc.y.lower > current::bc::periodic || bc.y.upper > current::bc::periodic ) {
-
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.y - 1 ) tiles have physical y boundaries
-
-        for( unsigned ty : { 0u, ntiles.y-1 } ) {
+    // y boundaries (must run after x boundaries, see current_bcx() notes)
+    if ( current_bc::is_conducting( bc.y.lower ) || current_bc::is_conducting( bc.y.upper ) ) {
+        for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at y cell 0
-                const auto y_offset = J -> gc.y.lower * ext_nx.x;
-
-                float3 * const __restrict__ tile_J = & J->d_buffer[ tile_off + y_offset ];
-
-                current_bcy( tile_idx, tile_J, nx, ext_nx, bc );
+                current_bcy( bnd_y, tx, J -> view(), bc, fold );
             }
         }
     }
@@ -221,93 +314,97 @@ void Current::process_bc() {
 /**
  * @brief Advance electric current to next iteration
  * 
- * Adds up current deposited on guard cells and (optionally) applies digital filtering
+ * Adds up current deposited on guard cells, applies physical boundary
+ * conditions and filters the result.
  * 
  */
-void Current::advance() {
+void current::advance() {
 
-    // Add up current deposited on guard cells
+    // Add up current deposited on guard cells, then update guard cells
     J -> add_from_gc( );
     J -> copy_to_gc( );
 
-    // Do additional bc calculations if needed
-    process_bc();
+    // Fold current deposited beyond walls back into the domain and set the
+    // image currents
+    process_bc( true );
 
-    // Apply filtering
-    filter -> apply( *J );
+    // Apply filtering. Every filter pass ends with copy_to_gc(), which leaves
+    // physical edge guard cells untouched, so the image currents at walls
+    // are refreshed after each pass
+    filter -> apply( *J, true, [this]{ process_bc( false ); } );
 
     // Advance iteration count
     iter++;
 
-    // I'm not sure if this should be before or after `iter++`
-    // Note that it only affects the axis range on output data
-    if ( moving_window.needs_move( iter * dt ) )
-        moving_window.advance();
+    // Moving window is checked after the iteration count is advanced so
+    // that the window position matches the time label used by save()
+    // (iter * dt). This only affects the axis range on output data and must
+    // follow the same ordering as emf::advance()
+    if ( mov_window.needs_move( iter * dt ) )
+        mov_window.advance();
 }
-
-
-/**
- * @brief Zero electric current values
- * 
- */
-void Current::zero() {
-    J -> zero();
-}
-
 
 /**
  * @brief Save electric current data to diagnostic file
  * 
- * @param jc        Current component to save (0, 1 or 2)
+ * @param jc        Current component to save
  */
-void Current::save( fcomp::cart const jc ) {
+void current::save( const fcomp::cart jc ) const {
 
-    char vfname[16];	// Dataset name
-    char vflabel[16];	// Dataset label (for plots)
+    std::string vfname = "J";      // Dataset name
+    std::string vflabel = "J_";    // Dataset label (for plots)
 
-    char comp[] = {'x','y','z'};
-
-    if ( jc < 0 || jc > 2 ) {
-        std::cerr << "(*error*) Invalid current component (jc) selected, returning" << std::endl;
-        return;
+    switch ( jc ) {
+        case( fcomp::x ) :
+            vfname  += 'x';
+            vflabel += 'x';
+            break;
+        case( fcomp::y ) :
+            vfname  += 'y';
+            vflabel += 'y';
+            break;
+        case( fcomp::z ) :
+            vfname  += 'z';
+            vflabel += 'z';
+            break;
+        default:
+            util::fatal( "Invalid field component (fc) selected" );
     }
 
-    snprintf(vfname,16,"J%c",comp[jc]);
-    snprintf(vflabel,16,"J_%c",comp[jc]);
-
-    zdf::grid_axis axis[2];
-    axis[0] = (zdf::grid_axis) {
-    	.name = (char *) "x",
-    	.min = 0.0 + moving_window.motion(),
-    	.max = box.x,
-    	.label = (char *) "x",
-    	.units = (char *) "c/\\omega_n"
-    };
-
-    axis[1] = (zdf::grid_axis) {
-        .name = (char *) "y",
-    	.min = 0.0 + moving_window.motion(),
-    	.max = box.y,
-    	.label = (char *) "y",
-    	.units = (char *) "c/\\omega_n"
-    };
-
     zdf::grid_info info = {
-        .name = vfname,
-    	.ndims = 2,
-    	.label = vflabel,
-    	.units = (char *) "e \\omega_n^2 / c",
-    	.axis = axis
+        .name = (char *) vfname.c_str(),
+        .ndims = 2,
+        .label = (char *) vflabel.c_str(),
+        .units = (char *) "e \\omega_n^2 / c",
     };
-
-    info.count[0] = J -> dims.x;
-    info.count[1] = J -> dims.y;
 
     zdf::iteration iteration = {
-    	.n = iter,
-    	.t = iter * dt,
-    	.time_units = (char *) "1/\\omega_n"
+        .n = iter,
+        .t = iter * dt,
+        .time_units = (char *) "1/\\omega_n"
     };
 
+    zdf::grid_axis axis[2];
+
+    // x axis follows the moving window (motion() is 0 if inactive)
+    axis[0] = zdf::grid_axis {
+        .name = (char *) "x",
+        .min = mov_window.motion(),
+        .max = box.x + mov_window.motion(),
+        .label = (char *) "x",
+        .units = (char *) "c/\\omega_n"
+    };
+
+    axis[1] = zdf::grid_axis {
+        .name = (char *) "y",
+        .min = 0.0,
+        .max = box.y,
+        .label = (char *) "y",
+        .units = (char *) "c/\\omega_n"
+    };
+
+    info.axis = axis;
     J -> save( jc, info, iteration, "CURRENT" );
 }
+
+} // namespace em2d

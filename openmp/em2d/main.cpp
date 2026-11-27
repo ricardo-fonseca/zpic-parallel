@@ -1,740 +1,660 @@
 #include <iostream>
-#include <fstream>
-#include <stdint.h>
 
-#include "utils.h"
-#include "grid.h"
+#include "em2d.hpp"
 
-#include "vec3grid.h"
-#include "emf.h"
-#include "laser.h"
+#include "udist.hpp"
+#include "util/term.hpp"
+#include "util/timer.hpp"
 
-#include "timer.h"
-#include "simulation.h"
-#include "cathode.h"
+#include "core/bounds.hpp"
+#include "grid/grid.hpp"
+#include "laser.hpp"
 
-#include "zpic.h"
+void test_grid( void ) {
+    
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
 
-/**
- * OpemMP support
- */
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+    // Global number of tiles
+    // const uint2 ntiles = { 4, 4 };
+    const uint2 ntiles = { 3, 2 };
 
-/**
- * SIMD support
- */
-#include "simd/simd.h"
 
-/**
- * Print information about SIMD and OpenMP support
- */
-void info( void ) {
+    // const uint2 tile_dims     = { 12, 12 };
+    const uint2 tile_dims     = { 11, 17 };
 
-#ifdef SIMD
-    std::cout << "SIMD support enabled\n";
-    std::cout << "  vector unit : " << vecname << '\n';
-    std::cout << "  vector width: " << vecwidth <<'\n';
-#else
-    std::cout << "SIMD support not enabled\n";
-#endif
+    bounds_2d<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
 
-#ifdef _OPENMP
+    int2 periodic{1,1};
 
-    std::cout << "OpenMP enabled\n";
-    std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
-    std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
-    #pragma omp parallel
-    {
-        if ( omp_get_thread_num() == 0 )
-            std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
+    grid::tiled<float> data( ntiles, tile_dims, gc, periodic );
+
+    std::cout << "Setting values...\n";
+
+    data.zero( );
+    data.set( 1.0 );
+
+    #pragma omp parallel for
+    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+        const uint2 tile_idx = { tid % ntiles.x, tid / ntiles.x  };
+        float * const __restrict__ tile_data = data.tile_data(tid);
+
+        const auto   tile_val = ( tile_idx.y ) * ntiles.x + ( tile_idx.x );
+
+        for( unsigned int idx = 0; idx < tile_dims.y * tile_dims.x; idx ++ ) {
+            const auto ix = idx % tile_dims.x;
+            const auto iy = idx / tile_dims.x; 
+            tile_data[iy * data.tile_ext_dims.x + ix] = tile_val;
+        }
     }
-#else
-    std::cout << "OpenMP support not enabled\n";
-#endif
+    
+    data.add_from_gc();
+    data.copy_to_gc();
+
+    for( auto i = 0; i < 5; i++)
+       data.x_shift_left( 1 );
+
+    data.kernel3_x( 1., 2., 1. );
+    data.kernel3_y( 1., 2., 1. );
+
+    std::cout << "Saving data...\n";
+
+    data.save( "mpi/mpi.zdf" );
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
 }
 
-void test_laser( void ) {
+void test_vec3grid( ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running test_grid()\n";
+    std::cout << ansi::reset;
+    std::cout << "Declaring test_vec3grid::tiled<float> data...\n";
+
+    const uint2 ntiles = { 8, 8 };
+    const uint2 tile_dims = { 16,16 };
+    
+    bounds_2d<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
+
+    int2 periodic{1,1};
+
+    grid::tiled_vec3< float > data( ntiles, tile_dims, gc, periodic );
+
+    // Set zero
+    // data.zero( );
+
+    // Set constant
+    // data.set( float3{1.0, 2.0, 3.0} );
+
+    // Set different value per tile
+    #pragma omp parallel for
+    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+        const uint2 tile_idx = { tid % ntiles.x, tid / ntiles.x  };
+        auto * const __restrict__ tile_data = data.tile_data( tid );
+
+        const auto   tile_val = ( tile_idx.y ) * ntiles.x + ( tile_idx.x );
+
+        for( unsigned int idx = 0; idx < tile_dims.y * tile_dims.x; idx += 1 ) {
+            const auto iy = idx / tile_dims.x; 
+            const auto ix = idx % tile_dims.x;
+            tile_data[iy * data.tile_ext_dims.x + ix] = make_float3( 1 + tile_val, 2 + tile_val, 3 + tile_val );
+        }
+    }
+    data.copy_to_gc( );
+
+    data.add_from_gc( );
+    data.copy_to_gc( );
+
+    for( int i = 0; i < 5; i++ ) {
+        data.x_shift_left( 1 );
+    }
+
+    data.kernel3_x( 1., 2., 1. );
+    data.kernel3_y( 1., 2., 1. );
+
+    std::cout << "Saving data...\n";
+
+    data.save( fcomp::x, "mpi/mpi-vec3-x.zdf" );
+    data.save( fcomp::y, "mpi/mpi-vec3-y.zdf" );
+    data.save( fcomp::z, "mpi/mpi-vec3-z.zdf" );
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
+}
+
+
+void test_laser( ) {
 
     std::cout << ansi::bold;
     std::cout << "Running " << __func__ << "()...";
     std::cout << ansi::reset << std::endl;
 
-    uint2 ntiles = make_uint2( 16, 8 );
-    uint2 nx = make_uint2( 64, 32 );
+    uint2 ntiles = { 64, 16 };
+    uint2 tile_dims = { 16, 16 };
 
-    float2 box = make_float2( 20.48, 25.6 );
+    float2 box = { 20.48, 25.6 };
     double dt = 0.014;
 
-    EMF emf( ntiles, nx, box, dt );
+    int2 periodic{1,1};
+
+
+    em2d::emf emf( ntiles, tile_dims, box, dt, periodic );
+
+    auto save_emf = [ & emf ]( ) {
+        emf.save( em2d::emf::quantity::e, fcomp::x );
+        emf.save( em2d::emf::quantity::e, fcomp::y );
+        emf.save( em2d::emf::quantity::e, fcomp::z );
+
+        emf.save( em2d::emf::quantity::b, fcomp::x );
+        emf.save( em2d::emf::quantity::b, fcomp::y );
+        emf.save( em2d::emf::quantity::b, fcomp::z );
+    };
 
 /*
-    Laser::PlaneWave laser;
+    em2d::laser::plane_wave laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
 */
 
-
-    Laser::Gaussian laser;
+    em2d::laser::gaussian laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
-    laser.W0 = 4.0;
+    laser.W0 = 1.5;
     laser.focus = 20.48;
     laser.axis = 12.8;
 
-    laser.sin_pol = 1;
-    laser.cos_pol = 0;
-
+    laser.sin_pol = 0;
+    laser.cos_pol = 1;
 
     laser.add( emf );
 
-    auto save_emf = [& emf ]( ) {
-        emf.save( emf::e, fcomp::x );
-        emf.save( emf::e, fcomp::y );
-        emf.save( emf::e, fcomp::z );
-
-        emf.save( emf::b, fcomp::x );
-        emf.save( emf::b, fcomp::y );
-        emf.save( emf::b, fcomp::z );
-    };
-
     save_emf();
 
-    std::cout << "Starting test...\n";
+    int niter = 20.48 / dt / 2;
 
-    auto t0 = Timer("test");
+    std::cout << "Starting test - " << niter << " iterations...\n";
 
-    std::cout << "Clock resolution is " << t0.resolution() << " ns\n";
+    timer::clock t0("test");
 
     t0.start();
 
-    for( int i = 0; i < 1500; i ++) {
-        emf.advance();
+    for( int i = 0; i < niter; i ++) {
+        emf.advance( );
     }
 
     t0.stop();
-    t0.report("1500 iterations:");
 
-    save_emf( );
+    save_emf();
 
+    t0.report( std::to_string(niter) + " iterations.");
     std::cout << ansi::bold;
     std::cout << "Done!\n";
     std::cout << ansi::reset;
 }
 
-
-void test_inj( void ) {
+void test_inj( ) {
 
     std::cout << ansi::bold;
     std::cout << "Running " << __func__ << "()...";
     std::cout << ansi::reset << std::endl;
 
-    uint2 ntiles = make_uint2( 2, 2 );
-    uint2 nx = make_uint2( 64, 64 );
+    int2 periodic{1,1};
 
-    float2 box = make_float2( 12.8, 12.8 );
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    float2 box{ 12.8, 12.8 };
 
-    Simulation sim( ntiles, nx, box, dt );
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
-    uint2 ppc = make_uint2( 8, 8 );
-    Species electrons("electrons", -1.0f, ppc);
+    uint2 ppc{ 8, 8 };
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density(Density::Step(coord::x, 1.0, 5.0));
-    // electrons.set_density(Density::Slab(coord::y, 1.0, 5.0, 7.0));
-    // electrons.set_density( Density::Sphere( 1.0, make_float2(5.0, 7.0), 2.0 ) );
-    
-    electrons.set_udist( UDistribution::Cold( make_float3( 100, 50, 25 ) ) );
+    std::cout << "Created species\n";
 
-    sim.add_species(electrons);
+    //electrons.set_density(em2d::density::step(coord::x, 1.0, 5.0));
+    // electrons.set_density(em2d::density::slab(coord::y, 1.0, 5.0, 8.0));
+    electrons.set_density( em2d::density::sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
 
-    auto diag = [ & ]() {
-        electrons.save_charge();
-        sim.current.save(fcomp::x);
-        sim.current.save(fcomp::y);
-        sim.current.save(fcomp::z);
-    };
+    std::cout << "Density set\n";
 
-    for( int i = 0; i < 1000; ++i ) {
-        if ( i % 100 == 0 ) diag();
+    electrons.set_udist( em2d::udist::thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
 
-        sim.current.zero();
-        electrons.advance( sim.emf, sim.current );
-        sim.current.advance();
-    }
+    electrons.initialize( box, ntiles, nx, dt, 0, periodic );
 
-    diag();
+    electrons.save_charge();
+    electrons.save();
+    electrons.save_phasespace(
+        em2d::phasespace::quantity::ux, float2{-1, 3}, 256,
+        em2d::phasespace::quantity::uz, float2{-1, 1}, 128
+    );
 
     std::cout << ansi::bold;
-    std::cout << "Done!\n";
+    std::cout << __func__ << "() complete!\n";
     std::cout << ansi::reset;
 }
 
-void test_weibel( void ) {
+void test_mov( ) {
 
     std::cout << ansi::bold;
     std::cout << "Running " << __func__ << "()...";
     std::cout << ansi::reset << std::endl;
 
-    uint2 gnx = make_uint2( 128, 128 );
-    uint2 ntiles = make_uint2( 8, 8 );
+    int2 periodic{1,1};
 
-//    uint2 gnx = make_uint2( 256, 256);
-//    uint2 ntiles = make_uint2( 16, 16 );
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
 
-    uint2 nx = make_uint2( gnx.x/ntiles.x, gnx.y/ntiles.y );
-    float2 box = make_float2( gnx.x/10.0, gnx.y/10.0 );
-    float dt = 0.07;
+    float2 box{ 12.8, 12.8 };
 
-    std::cout << "Starting Weibel test\n"
-              << "ntiles    : " << ntiles << '\n'
-              << "tile size : " << nx << '\n'
-              << "gnx       : " << make_uint2( ntiles.x * nx.x, ntiles.y * nx.y ) << '\n'
-              << "box       : " << box << '\n';
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
-    Simulation sim( ntiles, nx, box, dt );
+    uint2 ppc{ 8, 8 };
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
-    uint2 ppc = make_uint2( 4, 4 );
+    electrons.set_density( em2d::density::sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
+    electrons.set_udist( em2d::udist::cold( float3{ -1, -2, -3 } ) );
+    electrons.initialize( box, ntiles, nx, dt, 0, periodic );
 
-    Species electrons("electrons", -1.0f, ppc);
-    electrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3(0, 0, 0.6 )
-        )
-    );
+    electrons.save_charge();
+    electrons.save();
 
-    sim.add_species( electrons );
-
-    Species positrons("positrons", +1.0f, ppc);
-    positrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3( 0, 0, -0.6 )
-        )
-    );
-
-    sim.add_species( positrons );
-
-    // Lambda function for diagnostic output
-    auto diag = [ & ]( ) {
-        sim.emf.save(emf::b, fcomp::x);
-        sim.emf.save(emf::b, fcomp::y);
-        sim.emf.save(emf::b, fcomp::z);
-
-        electrons.save();
-
-        sim.energy_info();
-    };
-
-
-    Timer timer; timer.start();
-
-    while ( sim.get_t() <= 35.0 ) {
-        // if ( sim.get_iter() % 10 == 0 )
-            // std::cout << "t = " << sim.get_t() << '\n';
-        sim.advance();
+    int niter = 200; //200
+    for( auto i = 0; i < niter; i ++ ) {
+        auto np = electrons.total_np();
+        std::cout << "i = " << i << ", total particles: " << np << '\n';
+        electrons.advance();
     }
 
-    timer.stop();
-
-    diag();
-
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cout << "[benchmark] " << perf << " GPart/s\n";
-
-    std::cout << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
+    electrons.save_charge();
+    electrons.save();
 
     std::cout << ansi::bold;
-    std::cout << "Done!\n";
-    std::cout << ansi::reset;     
+    std::cout << __func__ << "() complete!\n";
+    std::cout << ansi::reset;
 }
 
-void test_cathode()
-{
+void test_current( ) {
 
     std::cout << ansi::bold;
     std::cout << "Running " << __func__ << "()...";
     std::cout << ansi::reset << std::endl;
 
-    Simulation sim(
-        make_uint2(    8,    8), // ntiles
-        make_uint2(   16,   16), // nx
-        make_float2(12.8, 12.8), // box
-        0.07                // dt
-    );
+    int2 periodic{1,1};
 
-    // Create cathode
-    Cathode cathode(
-        "cathode",
-        +1.0f,       // m_q
-        make_uint2(4, 4), // ppc
-        edge::lower, // edge
-        1.0e3f       // ufl
-    );
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
 
-    // Set additional cathode parameters
-    cathode.n0 = 1.0f;
-    cathode.wall = edge::lower;
-    cathode.start = -6.4;
-    //cathode.uth = float3(0.1, 0.1, 0.1);
+    float2 box{ 12.8, 12.8 };
 
-    cathode.uth = make_float3(0,0,0);
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
 
-    auto bc = cathode.get_bc();
-    bc.x = {
-        .lower = species::bc::open,
-        .upper = species::bc::open};
+    uint2 ppc{ 8, 8 };
+    em2d::species electrons( "electrons", -1.0f, ppc );
 
-    cathode.set_bc(bc);
-    sim.add_species(cathode);
+    electrons.set_density( em2d::density::sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
+    electrons.set_udist( em2d::udist::cold( float3{ 1, 2, 3 } ) );
 
-    // Lambda function for diagnostic output
-    auto diag = [ & ]( ) {
-        cathode.save_phasespace( 
-            phasespace::x, make_float2( 0, 12.8 ), 128,
-            phasespace::ux, make_float2( -1, 2.0e3 ), 512
-        );
-        cathode.save_charge();
-        cathode.save();
-        sim.current.save(fcomp::x);
-        sim.emf.save(emf::e, fcomp::x);
-    };
+    electrons.initialize( box, ntiles, nx, dt, 0, periodic );
 
-    float const tmax = 12.8;
-
-    printf("Running Cathode test up to t = %g...\n", tmax);
-
-    Timer timer;
-    timer.start();
-
-    // diag();
-    while (sim.get_t() < tmax) {
-        std::cout << "Now at t = " << sim.get_t() << '\n';
-        sim.advance();
-    /*    if (sim.get_iter() % 50 == 0) {
-            std::cout << "Writing data\n";
-            diag();
-        } */
-    }
-
-    printf("Simulation complete at t = %g\n", sim.get_t());
-
-    timer.stop();
-
-    diag();
-
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
-    std::cout << ansi::bold;
-    std::cout << "Done!\n";
-    std::cout << ansi::reset; 
-
-}
-
-void benchmark( void ) {
-    uint2 gnx = make_uint2( 128, 128 );
-    uint2 ppc = make_uint2( 2, 2 );
-
-    auto dt = 0.07;
-    auto tmax = 35.0;
-
-    auto bench_weibel = [ & ]( uint2 const ntiles ) {
-        uint2 nx = make_uint2( gnx.x/ntiles.x, gnx.y/ntiles.y );
-        float2 box = make_float2( gnx.x/10., gnx.y/10. );
-
-        Simulation sim( ntiles, nx, box, dt );
-
-        Species electrons("electrons", -1.0f, ppc);
-        electrons.set_udist(
-            UDistribution::ThermalCorr( 
-                make_float3( 0.1, 0.1, 0.1 ),
-                make_float3(0, 0, 0.6 )
-            )
-        );
-
-        sim.add_species( electrons );
-
-        Species positrons("positrons", +1.0f, ppc);
-        positrons.set_udist(
-            UDistribution::ThermalCorr( 
-                make_float3( 0.1, 0.1, 0.1 ),
-                make_float3( 0, 0, -0.6 )
-            )
-        );
-
-        sim.add_species( positrons );
-
-        Timer timer; timer.start();
-        while ( sim.get_t() <= tmax ) { sim.advance(); }
-        timer.stop();
-
-        auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-        std::cout << ntiles << " : " <<  timer.elapsed(timer::s)
-                  << " s, " << perf << " GPart/s\n";
-    };
-
-
-    std::vector<uint2> ntiles_list{ {1,1}, {2,2}, {4,4}, {8,8}, {16,16} };
-    for( auto ntiles : ntiles_list ){
-        bench_weibel( ntiles );
-    }
-}
-
-void test_weibel_large( )
-{
-                            
-    // Create simulation box
-    uint2 ntiles {64, 64};
-    uint2 nx {32, 32};
-    uint2 ppc {8, 8};
-                                                                                                    
-    uint64_t vol = static_cast<uint64_t>(nx.x * nx.y) *  static_cast<uint64_t>(ntiles.x * ntiles.y);
-                                             
-    std::cout << "** Large Weibel test **\n";                                   
-    std::cout << " # tiles          : " << ntiles.x << ", " << ntiles.y << "\n";
-    std::cout << " tile size        : " << nx.x << ", " << nx.y << "\n";                      
-    std::cout << " global size      : " << nx.x * ntiles.x << ", " << nx.y * ntiles.y << "\n";
-    std::cout << " # part / species : " << vol * (ppc.x * ppc.y) / (1048576.0) << " M \n";
-                                                                  
-    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
-                    
-    float dt = 0.07;
-                                        
-    Simulation sim(ntiles, nx, box, dt);
-                            
-    Species electrons("electrons", -1.0f, ppc);
-    electrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3(0, 0, 0.6 )
-        )
-    );
-
-    sim.add_species( electrons );
-
-    Species positrons("positrons", +1.0f, ppc);
-    positrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3( 0, 0, -0.6 )
-        )
-    );
-
-    sim.add_species( positrons );
-                     
-    // Run simulation    
-    int const imax = 500;
-                                                          
-    printf("Running Weibel test up to n = %d...\n", imax);
-                
-    Timer timer;
-                  
-    timer.start();
-                                 
-    while (sim.get_iter() < imax)
-    {
-        // std::cout << "n = " << sim.get_iter() << '\n';
-        sim.advance();
-    }
-                 
-    timer.stop();
-                                                              
-    std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
-                      
-    sim.energy_info();
-                                    
-    sim.emf.save(emf::b, fcomp::x);
-    sim.emf.save(emf::b, fcomp::y);
-    sim.emf.save(emf::b, fcomp::z);
-                                                                  
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
-    std::cout << ansi::bold;
-    std::cout << "Done!\n";
-    std::cout << ansi::reset; 
-
-}
-
-void test_weibel_96( )
-{
-                            
-    // Create simulation box
-    uint2 ntiles {16, 16};
-    uint2 nx {32, 32};
-    uint2 ppc {8, 8};
-                                                                                                                                                                      
-    float2 box {nx.x * ntiles.x * 0.1f, nx.y * ntiles.y * 0.1f};
-                    
-    float dt = 0.07;
-                                        
-    Simulation sim(ntiles, nx, box, dt);
-                            
-    Species electrons("electrons", -1.0f, ppc);
-    electrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3(0, 0, 0.6 )
-        )
-    );
-
-    sim.add_species( electrons );
-
-    Species positrons("positrons", +1.0f, ppc);
-    positrons.set_udist(
-        UDistribution::ThermalCorr( 
-            make_float3( 0.1, 0.1, 0.1 ),
-            make_float3( 0, 0, -0.6 )
-        )
-    );
-
-    sim.add_species( positrons );
-                     
-    // Run simulation    
-    int const imax = 500;
-                                                          
-    std::cout << "Running Weibel(96) test up to n = " << imax << "...\n";
-                
-    Timer timer;
-                  
-    timer.start();
-                                 
-    while (sim.get_iter() < imax)
-    {
-        // std::cout << "n = " << sim.get_iter() << '\n';
-        sim.advance();
-    }
-                 
-    timer.stop();
-                                                              
-    std::cout << "Simulation complete at i = " << sim.get_iter() << '\n';
-                      
-    sim.energy_info();
-                                    
-    sim.emf.save(emf::b, fcomp::x);
-    sim.emf.save(emf::b, fcomp::y);
-    sim.emf.save(emf::b, fcomp::z);
-                                                                  
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-
-}
-
-void test_lwfa() {
-
-    std::cout << ansi::bold;
-    std::cout << "Running " << __func__ << "()...";
-    std::cout << ansi::reset << std::endl;
-
-
-    uint2 dims { 1024, 128 };
-    float2 box { 20.48, 25.6 };
-
-    uint2 nx { 32, 32 };
-    uint2 ntiles { dims.x / nx.x, dims.y / nx.y };
-
-    auto dt = zpic::courant( dims, box ) * 0.9f;
-    auto tmax = 22.0f;
-
-    // Create simulation
-    Simulation sim(ntiles, nx, box, dt);
-
-    // Add electrons
-    Species electrons("electrons", -1.0f, make_uint2( 4, 4 ));
-    electrons.set_density( Density::Step( coord::x, 1.0, 20.48 ) );
-    sim.add_species( electrons );
-    
-    // Add Laser
-    Laser::Gaussian laser;
-    laser.start   = 17.0;
-    laser.fwhm    = 2.0;
-    laser.a0      = 1.0;
-    laser.omega0  = 10.0;    
-    laser.W0      = 4.0;
-    laser.focus   = 20.0;
-    laser.axis    = 12.8;
-    laser.sin_pol = 1;
-
-    laser.add( sim.emf );
-
-    // Set moving window and current filtering
-    sim.set_moving_window();
-    sim.current.set_filter( Filter::Compensated( coord::x, 4 ));
-
-    Timer timer;
-                  
-    timer.start();
-                                 
-    while (sim.get_t() < tmax )
-    {
-        // std::cout << "n = " << sim.get_iter() << '\n';
-        sim.advance_mov_window();
-    }
-                 
-    timer.stop();
-
-    std::cout << "Simulation run up to t = " << sim.get_t()
-              << " in " << timer.elapsed(timer::s) << " s\n";
-
-    std::cout << "Saving diagnostics...\n";
-    
-    sim.emf.save(emf::e, fcomp::x);
-    sim.emf.save(emf::e, fcomp::y);
-    sim.emf.save(emf::e, fcomp::z);
+    em2d::current current( ntiles, nx, box, dt, periodic );
 
     electrons.save_charge();
 
+    electrons.advance( current );
+    current.advance( );
+    
+    current.save( fcomp::x );
+    current.save( fcomp::y );
+    current.save( fcomp::z );
+
+    std::cout << ansi::bold;
+    std::cout << __func__ << "() complete!\n";
+    std::cout << ansi::reset;
+}
+
+void test_mov_window_emf( ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Disable periodic boundaries along x
+    int2 periodic{0,1};
+
+    // Simulation grid and time step
+    uint2 ntiles = { 64, 16 };
+    uint2 nx = { 16, 16 };
+
+    float2 box = { 20.48, 25.6 };
+    double dt = 0.014;
+
+    // Create simulation object
+    em2d::simulation sim( ntiles, nx, box, dt, periodic );
+
+    // Set moving window along x
+    sim.set_moving_window();
+
+
+    auto save_emf = [ & sim ]( ) {
+        sim.emf.save( em2d::emf::quantity::e, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::y );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::z );
+
+        sim.emf.save( em2d::emf::quantity::b, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::b, fcomp::y );
+        sim.emf.save( em2d::emf::quantity::b, fcomp::z );
+    };
+
+    em2d::laser::gaussian laser;
+    laser.start = 20.0;
+    laser.fwhm = 4.0;
+    laser.a0 = 1.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 1.5;
+    laser.focus = 20.48;
+    laser.axis = 12.8;
+
+    laser.sin_pol = 0;
+    laser.cos_pol = 1;
+
+    laser.add( sim.emf );
+
+    save_emf();
+
+    int niter = 20.48 / dt / 2 ;
+    // int niter = 0;
+
+
+    std::cout << "Starting test - " << niter << " iterations...\n";
+
+    auto t0 = timer::clock("test");
+
+    t0.start();
+
+    for( int i = 0; i < niter; i ++) {
+        if ( i % 100 == 0 ) save_emf();
+        sim.advance();
+    }
+        save_emf();
+
+    t0.stop();
+
+    t0.report( std::to_string(niter) + " iterations.");
+
     std::cout << ansi::bold;
     std::cout << "Done!\n";
-    std::cout << ansi::reset; 
+    std::cout << ansi::reset;
 }
 
-void benchmark_weibel()
-{
 
-    auto bench_weibel_sim = [ ]( std::ostream &output, uint2 ppc, uint2 nx, uint2 ntiles ) {
-        Simulation sim(
-            ntiles,                                                      // ntiles
-            nx,                                                          // nx
-            make_float2(ntiles.x * nx.x * 0.1f, ntiles.y * nx.y * 0.1f), // box
-            0.07                                                         // dt
+void test_mov_window_inj( ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Disable periodic boundaries along x
+    int2 periodic = { 0, 1 };
+
+
+    // Simulation grid and time step
+    uint2 ntiles{ 48,8 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 30.72, 25.6 };
+
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
+
+
+    // Create simulation object
+    em2d::simulation sim( ntiles, nx, box, dt, periodic );
+
+    // 
+    uint2 ppc{ 8, 8 };
+    em2d::species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density(em2d::density::step(coord::x, 1.0, box.x - 0.25));
+    sim.add_species( electrons );
+
+    // Set moving window along x
+    // Currently this must happen after sim.add_species()
+    sim.set_moving_window();
+
+    electrons.save_charge();
+
+    int niter = ( box.x + 1.0 ) / dt;
+
+    std::cout << "Starting test - " << niter << " iterations...\n";
+
+    auto t0 = timer::clock("test");
+
+    t0.start();
+
+    for( int i = 0; i < niter; i ++) {
+        if ( sim.get_iter() % 100 == 0 )
+            electrons.save_charge();
+        sim.advance_mov_window();
+    }
+
+    electrons.save_charge();
+
+    t0.stop();
+
+    t0.report( std::to_string(niter) + " iterations.");
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
+}
+
+void test_lwfa()
+{
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Disable periodic boundaries along x
+    int2 periodic = { 0, 1 };
+
+    // Simulation grid and time step
+    uint2 ntiles{ 48,8 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 30.72, 25.6 };
+
+    auto dt = 0.99 * em2d::simulation::courant( ntiles, nx, box );
+
+    std::cout << "(*info*) dt = " << dt << '\n';
+
+    // Create simulation object
+    em2d::simulation sim( ntiles, nx, box, dt, periodic );
+
+    // Add background plasma
+    uint2 ppc{ 4, 4 };
+    em2d::species electrons( "electrons", -1.0f, ppc );
+    electrons.set_density(em2d::density::step(coord::x, 1.0, box.x - 0.25));
+    sim.add_species( electrons );
+    
+    // Add laser pulse
+    em2d::laser::gaussian laser;
+    laser.start = box.x - .25;
+    laser.fwhm = 2.0;
+    laser.a0 = 2.0;
+    laser.omega0 = 10.0;
+    laser.W0 = 4.0;
+    laser.focus = box.x;
+    laser.axis = box.y / 2;
+    
+    laser.sin_pol = 1;
+    laser.cos_pol = 0;
+
+    laser.add( sim.emf );
+    
+    std::cout << "(*info*) Added " << laser << '\n';
+
+    // Set moving window and current filtering
+    sim.set_moving_window();
+    sim.current.set_filter(em2d::filter::compensated(em2d::filter::axis::x, 4));
+
+    // Diagnostics
+    auto save = [ & sim, & electrons ]( ) {
+        sim.emf.save( em2d::emf::quantity::e, fcomp::x );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::y );
+        sim.emf.save( em2d::emf::quantity::e, fcomp::z );
+
+        sim.current.save( fcomp::x );
+        sim.current.save( fcomp::y );
+        sim.current.save( fcomp::z );
+
+        electrons.save_charge();
+    };
+
+
+    auto t0 = timer::clock("test");
+
+    t0.start();
+
+    // Run simulation dumping diagnostics at every 100 timesteps
+    while ( sim.get_t() <= box.x * 1.5 ) {
+        if ( sim.get_iter() % 100 == 0 ) {
+            std::cout << "i = " << sim.get_iter() << '\n';
+            save();
+        }
+        sim.advance_mov_window();
+    }
+
+    save();
+
+    t0.stop();
+
+    t0.report( std::to_string(sim.get_iter()) + " iterations.");
+    
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
+
+}
+void test_weibel( ) {
+   
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    int2 periodic{1,1};
+
+    // Create simulation box
+    uint2 ntiles{16, 16};
+    uint2 tile_dims{32, 32};
+    float2 box = {tile_dims.x * ntiles.x * 0.1f, tile_dims.y * ntiles.y * 0.1f};
+    float dt = 0.07;
+                                        
+    em2d::simulation sim( ntiles, tile_dims, box, dt, periodic);
+                            
+    uint2 ppc{4, 4};
+
+    em2d::species electrons("electrons", -1.0f, ppc);
+    electrons.set_udist(
+        em2d::udist::thermal_corr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, 0.6 }
+        )
+    );
+    electrons.push_type = em2d::species::pusher::euler;
+
+    sim.add_species( electrons );
+
+    em2d::species positrons("positrons", +1.0f, ppc);
+    positrons.set_udist(
+        em2d::udist::thermal_corr( 
+            float3{ 0.1, 0.1, 0.1 },
+            float3{ 0, 0, -0.6 }
+        )
+    );
+    positrons.push_type = em2d::species::pusher::euler;
+
+    sim.add_species( positrons );
+
+    // Disable diagnostics for performance benchmark
+#if 1
+    // Lambda function for diagnostic output
+    auto diag = [ & ]( ) {
+        sim.emf.save(em2d::emf::quantity::b, fcomp::x);
+        sim.emf.save(em2d::emf::quantity::b, fcomp::y);
+        sim.emf.save(em2d::emf::quantity::b, fcomp::z);
+
+        electrons.save_charge();
+        positrons.save_charge();
+
+        electrons.save_phasespace(
+            em2d::phasespace::quantity::ux, float2{-2, 2}, 256,
+            em2d::phasespace::quantity::uy, float2{-2, 2}, 256
         );
 
-        float3 ufl = float3{0., 0., 0.6};
-        float3 uth = float3{0.1, 0.1, 0.1};
-
-        Species electrons("electrons", -1.0f, ppc);
-        electrons.set_udist( UDistribution::Thermal (uth, ufl) );
-
-        Species positrons("positrons", +1.0f, ppc);
-        ufl.z = - ufl.z;
-        positrons.set_udist( UDistribution::Thermal (uth, ufl) );
-
-        sim.add_species(electrons);
-        sim.add_species(positrons);
-
-        float const imax = 500;
-
-        Timer timer;
-
-        timer.start();
-
-        while (sim.get_iter() < imax)
-        {
-            sim.advance();
-        }
-
-        timer.stop();
-
-        output         << ppc.x << ", " << ppc.y 
-               << ", " << nx.x<< ", " << nx.y
-               << ", " << ntiles.x << ", " << ntiles.y
-               << ", " << timer.elapsed(timer::s)
-               << ", " << sim.get_nmove() / timer.elapsed(timer::s) / 1.e9
-               << ", " << std::endl;
+        sim.energy_info();
     };
+#else
+    auto diag = [ ]( ) {};
+#endif
 
-/*
-    std::vector<uint2> ppc_list{
-        {1, 1}, {2, 1}, {2, 2}, {4, 2}, {4, 4}, {8, 4}, {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}};
+    // Run simulation    
+    int const imax = 500;
+        
+    std::cout << "Running large Weibel test up to n = " << imax << "...\n";
+                
+    timer::clock timer;
+                  
+    timer.start();
 
-    std::vector<uint2> ntiles_list{
-        {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}, {64, 32}, {64, 64}, {128, 64}, {128, 128}, {256, 128}, {256, 256}, {512, 256}, {512, 512}, {1024, 512}, {1024, 1024}};
+    while (sim.get_iter() < imax)
+    {     
+        if ( sim.get_iter() % 50 == 0 ) {
+            diag();
+            std::cout << "i = " << sim.get_iter() << '\n';    
+        }       
+        sim.advance();
+    }
 
-    std::vector<uint2> nx_list{
-        {4, 4}, {8, 4}, {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}, {64, 32}, {64, 64}, { 80, 64 }, { 80, 80 } };
-*/
+    timer.stop();
 
-    std::vector<uint2> ppc_list{
-        {4, 4}, {8, 8}, {16, 16}
-    };
+    diag();
 
-    std::vector<uint2> ntiles_list{
-        {4, 4}, {8, 4}, {8, 8}, {16, 8}, {16, 16}, {32, 16}, {32, 32}, {64, 32}, {64, 64}, {128, 64} };
+    auto nmove = sim.get_nmove();
 
-    std::vector<uint2> nx_list{
-        {32, 32}
-    };
-
-
-/* 
-    std::vector<uint2> ppc_list{ {4, 4} };
-    std::vector<uint2> ntiles_list{ { 8, 8 } };
-    std::vector<uint2> nx_list{ {80, 80} };
- */
-
-    std::ofstream output;
-    output.open("benchmark_weibel.csv");
-    output << "ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y, time, perf" << std::endl;
-
-    int ntests = ppc_list.size() *
-                nx_list.size() *
-                ntiles_list.size();
-
-    int i = 0;
-    for (uint2 ppc : ppc_list)
-        for (uint2 nx : nx_list)
-            for (uint2 ntiles : ntiles_list)
-            {
-                // The casts avoid integer overflows (because 64^2 * 1024^2 = 2^32)
-                int64_t vol = static_cast<int64_t>(nx.x * nx.y) * 
-                              static_cast<int64_t>(ntiles.x * ntiles.y);
-                int64_t npart = vol * static_cast<int64_t>(ppc.x * ppc.y);
-
-                printf("[%3d/%3d] %d, %d, %d, %d, %d, %d (%ld)\n", i++, ntests,
-                       ppc.x, ppc.y, nx.x, nx.y, ntiles.x, ntiles.y, npart);
-
-                // Limit the test to 512 M part / species
-                if ( npart < 512 * 1024 * 1024 )
-                {
-                    bench_weibel_sim(output, ppc, nx, ntiles);
-                }
-            }
-
-    output.close();
+    std::cout << "simulation complete at i = " << sim.get_iter() << '\n';
+    auto time = timer.elapsed(timer::units::s);
+    std::cout << "Elapsed time: " << time << " s\n";
+    auto perf = nmove / time / 1.e9;
+    std::cerr << "Performance : " << perf << " GPart/s\n";
 }
 
-int main( void ) {
+int main( int argc, char *argv[] ) {
 
     // Initialize SIMD support
-    simd_init();
+    simd::init();
 
-    info();
+    em2d::sys_info();
 
-    // test_random();
-
-    // test_laser();
-
-    // test_inj();
+    // test_grid( );  
+    // test_vec3grid( );
+    // test_laser( );
+    // test_inj( );
+    // test_mov( );
+    // test_current( );
+    // test_mov_window_emf();
+    // test_mov_window_inj();
 
     // test_weibel();
-
-    // test_cathode();
-
-    // benchmark();
-
-    // test_weibel_large();
-
-    // test_weibel_96();
-
     test_lwfa();
-
-    // benchmark_weibel();
 }
