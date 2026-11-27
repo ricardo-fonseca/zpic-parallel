@@ -3,3 +3,5 @@
 echo "Removing ZPIC data output"
 
 rm -Rf EMF CHARGE CURRENT PHASESPACE PARTICLES
+
+rm -Rf __pycache__

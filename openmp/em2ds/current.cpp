@@ -1,37 +1,43 @@
-#include "current.h"
+#include "current.hpp"
 
-#include <iostream>
+namespace em2ds {
 
 /**
- * @brief Physical boundary conditions for the x direction
+ * @brief Physical boundary conditions for the x direction 
  * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.x.lower ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_x         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_y    Tile index along y direction
+ * @param current       View of tiled current grid
+ * @param grid_bc            Boundary condition
  */
 void current_bcx(
-    const uint2 tile_idx,
-    float3 * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
-    const current::bc_type bc ) {
+    int bnd_x, int tile_idx_y,
+    const grid::tiled_view<float3> current,
+    const current::bc_type grid_bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = current.tile_ystride();
 
-    if ( tile_idx.x == 0 ) {
+    if ( bnd_x == 0 ) {
         // Lower boundary
-        switch( bc.x.lower ) {
+        float3 * __restrict__ J = & current.tile_buffer
+            (0,tile_idx_y)      // lower x boundary tile
+            [ current.gc.x.lower ];     // point to first x cell (ix = 0)
+        
+        switch( grid_bc.x.lower ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.y; idx ++ ) {
                 // iy includes the y-stride
                 const int iy = idx * ystride;
 
-                float jx0 = -J[ -1 + iy ].x + J[ 0 + iy ].x; 
-                float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
-                float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
+                const float jx0 = -J[ -1 + iy ].x + J[ 0 + iy ].x; 
+                const float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
+                const float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
 
-                J[ -1 + iy ].x = J[ 0 + iy ].x = jx0;
+                // Normal component (odd): guard is the negative mirror
+                J[  0 + iy ].x =  jx0;
+                J[ -1 + iy ].x = -jx0;
+
+                // Tangential components (even)
                 J[ -1 + iy ].y = J[ 1 + iy ].y = jy1;
                 J[ -1 + iy ].z = J[ 1 + iy ].z = jz1;
             }
@@ -41,18 +47,26 @@ void current_bcx(
         }
     } else {
         // Upper boundary
-        switch( bc.x.upper ) {
+        float3 * __restrict__ J = & current.tile_buffer
+            (current.grid_ntiles.x-1,tile_idx_y)    // upper x boundary tile
+            [ current.gc.x.lower + current.tile_dims.x ];    // point to first upper gc (ix = tile_dims.x)
+        
+        switch( grid_bc.x.upper ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.y; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.y; idx ++ ) {
                 const int iy = idx * ystride;
 
-                float jx0 =  J[ nx.x-1 + iy ].x - J[ nx.x + 0 + iy ].x; 
-                float jy1 =  J[ nx.x-1 + iy ].y + J[ nx.x + 1 + iy ].y;
-                float jz1 =  J[ nx.x-1 + iy ].z + J[ nx.x + 1 + iy ].z;
+                const float jx0 =  J[ -1 + iy ].x - J[ 0 + iy ].x; 
+                const float jy1 =  J[ -1 + iy ].y + J[ 1 + iy ].y;
+                const float jz1 =  J[ -1 + iy ].z + J[ 1 + iy ].z;
 
-                J[ nx.x-1 + iy ].x = J[ nx.x + 0 + iy ].x = jx0;
-                J[ nx.x-1 + iy ].y = J[ nx.x + 1 + iy ].y = jy1;
-                J[ nx.x-1 + iy ].z = J[ nx.x + 1 + iy ].z = jz1;
+                // Normal component (odd): interior cell is -1, guard is 0
+                J[ -1 + iy ].x =  jx0;
+                J[  0 + iy ].x = -jx0;
+
+                // Tangential components (even)
+                J[ -1 + iy ].y = J[ 1 + iy ].y = jy1;
+                J[ -1 + iy ].z = J[ 1 + iy ].z = jz1;
             }
             break;
         default:
@@ -61,37 +75,42 @@ void current_bcx(
     }
 }
 
-
 /**
- * @brief Physical boundary conditions for the y direction
+ * @brief Physical boundary conditions for the y direction 
  * 
- * @param tile      Tile position on grid
- * @param J         Tile current density & d_J[ gc.y.lower * ystride ]
- * @param nx        Number of cells
- * @param ext_nx    Number of cells including guard cells
- * @param bc        Boundary condition
+ * @param bnd_y         Boundary to process, 0 - lower, 1 - upper
+ * @param tile_idx_x    Tile index along x direction
+ * @param current       View of tiled current grid
+ * @param grid_bc      Boundary condition
  */
 void current_bcy( 
-    const uint2 tile_idx,
-    float3 * const __restrict__ J,
-    uint2 const nx, uint2 const ext_nx,
-    const current::bc_type bc ) {
+    int bnd_y, int tile_idx_x,
+    const grid::tiled_view<float3> current,
+    const current::bc_type grid_bc ) {
 
-    const int ystride = ext_nx.x;
+    const int ystride = current.tile_ystride();
     
-    if ( tile_idx.y == 0 ) {
+    if ( bnd_y == 0 ) {
         // Lower boundary
-        switch( bc.y.lower ) {
+        float3 * __restrict__ J = & current.tile_buffer
+            (tile_idx_x,0)              // lower y boundary tiles
+            [ current.gc.y.lower * ystride ];   // point to first y cell (iy = 0)
+
+        switch( grid_bc.y.lower ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                auto jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
-                auto jy0 = -J[ ix - ystride ].y + J[ ix +       0 ].y;
-                auto jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
+                const float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
+                const float jy0 = -J[ ix - ystride ].y + J[ ix           ].y;
+                const float jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
 
+                // Normal component (odd): guard is the negative mirror
+                J[ ix           ].y =  jy0;
+                J[ ix - ystride ].y = -jy0;
+
+                // Tangential components (even)
                 J[ ix - ystride ].x = J[ ix + ystride ].x = jx1;
-                J[ ix - ystride ].y = J[ ix +       0 ].y = jy0;
                 J[ ix - ystride ].z = J[ ix + ystride ].z = jz1;
             }
             break;
@@ -100,18 +119,26 @@ void current_bcy(
         }
     } else {
         // Upper boundary
-        switch( bc.y.upper ) {
+        float3 * __restrict__ J = & current.tile_buffer
+            (tile_idx_x,current.grid_ntiles.y-1)   // upper y boundary tiles
+            [ (current.gc.y.lower + current.tile_dims.y ) * ystride ];  // point to first upper gc (iy = tile_dims.y)
+        
+        switch( grid_bc.y.upper ) {
         case( current::bc::reflecting ):
-            for( unsigned idx = 0; idx < ext_nx.x; idx ++ ) {
+            for( unsigned idx = 0; idx < current.tile_ext_dims.x; idx ++ ) {
                 const int ix = idx;
 
-                auto jx1 =  J[ ix + (nx.y-1)*ystride ].x + J[ ix + (nx.y + 1)*ystride ].x; 
-                auto jy0 =  J[ ix + (nx.y-1)*ystride ].y - J[ ix + (nx.y + 0)*ystride ].y;
-                auto jz1 =  J[ ix + (nx.y-1)*ystride ].z + J[ ix + (nx.y + 1)*ystride ].z;
+                const float jx1 =  J[ ix - ystride ].x + J[ ix + ystride ].x; 
+                const float jy0 =  J[ ix - ystride ].y - J[ ix           ].y;
+                const float jz1 =  J[ ix - ystride ].z + J[ ix + ystride ].z;
 
-                J[ ix + (nx.y-1)*ystride ].x = J[ ix + (nx.y + 1)*ystride ].x = jx1;
-                J[ ix + (nx.y-1)*ystride ].y = J[ ix + (nx.y + 0)*ystride ].y = jy0;
-                J[ ix + (nx.y-1)*ystride ].z = J[ ix + (nx.y + 1)*ystride ].z = jz1;
+                // Normal component (odd): interior cell is -1, guard is 0
+                J[ ix - ystride ].y =  jy0;
+                J[ ix           ].y = -jy0;
+
+                // Tangential components (even)
+                J[ ix - ystride ].x = J[ ix + ystride ].x = jx1;
+                J[ ix - ystride ].z = J[ ix + ystride ].z = jz1;
             }
             break;
         default:
@@ -124,59 +151,30 @@ void current_bcy(
  * @brief Processes "physical" boundary conditions
  * 
  */
-void Current::process_bc() {
+void current::process_bc() {
 
-    const uint2 ntiles          = J -> ntiles;
-    const unsigned int tile_vol = J -> tile_vol;
-    const uint2 nx              = J -> nx;
-    const uint2 ext_nx          = J -> ext_nx;
+    const uint2 ntiles          = J -> get_grid_ntiles();
 
     // x boundaries
-    if ( bc.x.lower > current::bc::periodic || bc.x.upper > current::bc::periodic ) {
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.x - 1 ) tiles have physical x boundaries
-
+    if ( grid_bc.x.lower > current::bc::periodic || grid_bc.x.upper > current::bc::periodic ) {
+        #pragma omp parallel for collapse(2)
         for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
-            for( unsigned tx : { 0u, ntiles.x-1 } ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at x cell 0
-                const auto x_offset = J -> gc.x.lower;
-
-                float3 * const __restrict__ tile_J = & J->d_buffer[ tile_off + x_offset ];
-
-                current_bcx( tile_idx, tile_J, nx, ext_nx, bc );
+            for( unsigned bnd_x : {0,1} ) {
+                current_bcx( bnd_x, ty, J -> view(), grid_bc );
             }
         }
     }
 
     // y boundaries
-    if ( bc.y.lower > current::bc::periodic || bc.y.upper > current::bc::periodic ) {
-
-        // Loop over tiles
-        //  Only lower (0) and upper ( ntiles.y - 1 ) tiles have physical y boundaries
-
-        for( unsigned ty : { 0u, ntiles.y-1 } ) {
+    if ( grid_bc.y.lower > current::bc::periodic || grid_bc.y.upper > current::bc::periodic ) {
+       #pragma omp parallel for collapse(2)
+        for( unsigned bnd_y : { 0,1 } ) {
             for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
-
-                const auto tile_idx = make_uint2( tx, ty );
-                const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-                const auto tile_off = tid * tile_vol;
-
-                // Start at y cell 0
-                const auto y_offset = J -> gc.y.lower * ext_nx.x;
-
-                float3 * const __restrict__ tile_J = & J->d_buffer[ tile_off + y_offset ];
-
-                current_bcy( tile_idx, tile_J, nx, ext_nx, bc );
+                current_bcy( bnd_y, tx, J -> view(), grid_bc );
             }
         }
     }
 }
-
 
 /**
  * @brief Advance electric current to next iteration
@@ -184,17 +182,16 @@ void Current::process_bc() {
  * Adds up current deposited on guard cells and (optionally) applies digital filtering
  * 
  */
-void Current::advance() {
+void current::advance() {
 
     // Add up current deposited on guard cells
     J -> add_from_gc( );
-    // J -> copy_to_gc( );
 
     // Do additional bc calculations if needed
-    // Process_bc();
+    process_bc();
 
     // Calculate fJ
-    fft_forward -> transform( *J, *fJ );
+    fft_forward -> transform( *fJ, *J );
 
     // Apply filtering
     filter -> apply( *fJ );
@@ -206,12 +203,30 @@ void Current::advance() {
 /**
  * @brief Save electric current data to diagnostic file
  * 
- * @param jc        Current component to save (0, 1 or 2)
+ * @param jc        current component to save (0, 1 or 2)
  */
-void Current::save( fcomp::cart const jc ) {
+void current::save( const quantity quant, const fcomp::cart jc ) {
 
-    std::string vfname = "J";      // Dataset name
-    std::string vflabel = "J_";    // Dataset label (for plots)
+    std::string vfname;      // Dataset name
+    std::string vflabel;    // Dataset label (for plots)
+
+    grid::tiled_vec3<float> * f = nullptr;
+    grid::flat3<complex_t> * cf = nullptr;
+
+    switch (quant) {
+        case quantity::j :
+            f = J;
+            vfname = "J";
+            vflabel = "J_";
+            break;
+        case quantity::fj :
+            cf = fJ;
+            vfname = "fJ";
+            vflabel = "\\mathcal{F}\\,J_";
+            break;
+        default:
+            util::fatal( "Invalid field type selected" );
+    }
 
     switch ( jc ) {
         case( fcomp::x ) :
@@ -227,37 +242,15 @@ void Current::save( fcomp::cart const jc ) {
             vflabel += 'z';
             break;
         default:
-            std::cerr << "Invalid field component (fc) selected, aborting\n";
-            std::exit(1);
+            util::fatal( "Invalid field component (fc) selected" );
     }
-
-    zdf::grid_axis axis[2];
-    axis[0] = (zdf::grid_axis) {
-    	.name = (char *) "x",
-    	.min = 0.0,
-    	.max = box.x,
-    	.label = (char *) "x",
-    	.units = (char *) "c/\\omega_n"
-    };
-
-    axis[1] = (zdf::grid_axis) {
-        .name = (char *) "y",
-    	.min = 0.0,
-    	.max = box.y,
-    	.label = (char *) "y",
-    	.units = (char *) "c/\\omega_n"
-    };
 
     zdf::grid_info info = {
         .name = (char *) vfname.c_str(),
     	.ndims = 2,
     	.label = (char *) vflabel.c_str(),
     	.units = (char *) "e \\omega_n^2 / c",
-    	.axis = axis
     };
-
-    info.count[0] = J -> dims.x;
-    info.count[1] = J -> dims.y;
 
     zdf::iteration iteration = {
     	.n = iter,
@@ -265,5 +258,58 @@ void Current::save( fcomp::cart const jc ) {
     	.time_units = (char *) "1/\\omega_n"
     };
 
-    J -> save( jc, info, iteration, "CURRENT" );
+    zdf::grid_axis axis[2];
+
+    if ( f != nullptr ) {
+        // Real field
+        axis[0] = (zdf::grid_axis) {
+            .name = (char *) "x",
+            .min = 0.0,
+            .max = box.x,
+            .label = (char *) "x",
+            .units = (char *) "c/\\omega_n"
+        };
+
+        axis[1] = (zdf::grid_axis) {
+            .name = (char *) "y",
+            .min = 0.0,
+            .max = box.y,
+            .label = (char *) "y",
+            .units = (char *) "c/\\omega_n"
+        };
+
+        info.axis = axis;
+
+        f -> save( jc, info, iteration, "CURRENT" );
+
+    } else {
+        // Complex field
+        // kx: 0 ... nx/2 (r2c half spectrum)
+        // ky: kspace_save() rotates by ceil(ny/2) rows, so it runs from
+        //     -floor(ny/2) to floor((ny-1)/2) modes
+        const float2 dk = grid::fft::dk( box );
+        const int nky = cf -> get_grid_dims().y;
+
+        axis[0] = zdf::grid_axis {
+            .name = (char *) "kx",
+            .min = 0.0,
+            .max = (cf -> get_grid_dims().x - 1) * dk.x,
+            .label = (char *) "k_x",
+            .units = (char *) "\\omega_n/c"
+        };
+
+        axis[1] = zdf::grid_axis {
+            .name = (char *) "ky",
+            .min = - dk.y * ( nky / 2 ),
+            .max =   dk.y * ( (nky - 1) / 2 ),
+            .label = (char *) "k_y",
+            .units = (char *) "\\omega_n/c"
+        };
+
+        info.axis = axis;
+
+        grid::fft::kspace_save( *cf, jc, info, iteration, "CURRENT" );
+    }
 }
+
+} // namespace em2ds

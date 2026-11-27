@@ -37,13 +37,18 @@ CXXFLAGS += -fopenmp
 
 # Add FFTW library (single precision)
 
-CXXFLAGS += -I/opt/homebrew/include
+# CXXFLAGS += -I/opt/homebrew/include
+CXXFLAGS += -I/opt/fftw/3.3.11/include -DUSE_FFTW_THREADS
 
 # We need to add -L/opt/homebrew/opt/libomp/lib to avoid a conflict
 # with another version of libomp installed in /opt/homebrew/opt/llvm/lib
 
-LDFLAGS = -L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/lib \
+# LDFLAGS = -L/opt/homebrew/opt/libomp/lib -L/opt/homebrew/lib \
+#          -lfftw3f_omp -lfftw3f_mpi -lfftw3f -lm
+
+LDFLAGS = -L/opt/fftw/3.3.11/lib \
           -lfftw3f_omp -lfftw3f_mpi -lfftw3f -lm
+
 
 # --------------------------------------------------------------------------- #
 

@@ -1,0 +1,635 @@
+#pragma once
+
+#include <string>
+
+#include "part/particles.hpp"
+
+#include "emf.hpp"
+#include "current.hpp"
+#include "charge.hpp"
+
+#include "density.hpp"
+#include "udist.hpp"
+
+namespace part {
+
+/**
+ * @brief Particle quantity identifiers (for gather)
+ * 
+ */
+enum class quantity { x, y, ux, uy, uz };
+}
+
+namespace em2ds {
+
+namespace phasespace {
+    enum class quantity { x = 0, y, ux, uy, uz };
+
+    static inline void qinfo( quantity q, std::string & name, std::string & label, std::string & units ) {
+        switch(q) {
+        case quantity::x :
+            name = "x"; label = "x"; units = "c/\\omega_n";
+            break;
+        case quantity::y :
+            name = "y"; label = "y"; units = "c/\\omega_n";
+            break;
+        case quantity::ux :
+            name = "ux"; label = "u_x"; units = "c";
+            break;
+        case quantity::uy :
+            name = "uy"; label = "u_y"; units = "c";
+            break;
+        case quantity::uz :
+            name = "uz"; label = "u_z"; units = "c";
+            break;
+        }
+    }
+}
+
+/**
+ * @brief Charged particles class
+ * 
+ */
+class species {
+
+public:
+
+    enum class pusher{ boris = 0, euler };
+    struct bc { enum type { open = 0, periodic, reflecting }; };
+    using bc_type = bounds_2d<bc::type>;
+
+protected:
+
+     /// @brief Unique species identifier
+    int id;
+
+    /// @brief Nunber of particles per cell
+    uint2 ppc;
+
+    /// @brief reference particle charge
+    float q;
+
+    /// @brief Cell dize
+    float2 dx;
+
+    /// @brief Simulation box size
+    float2 box;
+
+    /// @brief Time step
+    float dt;
+
+     /// @brief Iteration
+    int iter;
+
+     /// @brief Particle data buffer
+    part::particles *particles;
+
+    /// @brief Secondary data buffer to speed up some calculations
+    part::particles *tmp;
+
+    /// @brief Particle tile sort aux. data
+    part::particle_sort *sort;
+
+    /// @brief Initial density profile
+    std::unique_ptr<density::profile> density;
+
+    /// @brief Initial velocity distribution
+    std::unique_ptr<udist::type> udist;
+
+    /// @brief Number of particles being injected
+    int * np_inj;
+
+    /**
+     * @brief Process (physical) boundary conditions
+     * 
+     */
+    void process_bc();
+
+private:
+
+    /// @brief Boundary condition
+    species::bc_type grid_bc;
+
+    /// @brief Simulation grid periodic boundaries (set on initialize)
+    int2 grid_periodic;
+
+    /// @brief Total species energy
+    double energy;
+
+    /// @brief Total number of particles moved
+    uint64_t nmove;
+
+    /**
+     * @brief Periodic flags (x,y) corresponding to the current grid_bc
+     * 
+     * @return int2 
+     */
+    int2 bc_periodic() const {
+        return make_int2(
+            grid_bc.x.lower == species::bc::periodic,
+            grid_bc.y.lower == species::bc::periodic
+        );
+    }
+
+    /**
+     * @brief Validate boundary conditions against the grid periodicity
+     * 
+     * @note Calls util::fatal() on invalid combinations
+     * 
+     * @param test_bc   Boundary conditions to validate
+     * @param periodic  Simulation grid periodic boundaries
+     */
+    void validate_bc( const species::bc_type & test_bc, const int2 periodic ) const {
+
+        if ( (test_bc.x.lower == species::bc::periodic) || (test_bc.x.upper == species::bc::periodic) ) {
+            if ( test_bc.x.lower != test_bc.x.upper ) {
+                util::fatal( "species boundary type mismatch along x."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
+            }
+        }
+
+        if ( (test_bc.y.lower == species::bc::periodic) || (test_bc.y.upper == species::bc::periodic) ) {
+            if ( test_bc.y.lower != test_bc.y.upper ) {
+                util::fatal( "species boundary type mismatch along y."
+                            " When choosing periodic boundaries both lower and upper types"
+                            " must be set to species::bc::periodic." );
+            }
+        }
+
+        // Issue warning for reflecting boundaries
+        if ( test_bc.x.lower == species::bc::reflecting || test_bc.x.upper == species::bc::reflecting ||
+             test_bc.y.lower == species::bc::reflecting || test_bc.y.upper == species::bc::reflecting ) {
+            std::cout << "(*warning*) Reflecting species bc only fold particles,"
+                         " the spectral field solve remains periodic\n";
+        }
+
+        // Test against grid periodicity
+        if ( ! periodic.x && test_bc.x.lower == species::bc::periodic ) {
+            util::fatal( "Periodic x boundaries require a periodic x grid.");
+        }
+
+        if ( ! periodic.y && test_bc.y.lower == species::bc::periodic ) {
+            util::fatal( "Periodic y boundaries require a periodic y grid.");
+        }
+    }
+
+    /**
+     * @brief Update particle objects from grid_bc
+     *
+     * @note Assumes grid_bc have been validated
+     */
+    void update_bc( ) {
+        // Update particles and tmp objects, if initialized
+        int2 periodic = bc_periodic();
+        if ( particles ) particles -> set_periodic( periodic );
+        if ( tmp )  tmp -> set_periodic( periodic );
+    };
+
+    /**
+     * @brief Deposit 1D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param q         Quantity for axis
+     * @param range     Value range
+     * @param size      Number of grid points
+     */
+    void dep_phasespace( float * const d_data, 
+        const phasespace::quantity q, float2 range, const int size ) const;
+
+    /**
+     * @brief Deposit 2D phasespace density
+     * 
+     * @param d_data    Data buffer
+     * @param quant0    axis 0 quantity
+     * @param range0    axis 0 value range
+     * @param size0     axis 0 number of points
+     * @param quant1    axis 1 quantity
+     * @param range1    axis 1 value range
+     * @param size1     axis 1 number of points
+     */
+    void dep_phasespace( float * const d_data,
+        const phasespace::quantity quant0, float2 range0, const int size0,
+        const phasespace::quantity quant1, float2 range1, const int size1 ) const;
+
+public:
+
+     /// @brief Species name
+    const std::string name;
+
+     /// @brief  Mass over charge ratio
+    const float m_q;
+
+    /// @brief Type of particle pusher to use
+    species::pusher push_type;
+
+    /**
+     * @brief Construct a new Species object
+     * 
+     * @param name  Name for the species object (used for diagnostics)
+     * @param m_q   Mass over charge ratio
+     * @param ppc   Number of particles per cell
+     */
+    species( std::string const name, float const m_q, uint2 const ppc ):
+    ppc(ppc), name(name), m_q(m_q)
+    {
+
+        // Validate parameters
+        if ( m_q == 0 ) {
+            util::fatal( "Invalid m_q value (0.0) must be not 0" );
+        }
+
+        if ( ppc.x < 1 || ppc.y < 1 ) {
+            util::fatal( "Invalid ppc value (" + to_string(ppc) + 
+                "), must be >= 1 in all directions" );
+        }
+
+        // Set default parameters
+        density   = std::make_unique<density::uniform>( 1.0 );
+        udist     = std::make_unique<udist::none>();
+        grid_bc = species::bc_type (species::bc::periodic);
+        grid_periodic = make_int2( 0, 0 );
+        push_type = species::pusher::boris;
+
+        // Nullify pointers to data structures
+        particles = nullptr;
+        tmp = nullptr;
+        sort = nullptr;
+        np_inj = nullptr;
+
+        // Invalidate parameters that will be set on initialize
+        id = 0;
+        q = 0;
+        dx = {0, 0};
+        box = { 0, 0 };
+        iter = -1;
+
+        energy = -1;
+        nmove = 0;
+    }
+
+    /**
+     * @brief Copy constructor
+     * 
+     */
+    species( const species & ) = delete;
+    
+    /**
+     * @brief Move constructor
+     * 
+     */
+    species( species && ) = delete;
+
+    /**
+     * @brief Initialize data structures and inject initial particle distribution
+     * 
+     * @param box               Global simulation box size
+     * @param grid_ntiles       Number of tiles
+     * @param tile_dims         Individutal tile grid size
+     * @param dt                Time step
+     * @param id                Species unique identifier
+     * @param periodic          Periodic boundaries (x,y)
+     */
+    virtual void initialize( float2 const box_, uint2 const grid_ntiles, uint2 const tile_dims,
+    float const dt_, int const id_, int2 const periodic );
+
+    /**
+     * @brief Destroy the Species object
+     * 
+     */
+    virtual ~species(){
+        memory::free( np_inj );
+
+        delete( tmp );
+        delete( sort );
+        delete( particles );
+    };
+
+    /**
+     * @brief Set the density profile object
+     * 
+     * @param new_density   New density object to be cloned
+     */
+    virtual void set_density( density::profile const & new_density ) {
+        density = new_density.clone();
+
+        // Recompute charge normalization factor in case initialize()
+        // has already been called
+        q = copysign( density->n0 , m_q ) / (ppc.x * ppc.y);
+    }
+
+    /**
+     * @brief Get the density object
+     * 
+     * @return density::profile& 
+     */
+    density::profile & get_density() {
+        return * density;
+    }
+
+    /**
+     * @brief Set the velocity distribution object
+     * 
+     * @param new_udist     New udist object to be cloned
+     */
+    virtual void set_udist( udist::type const & new_udist ) {
+        udist = new_udist.clone();
+    }
+
+    /**
+     * @brief Get the udist object
+     * 
+     * @return UDistribution::Type& 
+     */
+    udist::type & get_udist() {
+        return *udist;
+    } 
+
+    /**
+     * @brief Sets the boundary condition type
+     * 
+     * @param new_bc 
+     */
+    void set_bc( species::bc_type new_bc ) {
+
+        // Store new values
+        grid_bc = new_bc;
+
+        // If initialized, update other objects
+        if ( particles ) {
+            validate_bc( new_bc, grid_periodic );
+            update_bc( );
+        }
+    }
+
+    /**
+     * @brief Get the current boundary condition types
+     * 
+     * @return species::bc_type 
+     */
+    species::bc_type get_bc( ) { return grid_bc; }
+
+
+    /**
+     * @brief Inject particles in the complete simulation box
+     * 
+     */
+    virtual void inject() {
+
+        /// @brief position of lower corner of global grid in simulation units
+        float2 global_ref{0,0};
+
+        density -> inject( *particles, ppc, dx, global_ref, particles -> grid_range() );
+    }
+
+    /**
+     * @brief Inject particles in the specified range of the simulation
+     * 
+     * @param range     Range in which to inject particles
+     */
+    virtual void inject( bounds_2d<unsigned int> range ){
+
+        /// @brief position of lower corner of global grid in simulation units
+        float2 global_ref{0,0};
+
+        density -> inject( *particles, ppc, dx, global_ref, range );
+    }
+
+
+    /**
+     * @brief Gets number of particles that will be injected per tile
+     * 
+     * Although the routine only considers injection in a specific range, the
+     * number of particles to be injected is calculated on all tiles (returning
+     * zero on those, as expected)
+     *
+     * @param range     Range in which to inject particles
+     * @param np        Device pointer to number of particles to be injected per tile
+     */
+    virtual void np_inject( bounds_2d<unsigned int> range, int * np ) {
+
+        /// @brief position of lower corner of global grid in simulation units
+        float2 global_ref{0,0};
+
+        density -> np_inject( *particles, ppc, dx, global_ref, range, np );
+    }
+
+    /**
+     * @brief Advance particle velocities
+     * 
+     * @param E     Electric field
+     * @param B     Magnetic field
+     */
+    void push( grid::tiled_vec3<float> & E, grid::tiled_vec3<float> & B );
+
+    /**
+     * @brief Move particles (advance positions) and deposit current/charge
+     * 
+     * @param current   Electric current density
+     */
+    void move( grid::tiled_vec3<float> & current, grid::tiled<float> & charge );
+
+    /**
+     * @brief Move particles (advance positions) without depositing current
+     * 
+     */
+    void move();
+
+    /**
+     * @brief Free stream particles 1 timestep
+     * 
+     * @note Particles are free-streamed (no momentum update), no current is deposited.
+     *       Used mostly for debug purposes.
+     * 
+     */
+    virtual void advance() {
+
+        // Advance positions
+        move();
+
+        // Process physical boundary conditions
+        process_bc();
+        
+        // Sort particles according to tile
+        particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
+    }
+
+    /**
+     * @brief Free stream particles 1 timestep
+     * 
+     * This routine will:
+     * 1. Advance positions and deposit current
+     * 2. Process boundary conditions
+     * 3. Sort particles according to tiles
+     * 
+     * @param current   Electric current density
+     * @param charge    Electric charge density
+     */
+    virtual void advance( current &current, charge &charge ) {
+
+        // Advance positions and deposit current/charge
+        move( * current.J, * charge.rho );
+
+        // Process physical boundary conditions
+        process_bc();
+
+        // Sort particles according to tile
+        particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
+    }
+
+    /**
+    * @brief Advance particles 1 iteration
+    * 
+    * This routine will:
+    * 1. Advance momenta
+    * 2. Advance positions and deposit current
+    * 3. Process boundary conditions
+    * 4. Sort particles according to tiles
+    * 
+    * @param emf        EM fields
+    * @param current    Electric durrent density
+    * @param charge     Electric charge density
+    */
+    virtual void advance( emf const &emf, current &current, charge &charge ){
+
+        // Advance momenta
+        push( * emf.E, * emf.B );
+
+        // Advance positions and deposit current/charge
+        move( * current.J, * charge.rho );
+
+        // Process physical boundary conditions
+        process_bc();
+
+        // Sort particles according to tile
+        particles -> tile_sort( *tmp, *sort );
+
+        // Increase internal iteration number
+        iter++;
+    }
+
+    /**
+     * @brief Deposit species charge
+     * 
+     * @param charge    Charge density grid
+     */
+    void deposit_charge( grid::tiled<float> &charge ) const;
+
+    /**
+     * @brief Returns total time centered kinetic energy
+     * 
+     * @note The energy is computed during push(); the value refers to the
+     *       last push and is not updated by advance( current & )
+     * 
+     * @return double  
+     */
+    double get_energy() const {
+        // Normalize and return
+        return energy * q * m_q * dx.x * dx.y;
+    }
+
+    /**
+     * @brief Returns total number of particles moved
+     * 
+     * @return uint64_t
+     */
+    uint64_t get_nmove() const {
+        return nmove;
+    }
+
+    /**
+     * @brief Gets the number of iterations
+     * 
+     * @return auto 
+     */
+    auto get_iter() const {
+        return iter;
+    }
+
+    /**
+     * @brief Returns the maximum number of particles per tile
+     * 
+     * @return auto 
+     */
+    uint32_t tile_np_max() const {
+        return particles -> tile_np_max();
+    }
+
+    /**
+     * @brief Returns the number of particles
+     * 
+     * @return uint64_t     Number of particles
+     */
+    uint64_t np() const {
+        return particles -> np();
+    }
+
+    /**
+    * @brief Gather data from a specific particle quantity in a device buffer, scaling values
+    * 
+    * @warning This expects the particle buffer to be compact, it will fail if 
+    *          called with a non-compact buffer.
+    *
+    * @param quant     Quantity to gather
+    * @param d_data    Output data buffer, assumed to have size >= np
+    * @param scale     Scale factor for data
+    */
+    void gather( part::quantity quant, float * const __restrict__ d_data,
+        const float2 scale = make_float2( 1, 0 ) ) const;
+
+    /**
+     * @brief Save particle data to file
+     * 
+     * @note Saves positions and velocities for all particles in simulation units
+     */
+    void save() const;
+
+    /**
+     * @brief Save charge density for species to file
+     * 
+     */
+    void save_charge() const;
+
+    /**
+     * @brief Save 1D phasespace density to file
+     * 
+     * @param quant     Phasespace quantity
+     * @param range     Value range
+     * @param size      Number of grid points
+     */
+    void save_phasespace ( 
+        phasespace::quantity quant, float2 const range, int const size ) const;
+
+    /**
+     * @brief Save 2D phasespace density to file
+     * 
+     * @param quant0    axis 0 quantity
+     * @param range0    axis 0 value range
+     * @param size0     axis 0 number of points
+     * @param quant1    axis 1 quantity
+     * @param range1    axis 1 value range
+     * @param size1     axis 1 number of points
+     */
+    void save_phasespace ( 
+        phasespace::quantity quant0, float2 const range0, int const size0,
+        phasespace::quantity quant1, float2 const range1, int const size1 ) const;
+
+    /**
+     * @brief Print information on the number of particles per tile
+     * 
+     * @warning Used for debug purposes only
+     * 
+     * @param msg   (optional) Message to print before printing particle information
+     */
+    void info_np() {
+        particles->info_np();
+    }
+};
+
+} // namespace em2ds

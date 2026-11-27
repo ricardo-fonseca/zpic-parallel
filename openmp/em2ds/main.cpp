@@ -1,152 +1,443 @@
-// For getopt
-#include <unistd.h>
-
 #include <iostream>
-#include <fstream>
-#include <sstream>
+#include <string>
 
-#include "utils.h"
-#include "grid.h"
-#include "basic_grid.h"
+#include "em2ds.hpp"
+#include "util/term.hpp"
 
-#include "fft.h"
-#include "simulation.h"
+#include "core/bounds.hpp"
+#include "grid/grid.hpp"
 
-/**
- * OpemMP support
- */
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include "util/complex.hpp"
 
-/**
- * SIMD support
- */
-#include "simd/simd.h"
+using complex_t = util::complex<float>;
 
-
-void set_charge( 
-    float * const __restrict__ d_buffer,
-    uint2 const ntiles, uint2 const nx, uint2 const ext_nx, 
-    float2 dx, float2 x0, float r ) 
-{
-
-    #pragma omp parallel for
-    for( unsigned tile_id = 0; tile_id < ntiles.y * ntiles.x; tile_id++ ) {
-
-        const uint2  tile_idx { tile_id % ntiles.x, tile_id / ntiles.x };
-        const size_t tile_off = tile_id * roundup4( ext_nx.x * ext_nx.y );
-        auto * const __restrict__ tile_data = & d_buffer[ tile_off ];
-
-        for( unsigned iy = 0; iy < nx.y; iy++ ) {
-            for( unsigned ix = 0; ix < nx.x; ix++ ) {
-                float x = ( tile_idx.x * nx.x + ix ) * dx.x;
-                float y = ( tile_idx.y * nx.y + iy ) * dx.y;
-
-                tile_data[ iy * ext_nx.x + ix ] = (x-x0.x)*(x-x0.x) + (y-x0.y) * (y-x0.y) <= r*r; 
-            }
-        }
-
-    }
-}
-
-void poisson(
-        std::complex<float> * const __restrict__ data, uint2 const dims, float2 const dk
-    )
-{
-    // constexpr std::complex<float> I{0,1};
-
-    std::cout << "K-space dims: " << dims << '\n';
-
-//    #pragma omp parallel for
-    for( unsigned idx = 0; idx < dims.y * dims.x; idx ++ ) {
-        const int ix = idx % dims.x;
-        const int iy = idx / dims.x;
-
-        const float ky = (( 2 * iy < int(dims.y) ) ? iy : ( iy - int(dims.y) ) ) * dk.y;
-        //const float ky = iy * dk.y;
-        
-        const float kx = ix * dk.x;
-        const float k2 = kx*kx + ky*ky;
-
-        data[ idx ] *= ((k2 > 0)? 1.f / k2 : 0.);
-    }
-}
-
-void test_grid( void ) {
+void test_tiled_grid( ) {
     
     std::cout << ansi::bold;
     std::cout << "Running " << __func__ << "()...";
     std::cout << ansi::reset << std::endl;
 
-    const float2 box{1.0, 1.0};
-    const uint2 ntiles{ 16, 16 };
-    const uint2 nx    { 16, 16 };
+    // Global number of tiles
+    // const uint2 grid_ntiles = { 4, 4 };
+    const uint2 grid_ntiles = { 3, 2 };
 
-    uint2 in_dims{ ntiles.x * nx.x, ntiles.y * nx.y };
-    float2 dx{ box.x / in_dims.x, box.y / in_dims.y };
 
-    bnd<unsigned int> gc;
-    gc.x = {0,1};
-    gc.y = {0,1};
+    // const uint2 tile_dims     = { 12, 12 };
+    const uint2 tile_dims     = { 11, 17 };
 
-    std::cout << "Allocating arrays..." << '\n';
+    bounds_2d<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
 
-    grid<float> charge( ntiles, nx, gc );
-    grid<float> potential( ntiles, nx, gc );
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
 
-    uint2 out_dims = fft::fdims( ntiles * nx );
-    basic_grid<std::complex<float>> fpotential( out_dims );
+    grid::tiled<float> data( grid_ntiles, tile_dims, gc, periodic );
 
-    set_charge (
-        & charge.d_buffer[ charge.offset ], ntiles, nx, charge.ext_nx,
-        dx, float2{ 0.25, 0.25 }, 0.1
-    );
+    // Get local number of tiles
+    const auto ntiles   = data.get_grid_ntiles();
 
-    std::cout << "Saving charge to disk..." << '\n';
-    charge.save("charge.zdf");
+    std::cout << "Setting values...\n";
 
-    fft::plan plan_r2c( in_dims, fft::r2c );
-    fft::plan plan_c2r( in_dims, fft::c2r );
+    data.zero( );
+    data.set( 1.0 );
 
-    std::cout << "plan_r2c: " << plan_r2c << '\n';
-    std::cout << "plan_c2r: " << plan_c2r << '\n';
+    #pragma omp parallel for
+    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+        const uint2 tile_idx = { tid % ntiles.x, tid / ntiles.x  };
+        float * const __restrict__ tile_data = data.tile_data(tid);
 
-    std::cout << "Transforming charge -> fpotential...\n";
-    plan_r2c.transform( charge, fpotential );
+        const auto   tile_val = tile_idx.y * grid_ntiles.x + tile_idx.x;
 
-    fpotential.name = "F(charge)";
-    fpotential.save( "charge_k.zdf" );
+        for( unsigned int idx = 0; idx < tile_dims.y * tile_dims.x; idx ++ ) {
+            const auto ix = idx % tile_dims.x;
+            const auto iy = idx / tile_dims.x; 
+            tile_data[iy * data.tile_ext_dims.x + ix] = tile_val;
+        }
+    }
+    
+    data.add_from_gc();
+    data.copy_to_gc();
 
-    poisson (
-        fpotential.d_buffer,
-        out_dims, fft::dk( box )
-    );
+    for( auto i = 0; i < 5; i++)
+       data.x_shift_left( 1 );
 
-    fpotential.name = "F(potential)";
-    fpotential.save( "potential_k.zdf" );
+    data.kernel3_x( 1., 2., 1. );
+    data.kernel3_y( 1., 2., 1. );
 
-    std::cout << "Transforming fpotential -> charge...\n";
-    plan_c2r.transform( fpotential, charge );
+    std::cout << "Saving data...\n";
 
-    std::cout << "Saving potential to disk..." << '\n';
-    charge.save("potential.zdf");
+    data.save( "openmp/openmp.zdf" );
 
     std::cout << ansi::bold;
     std::cout << "Done!\n";
-    std::cout << ansi::reset;       
+    std::cout << ansi::reset;      
 }
 
-#include "emf.h"
-#include "laser.h"
+void test_tiled_vec3_grid( ) {
 
-#include "timer.h"
+    std::cout << ansi::bold;
+    std::cout << "Running test_grid()\n";
+    std::cout << ansi::reset;
+    std::cout << "Declaring test_vec3grid<float> data...\n";
+
+    const uint2 grid_ntiles = { 8, 8 };
+    const uint2 tile_dims = { 16,16 };
+    
+    bounds_2d<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {1,2};
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
+
+    grid::tiled_vec3< float > data( grid_ntiles, tile_dims, gc, periodic );
+
+    // Get local number of tiles
+    const auto ntiles = data.get_grid_ntiles();
+
+    // Set zero
+    // data.zero( );
+
+    // Set constant
+    // data.set( float3{1.0, 2.0, 3.0} );
+
+    // Set different value per tile
+    #pragma omp parallel for
+    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
+        const uint2 tile_idx = { tid % ntiles.x, tid / ntiles.x  };
+        auto * const __restrict__ tile_data = data.tile_data( tid );
+
+        const auto   tile_val = tile_idx.y * grid_ntiles.x + tile_idx.x;
+
+        for( unsigned int idx = 0; idx < tile_dims.y * tile_dims.x; idx += 1 ) {
+            const auto iy = idx / tile_dims.x; 
+            const auto ix = idx % tile_dims.x;
+            tile_data[iy * data.tile_ext_dims.x + ix] = make_float3( 1 + tile_val, 2 + tile_val, 3 + tile_val );
+        }
+    }
+    data.copy_to_gc( );
+
+    data.add_from_gc( );
+    data.copy_to_gc( );
+
+    for( int i = 0; i < 5; i++ ) {
+        data.x_shift_left( 1 );
+    }
+
+    data.kernel3_x( 1., 2., 1. );
+    data.kernel3_y( 1., 2., 1. );
+
+    std::cout << "Saving data...\n";
+
+    data.save( fcomp::x, "openmp/openmp-vec3-x.zdf" );
+    data.save( fcomp::y, "openmp/openmp-vec3-y.zdf" );
+    data.save( fcomp::z, "openmp/openmp-vec3-z.zdf" );
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
+}
+
+void test_halo( ) {
+    
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Global grid dimensions
+    const uint2 global_dims = { 1024, 512 };
+
+    // Guard cells
+    bounds_2d<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {3,4};
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
+
+    grid::halo<float> data( global_dims, gc, periodic );
+
+    const auto grid_dims = data.get_grid_dims();
+    std::cout << "grid dims: " << grid_dims << '\n';
+
+    std::cout << "Setting values...\n";
+
+    data.zero( );
+
+    //    data.set( 1.0 );
+
+    auto stridey = data.get_grid_ext_dims().x;
+    auto * __restrict__ buffer = & data.data()[ data.get_offset() ];
+    for( int iy = 0; iy < static_cast<int>(grid_dims.y); iy++ ) {
+        for( int ix = 0; ix < static_cast<int>(grid_dims.x); ix++ ) {
+            buffer[ iy * stridey + ix ] = iy + ix;
+        }
+    }
+    data.copy_to_gc();
+
+    data.add_from_gc();
+    data.copy_to_gc();
+
+    for( auto i = 0; i < 5; i++)
+       data.x_shift_left( 1 );
+
+    // data.kernel3_x( 1., 2., 1. );
+    data.kernel3_y( 1., 2., 1. );
+
+    std::cout << "Saving data...\n";
+
+    data.save( "openmp/openmp.zdf" );
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;      
+}
+
+void test_flat( ) {
+    
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Global grid dimensions
+    const uint2 global_dims = { 1024, 512 };
+
+    // Guard cells
+    bounds_2d<unsigned int> gc;
+    gc.x = {1,2};
+    gc.y = {3,4};
+
+    grid::flat<float> data( global_dims );
+
+    const auto grid_dims = data.get_grid_dims();
+    std::cout << "grid dims: " << grid_dims << '\n';
+
+    std::cout << "Setting values...\n";
+
+    data.zero( );
+
+    //    data.set( 1.0 );
+
+    auto stridey = data.get_grid_dims().x;
+    auto * __restrict__ buffer = & data.data()[ 0 ];
+    for( int iy = 0; iy < static_cast<int>(grid_dims.y); iy++ ) {
+        for( int ix = 0; ix < static_cast<int>(grid_dims.x); ix++ ) {
+            buffer[ iy * stridey + ix ] = iy + ix;
+        }
+    }
+
+    std::cout << "Saving data...\n";
+
+    data.save( "openmp/openmp.zdf" );
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;      
+}
+
+void test_fft_tile( ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
+    const uint2 global_dims = { 1024, 512 };
+    const uint2 tile_dims = {16, 16 };
+
+    bounds_2d<unsigned int> gc;
+    gc.x = { 1, 2 };
+    gc.y = { 1, 2 };
+
+    // Input grid
+    grid::tiled<float> data( 
+        global_dims / tile_dims, 
+        tile_dims, 
+        gc, 
+        periodic 
+    );
+    data.name = "Data";
+
+    auto grid_ntiles = data.get_grid_ntiles();
+    auto stridey = data.tile_ext_dims.x;
+
+    #pragma omp parallel for collapse(2)
+    for( unsigned int ty = 0; ty < grid_ntiles.y; ty++ ) {
+        for( unsigned int tx = 0; tx < grid_ntiles.x; tx++ ) {
+            float * const __restrict__ tile_data = data.tile_data(tx,ty);
+
+            unsigned int ix0 = tx * tile_dims.x;
+            unsigned int iy0 = ty * tile_dims.y;
+            
+            for( int iy = 0; iy < static_cast<int>(tile_dims.y); iy++ ) {
+                for( int ix = 0; ix < static_cast<int>(tile_dims.x); ix++ ) {
+                    float x = ( ix0 + ix - 512.0f ) / 512.f;
+                    float y = ( iy0 + iy - 256.0f ) / 256.f;
+                    tile_data[ iy * stridey + ix ] = std::exp( - (x*x)/0.001 - (y*y)/0.006 );
+                }
+            }
+        }
+    }
+
+    data.save( "openmp/data.zdf");
+
+    // Create FFT plan
+    auto r2c_plan = grid::fft::r2c_plan( data );
+
+    // Output grid
+    auto cdata = r2c_plan.kspace_grid();
+    cdata.name = "transform";
+
+    // Transform data
+    r2c_plan.transform( cdata, data );
+
+    // Save output
+    cdata.save( "openmp/transform.zdf");
+
+    data.set( 0 );
+
+    auto c2r_plan = grid::fft::c2r_plan( data );
+
+    c2r_plan.transform( data, cdata );
+
+    data.name = "test";
+    data.save( "openmp/test.zdf");
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
+}
+
+void set_charge( grid::tiled<float> & charge, const float2 dx, const float2 center, const float r )
+{
+    auto grid_ntiles = charge.get_grid_ntiles();
+    auto tile_dims = charge.tile_dims;
+
+    int stridey = charge.tile_ext_dims.x;
+    
+    #pragma omp parallel for collapse(2)
+    for( unsigned int ty = 0; ty < grid_ntiles.y; ty++ ) {
+        for( unsigned int tx = 0; tx < grid_ntiles.x; tx++ ) {
+            float * const __restrict__ tile_data = charge.tile_data(tx,ty);
+
+            unsigned int ix0 = tx * tile_dims.x;
+            unsigned int iy0 = ty * tile_dims.y;
+            
+            for( int iy = 0; iy < static_cast<int>(tile_dims.y); iy++ ) {
+                for( int ix = 0; ix < static_cast<int>(tile_dims.x); ix++ ) {
+                    float x = ( ix0 + ix ) * dx.x;
+                    float y = ( iy0 + iy ) * dx.y;
+                    tile_data[ iy * stridey + ix ] = (x-center.x)*(x-center.x) + (y-center.y) * (y-center.y) <= r*r;
+                }
+            }
+        }
+    }
+}
+
+void poisson( grid::flat<complex_t> & potential, const float2 dk )
+{
+    auto dims   = potential.get_grid_dims();
+
+    #pragma omp parallel for
+    for( unsigned idx = 0; idx < dims.y * dims.x; idx ++ ) {
+        const int ix = idx % dims.x;
+        const int iy = idx / dims.x;
+
+        const float2 kvec = grid::fft::k( make_int2( ix, iy ), dims, dk );
+        const float kx = kvec.x;
+        const float ky = kvec.y;
+
+        const float k2 = kx*kx + ky*ky;
+
+        potential.data()[ idx ] *= ((k2 > 0)? 1.f / k2 : 0.);
+    }
+
+}
+
+void test_poisson(){
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    const float2 box{1.0, 1.0};
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
+    const uint2 global_dims = { 1024, 1024 };
+    const uint2 tile_dims = {16, 16 };
+
+    const float2 dx{ box.x / global_dims.x, box.y / global_dims.y };
+
+    bounds_2d<unsigned int> gc;
+    gc.x = { 1, 2 };
+    gc.y = { 1, 2 };
+
+    // Input grid
+    grid::tiled<float> charge( 
+        global_dims / tile_dims, 
+        tile_dims, 
+        gc, 
+        periodic 
+    );
+    charge.name = "charge";
+
+    grid::tiled<float> potential( 
+        global_dims / tile_dims, 
+        tile_dims, 
+        gc, 
+        periodic 
+    );
+    charge.name = "potential";
+
+    set_charge ( charge, dx, float2{ 0.25, 0.25 }, 0.1 );
+
+    charge.save( "openmp/charge.zdf");
+
+    // Create FFT plan
+    auto r2c_plan = grid::fft::r2c_plan( charge );
+
+    // Output grid
+    auto fpotential = r2c_plan.kspace_grid();
+    
+    // Transform data
+    r2c_plan.transform( fpotential, charge );
+
+    // Save F(charge)
+    fpotential.name = "F(charge)";
+    fpotential.save( "openmp/charge_k.zdf");
+
+    poisson( fpotential, grid::fft::dk( box ) );
+
+    fpotential.name = "F(potential)";
+    fpotential.save( "openmp/potential_k.zdf" );
+
+    // Save output
+    auto c2r_plan = grid::fft::c2r_plan( charge );
+
+    c2r_plan.transform( potential, fpotential );
+
+    potential.save( "openmp/potential.zdf");
+
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
+}
+
+#include "emf.hpp"
+#include "laser.hpp"
+
+#include "util/timer.hpp"
 
 void test_laser( ) {
 
-    std::cout << ansi::bold
-              << "Running " << __func__ << "()..."
-              << ansi::reset << std::endl;
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
 
     uint2 ntiles{ 64, 16 };
     uint2 nx{ 16, 16 };
@@ -156,36 +447,36 @@ void test_laser( ) {
 
     std::cout << "Creating EMF object...\n";
 
-    EMF emf( ntiles, nx, box, dt );
+    em2ds::emf emf( ntiles, nx, box, dt, periodic );
 
     auto save_emf = [ & emf ]( ) {
-        emf.save( emf::e, fcomp::x );
-        emf.save( emf::e, fcomp::y );
-        emf.save( emf::e, fcomp::z );
+        emf.save( em2ds::emf::quantity::e, fcomp::x );
+        emf.save( em2ds::emf::quantity::e, fcomp::y );
+        emf.save( em2ds::emf::quantity::e, fcomp::z );
 
-        emf.save( emf::b, fcomp::x );
-        emf.save( emf::b, fcomp::y );
-        emf.save( emf::b, fcomp::z );
+        emf.save( em2ds::emf::quantity::b, fcomp::x );
+        emf.save( em2ds::emf::quantity::b, fcomp::y );
+        emf.save( em2ds::emf::quantity::b, fcomp::z );
 
-        emf.save( emf::fet, fcomp::x );
-        emf.save( emf::fet, fcomp::y );
-        emf.save( emf::fet, fcomp::z );
+        emf.save( em2ds::emf::quantity::fet, fcomp::x );
+        emf.save( em2ds::emf::quantity::fet, fcomp::y );
+        emf.save( em2ds::emf::quantity::fet, fcomp::z );
 
-        emf.save( emf::fb, fcomp::x );
-        emf.save( emf::fb, fcomp::y );
-        emf.save( emf::fb, fcomp::z );
+        emf.save( em2ds::emf::quantity::fb, fcomp::x );
+        emf.save( em2ds::emf::quantity::fb, fcomp::y );
+        emf.save( em2ds::emf::quantity::fb, fcomp::z );
 
     };
 
 /*
-    Laser::PlaneWave laser;
+    em2ds::laser::plane_wave laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
     laser.omega0 = 10.0;
 */
 
-    Laser::Gaussian laser;
+    em2ds::laser::gaussian laser;
     laser.start = 10.2;
     laser.fwhm = 4.0;
     laser.a0 = 1.0;
@@ -194,6 +485,7 @@ void test_laser( ) {
     laser.focus = 20.48;
     laser.axis = 12.8;
 
+    
     laser.sin_pol = 0;
     laser.cos_pol = 1;
 
@@ -208,7 +500,7 @@ void test_laser( ) {
 
     std::cout << "Starting test - " << niter << " iterations...\n";
 
-    Timer t0("test");
+    timer::clock t0("test");
 
     t0.start();
 
@@ -220,225 +512,261 @@ void test_laser( ) {
     
     save_emf();
 
-    std::ostringstream buffer;
-    buffer << niter << " iterations: ";
-
-    t0.report( buffer.str() );
-
-    std::cout << ansi::bold
-              << "Done!\n"
-              << ansi::reset;   
+    t0.report( std::to_string(niter) + " iterations.");
+    std::cout << ansi::bold;
+    std::cout << "Done!\n";
+    std::cout << ansi::reset;
 
 }
 
-void test_mov( ) {
+void test_inj( ) {
 
-    std::cout << ansi::bold
-              << "Running " << __func__ << "()..."
-              << ansi::reset << std::endl;
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
 
     uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };
 
     float2 box{ 12.8, 12.8 };
 
-    auto dt = 0.99 * zpic::courant( ntiles, nx, box );
+    auto dt = 0.99 * em2ds::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
-    Species electrons( "electrons", -1.0f, ppc );
+    em2ds::species electrons( "electrons", -1.0f, ppc );
 
-    electrons.set_density( Density::Sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
-    electrons.set_udist( UDistribution::Cold( float3{ -1, -2, -3 } ) );
+    std::cout << "Created species\n";
 
-    electrons.initialize( box, ntiles, nx, dt, 0 );
+    //electrons.set_density(em2ds::density::step(coord::x, 1.0, 5.0));
+    // electrons.set_density(em2ds::density::slab(coord::y, 1.0, 5.0, 8.0));
+    electrons.set_density( em2ds::density::sphere( 1.0, float2{5.0, 7.0}, 2.0 ) );
 
-    electrons.save();
+    std::cout << "Density set\n";
+
+    electrons.set_udist( em2ds::udist::thermal( float3{ 0.1, 0.2, 0.3 }, float3{1,0,0} ) );
+
+    electrons.initialize( box, ntiles, nx, dt, 0, periodic );
+
     electrons.save_charge();
+    electrons.save();
     electrons.save_phasespace(
-        phasespace::x, float2{0, 12.8}, 128,
-        phasespace::y, float2{0, 12.8}, 128
+        em2ds::phasespace::quantity::ux, float2{-1, 3}, 256,
+        em2ds::phasespace::quantity::uz, float2{-1, 1}, 128
     );
 
-    // int niter = 1;
-    int niter = 200;
+    std::cout << ansi::bold;
+    std::cout << __func__ << "() complete!\n";
+    std::cout << ansi::reset;
+}
 
+void test_mov( ) {
+
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
+
+    uint2 ntiles{ 4, 4 };
+    uint2 nx{ 32, 32 };
+
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * em2ds::courant( ntiles, nx, box );
+
+    uint2 ppc{ 8, 8 };
+    em2ds::species electrons( "electrons", -1.0f, ppc );
+
+    electrons.set_density( em2ds::density::sphere( 1.0, float2{2.1, 2.1}, 2.0 ) );
+    electrons.set_udist( em2ds::udist::cold( float3{ -1, -2, -3 } ) );
+    electrons.initialize( box, ntiles, nx, dt, 0, periodic );
+
+    electrons.save_charge();
+    electrons.save();
+
+    int niter = 200; //200
     for( auto i = 0; i < niter; i ++ ) {
+        std::cout << "i = " << i << ", total particles: " << electrons.np() << '\n';
         electrons.advance();
     }
 
     electrons.save_charge();
     electrons.save();
 
-    std::cout << ansi::bold
-              << "Done!\n"
-              << ansi::reset;   
+    std::cout << ansi::bold;
+    std::cout << __func__ << "() complete!\n";
+    std::cout << ansi::reset;
 }
 
-void test_weibel( ) {
+void test_current_charge( ) {
 
-    std::cout << ansi::bold
-              << "Running " << __func__ << "()..."
-              << ansi::reset << std::endl;
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
 
-    uint2 ntiles{ 16, 16 };
+    // Periodic boundaries
+    const int2 periodic = make_int2( 1, 1 );
+
+    uint2 ntiles{ 4, 4 };
     uint2 nx{ 32, 32 };
-    
-    float2 box = 0.1f * make_float2( ntiles.x * nx.x, ntiles.y * nx.y );
-    float dt = 0.07;
 
-    Simulation sim( ntiles, nx, box, dt );
+    float2 box{ 12.8, 12.8 };
+
+    auto dt = 0.99 * em2ds::courant( ntiles, nx, box );
 
     uint2 ppc{ 8, 8 };
+    em2ds::species electrons( "electrons", -1.0f, ppc );
 
-    Species electrons("electrons", -1.0f, ppc);
+    electrons.set_density( em2ds::density::sphere( 1.0, float2{6.4, 6.4}, 5.0 ) );
+    electrons.set_udist( em2ds::udist::cold( float3{ 1, 2, 3 } ) );
+
+    electrons.initialize( box, ntiles, nx, dt, 0, periodic );
+
+    em2ds::current current( ntiles, nx, box, dt, periodic );
+    em2ds::charge charge( ntiles, nx, box, dt, periodic );
+
+    electrons.advance( current, charge );
+
+    current.advance( );
+    current.save( em2ds::current::quantity::j, fcomp::x );
+    current.save( em2ds::current::quantity::j, fcomp::y );
+    current.save( em2ds::current::quantity::j, fcomp::z );
+    current.save( em2ds::current::quantity::fj, fcomp::x );
+    current.save( em2ds::current::quantity::fj, fcomp::y );
+    current.save( em2ds::current::quantity::fj, fcomp::z );
+
+    charge.advance();
+    charge.save( em2ds::charge::quantity::rho );
+    charge.save( em2ds::charge::quantity::frho );
+
+    std::cout << ansi::bold;
+    std::cout << __func__ << "() complete!\n";
+    std::cout << ansi::reset;
+}
+
+void test_weibel( )
+{
+   
+    std::cout << ansi::bold;
+    std::cout << "Running " << __func__ << "()...";
+    std::cout << ansi::reset << std::endl;
+
+    // Create simulation box
+    uint2 ntiles{16, 16};
+    uint2 tile_dims{32, 32};
+    float2 box = {tile_dims.x * ntiles.x * 0.1f, tile_dims.y * ntiles.y * 0.1f};
+    float dt = 0.07;
+                                        
+    em2ds::simulation sim( ntiles, tile_dims, box, dt );
+                            
+    uint2 ppc{4, 4};
+
+    em2ds::species electrons("electrons", -1.0f, ppc);
     electrons.set_udist(
-        UDistribution::ThermalCorr( 
+        em2ds::udist::thermal_corr( 
             float3{ 0.1, 0.1, 0.1 },
             float3{ 0, 0, 0.6 }
         )
     );
+    electrons.push_type = em2ds::species::pusher::euler;
 
     sim.add_species( electrons );
 
-    Species positrons("positrons", +1.0f, ppc);
+    em2ds::species positrons("positrons", +1.0f, ppc);
     positrons.set_udist(
-        UDistribution::ThermalCorr( 
+        em2ds::udist::thermal_corr( 
             float3{ 0.1, 0.1, 0.1 },
             float3{ 0, 0, -0.6 }
         )
     );
+    positrons.push_type = em2ds::species::pusher::euler;
 
     sim.add_species( positrons );
 
+#if 1
     // Lambda function for diagnostic output
     auto diag = [ & ]( ) {
-        sim.emf.save(emf::b, fcomp::x);
-        sim.emf.save(emf::b, fcomp::y);
-        sim.emf.save(emf::b, fcomp::z);
+        sim.emf.save(em2ds::emf::quantity::b, fcomp::x);
+        sim.emf.save(em2ds::emf::quantity::b, fcomp::y);
+        sim.emf.save(em2ds::emf::quantity::b, fcomp::z);
 
-        sim.emf.save(emf::fet, fcomp::x);
-        sim.emf.save(emf::fet, fcomp::y);
-        sim.emf.save(emf::fet, fcomp::z);
+        sim.emf.save(em2ds::emf::quantity::fet, fcomp::x);
+        sim.emf.save(em2ds::emf::quantity::fet, fcomp::y);
+        sim.emf.save(em2ds::emf::quantity::fet, fcomp::z);
 
-        sim.current.save(fcomp::x);
-        sim.current.save(fcomp::y);
-        sim.current.save(fcomp::z);
-
-        sim.charge.save();
 
         electrons.save_charge();
         positrons.save_charge();
 
+        electrons.save_phasespace(
+            em2ds::phasespace::quantity::ux, float2{-2, 2}, 256,
+            em2ds::phasespace::quantity::uy, float2{-2, 2}, 256
+        );
+
         sim.energy_info();
     };
+#else
+    auto diag = [ ]( ) {};
+#endif
 
-    Timer timer; timer.start();
+    // Run simulation    
+    int const imax = 500;
+        
+    std::cout << "Running large Weibel test up to n = " << imax << "...\n";
+                
+    timer::clock timer;
+                  
+    timer.start();
 
-    while ( sim.get_t() <= 35.0 ) {
-        //if ( sim.get_iter() % 10 == 0 )
-        //    std::cout << "t = " << sim.get_t() << '\n';
+    while (sim.get_iter() < imax)
+    {     
+        if ( sim.get_iter() % 50 == 0 ) {
+            diag();
+            std::cout << "i = " << sim.get_iter() << '\n';    
+        }       
         sim.advance();
     }
+
     timer.stop();
 
     diag();
 
-    std::cout << ansi::bold
-              << "Done!\n"
-              << ansi::reset;
-
-    auto perf = sim.get_nmove() / timer.elapsed(timer::s) / 1.e9;
-
-    std::cerr << "Elapsed time: " << timer.elapsed(timer::s) << " s"
-              << ", Performance: " << perf << " GPart/s\n";
-}
-
-/**
- * @brief Print information about the environment
- * 
- */
-void info( void ) {
-
-    std::cout << ansi::bold;
-    std::cout << "Environment\n";
-    std::cout << ansi::reset;
-
-    #ifdef SIMD
-        std::cout << "SIMD support enabled\n";
-        std::cout << "  vector unit : " << vecname << '\n';
-        std::cout << "  vector width: " << vecwidth <<'\n';
-    #else
-        std::cout << "SIMD support not enabled\n";
-    #endif
-    
-    #ifdef _OPENMP
-        std::cout << "OpenMP enabled\n";
-        std::cout << "  # procs           : " << omp_get_num_procs() << '\n';
-        std::cout << "  max_threads       : " << omp_get_max_threads() << '\n';
-        #pragma omp parallel
-        {
-            if ( omp_get_thread_num() == 0 )
-                std::cout << "  default # threads : " << omp_get_num_threads() << '\n';
-        }
-    #else
-        std::cout << "OpenMP support not enabled\n";
-    #endif
-}
-
-void cli_help( char * argv0 ) {
-    std::cerr << "Usage: " << argv0 << " [-h] [-s] [-t name] [-n parameter]\n";
-
-    std::cerr << '\n';
-    std::cerr << "Options:\n";
-    std::cerr << "  -h                  Display this message and exit\n";
-    std::cerr << "  -s                  Silence information about host/CUDA device\n";
-    std::cerr << "  -t <name>           Name of the test to run. Defaults to 'weibel'\n";
-    std::cerr << "  -p <parameters>     Test parameters (string). Purpose will depend on the \n";
-    std::cerr << "                      test chosen. Defaults to '2,2,16,16'\n";
-    std::cerr << '\n';
+    auto nmove = sim.get_nmove();
+    std::cout << "simulation complete at i = " << sim.get_iter() << '\n';
+    auto time = timer.elapsed(timer::units::s);
+    std::cout << "Elapsed time: " << time << " s\n";
+    auto perf = nmove / time / 1.e9;
+    std::cerr << "Performance : " << perf << " GPart/s\n";                  
 }
 
 int main( int argc, char *argv[] ) {
 
     // Initialize SIMD support
-    simd_init();
+    simd::init();
 
     // Initialize FFT library
-    fft::init();
+    grid::fft::init();
 
-    // Process command line arguments
-    int opt;
-    int silent = 0;
-    std::string test = "weibel";
-    std::string param = "16,16";
-    while ((opt = getopt(argc, argv, "ht:p:s")) != -1) {
-        switch (opt) {
-            case 't':
-            test = optarg;
-            break;
-        case 'p':
-            param = optarg;
-            break;
-        case 's':
-            silent = 1;
-            break;
-        case 'h':
-        case '?':
-            cli_help( argv[0] );
-            std::exit(0);
-        default:
-            cli_help( argv[0] );    
-            std::exit(1);
-        }
-    }
-    
-    // Print information about the environment
-    if ( ! silent ) info();    
+    em2ds::sys_info();
 
-    // test_grid();
-    // test_laser();
+    // test_tiled_grid();
+    // test_tiled_vec3_grid();
+    // test_halo();
+    // test_flat();
+
+    // test_fft_tile();
+    // test_poisson();
+    //test_laser();
+
+    // test_inj();
     // test_mov();
+    // test_current_charge();
     test_weibel();
 
-    fft::cleanup();
+    grid::fft::cleanup();
+
 }

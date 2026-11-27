@@ -1,56 +1,70 @@
-#include "emf.h"
+#include "emf.hpp"
+#include "grid/fft.hpp"
 
+#include <cmath>
 #include <iostream>
-#include "zdf-cpp.h"
+#include <ostream>
+#include <sstream>
+
+namespace em2ds {
 
 /**
- * @brief Construct a new EMF::EMF object
- * 
- * @param ntiles    Number of tiles
- * @param nx        Tile grid size
- * @param box       Simulation box size
- * @param dt        Time step
- * @param q         Sycl queue
- */
-EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
-    double const dt ) : 
-    dx( float2{ box.x / ( nx.x * ntiles.x ), box.y / ( nx.y * ntiles.y ) } ),
+* @brief Construct a new EMF object
+* 
+* @param grid_ntiles       Number of tiles
+* @param tile_dims         Individual tile size
+* @param box               Simulation box size
+* @param dt                Time step
+* @param periodic          Periodic boundaries (x,y)
+*/
+emf::emf( uint2 const grid_ntiles, uint2 const tile_dims, float2 const box, double const dt, int2 const periodic ) : 
+    dx( float2{ box.x / ( tile_dims.x * grid_ntiles.x ), box.y / ( tile_dims.y * grid_ntiles.y ) } ),
     dt( dt ), box(box)
 {
     // Verify Courant condition
-    float cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
+    // I believe the PSATD solver cannot work with larger time-steps, needs investigating
+    // Regardless, this is required by the particle push
+    auto cour = std::sqrt( 1.0f/( 1.0f/(dx.x*dx.x) + 1.0f/(dx.y*dx.y) ) );
     if ( dt >= cour ){
-        std::cerr << "(*error*) Invalid timestep, courant condition violation.\n";
-        std::cerr << "(*error*) For the current resolution [" << dx.x << "," << dx.y << "]\n";
-        std::cerr << " the maximum timestep is dt = " << cour <<'\n';
-        exit(-1);
+        std::ostringstream msg;
+        msg << "Invalid timestep, courant condition violation."
+            << " For the current resolution " << dx
+            << " the maximum timestep is dt = " << cour;
+        util::fatal( msg.str() );
     }
+
+    // Only periodic boundaries are currently supported
+    if (( ! periodic.x ) || ( ! periodic.y ) ) {
+        util::fatal("EMF algorithm only supports periodic boundaries.");
+    }
+    grid_bc = emf::bc_type( emf::bc::periodic );
 
     // Guard cells (1 below, 2 above)
     // These are required for the Yee solver AND for field interpolation
-    bnd<unsigned int> gc;
+    bounds_2d<unsigned int> gc;
     gc.x = {1,2};
     gc.y = {1,2};
 
-    E = new vec3grid<float3> ( ntiles, nx, gc );
+    E = new grid::tiled_vec3<float> ( grid_ntiles, tile_dims, gc, periodic );
     E -> name = "Electric field";
 
-    B = new vec3grid<float3> ( ntiles, nx, gc );
+    B = new grid::tiled_vec3<float> ( grid_ntiles, tile_dims, gc, periodic );
     B -> name = "Magnetic field";
 
-    auto fdims = fft::fdims( E -> dims );
-    fE  = new basic_grid3< std::complex<float> >( fdims );
-    fEt = new basic_grid3< std::complex<float> >( fdims );
-    fB  = new basic_grid3< std::complex<float> >( fdims );
-
     // Create FFT plan
-    fft_backward = new fft::plan( E -> dims, fft::c2r_v3 );
+    fft_backward = new grid::fft::c2r_plan( *E );
+
+    // Create complex grids for the Fourier transforms
+    fE  = fft_backward->new_kspace_grid3();
+    fEt = fft_backward->new_kspace_grid3();
+    fB  = fft_backward->new_kspace_grid3();
 
     fE  -> name = "F(E)";
     fEt -> name = "F(Et)";
     fB  -> name = "F(B)";
 
     // Zero fields
+    // Initial fields, if any, are set in k-space (fEt, fB) by the caller
     E -> zero();
     B -> zero();
 
@@ -58,52 +72,65 @@ EMF::EMF( uint2 const ntiles, uint2 const nx, float2 const box,
     fEt -> zero();
     fB  -> zero();
 
-    // Set default boundary conditions to periodic
-    bc = emf::bc_type (emf::bc::periodic);
-
     // Reset iteration number
     iter = 0;
-
 }
 
+/**
+ * @brief Advance transverse component of E field and B field using PSATD
+ *        algorithm without electric current
+ * 
+ * @param fEt 
+ * @param fB 
+ * @param dims 
+ * @param dk 
+ * @param dt 
+ */
 void advance_psatd_nocurr( 
-    std::complex<float> * const __restrict__ fEt, 
-    std::complex<float> * const __restrict__ fB,
-    uint2 const dims, float2 const dk, float const dt )
+    grid::flat3<emf::complex_t> & fEt, 
+    grid::flat3<emf::complex_t> & fB,
+    const float2 dk, const float dt )
 {
 
-    std::complex<float> * const __restrict__ fEtx = & fEt[                   0 ];
-    std::complex<float> * const __restrict__ fEty = & fEt[     dims.x * dims.y ];
-    std::complex<float> * const __restrict__ fEtz = & fEt[ 2 * dims.x * dims.y ];
+    static_assert( ! grid::fft::kspace_transposed, "Normal k-space layout expected" );
 
-    std::complex<float> * const __restrict__ fBx  = & fB[                   0 ];
-    std::complex<float> * const __restrict__ fBy  = & fB[     dims.x * dims.y ];
-    std::complex<float> * const __restrict__ fBz  = & fB[ 2 * dims.x * dims.y ];
+    emf::complex_t * const __restrict__ fEtx = fEt.x();
+    emf::complex_t * const __restrict__ fEty = fEt.y();
+    emf::complex_t * const __restrict__ fEtz = fEt.z();
 
-    constexpr std::complex<float> I{0,1};
+    emf::complex_t * const __restrict__ fBx  = fB.x();
+    emf::complex_t * const __restrict__ fBy  = fB.y();
+    emf::complex_t * const __restrict__ fBz  = fB.z();
+
+    constexpr emf::complex_t I{0,1};
+
+    auto dims = fEt.get_grid_dims();
+    auto global = fEt.get_grid_dims();
 
     #pragma omp parallel for
     for( unsigned idx = 0; idx < dims.y * dims.x; idx++ ) {
-        int ix = idx % dims.x;
-        int iy = idx / dims.x;
+        const int ix = idx % dims.x;
+        const int iy = idx / dims.x;
 
-        const float ky = ((iy < int(dims.y)/2) ? iy : (iy - int(dims.y)) ) * dk.y;
+        const float2 kvec = grid::fft::k( make_int2(ix,iy), global, dk );
+        
+        const float kx = kvec.x;
+        const float ky = kvec.y;
 
-        const float kx = ix * dk.x;
         const float k2 = kx*kx + ky*ky;
         const float k  = sqrtf( k2 );
 
         // PSATD Field advance equations
-        const float C   = cosf( k * dt );
-        const float S_k = ( k > 0 ) ? sinf( k * dt ) / k : dt;
+        const float C   = std::cos( k * dt );
+        const float S_k = ( k > 0 ) ? std::sin( k * dt ) / k : dt;
 
-        std::complex<float> Ex = fEtx[idx];
-        std::complex<float> Ey = fEty[idx];
-        std::complex<float> Ez = fEtz[idx];
+        emf::complex_t Ex = fEtx[idx];
+        emf::complex_t Ey = fEty[idx];
+        emf::complex_t Ez = fEtz[idx];
 
-        std::complex<float> Bx = fBx[idx];
-        std::complex<float> By = fBy[idx];
-        std::complex<float> Bz = fBz[idx];
+        emf::complex_t Bx = fBx[idx];
+        emf::complex_t By = fBy[idx];
+        emf::complex_t Bz = fBz[idx];
 
         Ex = C * Ex + S_k * ( I * (  ky *  fBz[idx]                  ) );
         Ey = C * Ey + S_k * ( I * ( -kx *  fBz[idx]                  ) );
@@ -134,56 +161,61 @@ void advance_psatd_nocurr(
  * @param dk    k-space cell size
  * @param dt    Time step
  */
-void advance_psatd( std::complex<float> * const __restrict__ fEt, 
-                    std::complex<float> * const __restrict__ fB,
-                    std::complex<float> * const __restrict__ fJ,
-                    uint2 const dims, float2 const dk, float const dt )
+void advance_psatd( 
+    grid::flat3<emf::complex_t> & fEt, 
+    grid::flat3<emf::complex_t> & fB,
+    grid::flat3<emf::complex_t> & fJ,
+    float2 const dk, float const dt )
 {
 
-    std::complex<float> * const __restrict__ fEtx = & fEt[                   0 ];
-    std::complex<float> * const __restrict__ fEty = & fEt[     dims.x * dims.y ];
-    std::complex<float> * const __restrict__ fEtz = & fEt[ 2 * dims.x * dims.y ];
+    emf::complex_t * const __restrict__ fEtx = fEt.x();
+    emf::complex_t * const __restrict__ fEty = fEt.y();
+    emf::complex_t * const __restrict__ fEtz = fEt.z();
 
-    std::complex<float> * const __restrict__ fBx = & fB[                   0 ];
-    std::complex<float> * const __restrict__ fBy = & fB[     dims.x * dims.y ];
-    std::complex<float> * const __restrict__ fBz = & fB[ 2 * dims.x * dims.y ];
+    emf::complex_t * const __restrict__ fBx  = fB.x();
+    emf::complex_t * const __restrict__ fBy  = fB.y();
+    emf::complex_t * const __restrict__ fBz  = fB.z();
 
-    std::complex<float> * const __restrict__ fJx = & fJ[                   0 ];
-    std::complex<float> * const __restrict__ fJy = & fJ[     dims.x * dims.y ];
-    std::complex<float> * const __restrict__ fJz = & fJ[ 2 * dims.x * dims.y ];
+    emf::complex_t * const __restrict__ fJx = fJ.x();
+    emf::complex_t * const __restrict__ fJy = fJ.y();
+    emf::complex_t * const __restrict__ fJz = fJ.z();
 
+    constexpr emf::complex_t I{0,1};
 
-    constexpr std::complex<float> I{0,1};
+    auto dims = fEt.get_grid_dims();
+    auto global = fEt.get_grid_dims();
 
     #pragma omp parallel for
     for( unsigned idx = 0; idx < dims.y * dims.x; idx++ ) {
-        int ix = idx % dims.x;
-        int iy = idx / dims.x;
+        const int ix = idx % dims.x;
+        const int iy = idx / dims.x;
 
-        const float kx = ix * dk.x;
-        const float ky = ((iy < int(dims.y)/2) ? iy : (iy - int(dims.y)) ) * dk.y;
+        const float2 kvec = grid::fft::k( make_int2(ix,iy), global, dk );
+        
+        const float kx = kvec.x;
+        const float ky = kvec.y;
 
         const float k2 = kx*kx + ky*ky;
         const float k  = sqrt( k2 );
 
-        // Calculate transverse current
-        const std::complex<float> kdJ  = (kx * fJx[idx] + ky * fJy[idx]);
-        const std::complex<float> fJtx = (k2 > 0) ? fJx[idx] - kx * kdJ / k2 : 0;
-        const std::complex<float> fJty = (k2 > 0) ? fJy[idx] - ky * kdJ / k2 : 0; 
-        const std::complex<float> fJtz = fJz[idx];
+        // Compute transverse current
+        const emf::complex_t kdJ  = (kx * fJx[idx] + ky * fJy[idx]);
+        const emf::complex_t fJtx = (k2 > 0) ? fJx[idx] - kx * kdJ / k2 : 0;
+        const emf::complex_t fJty = (k2 > 0) ? fJy[idx] - ky * kdJ / k2 : 0; 
+        const emf::complex_t fJtz = fJz[idx];
 
         // PSATD Field advance equations
         const float C   = cos( k * dt );
         const float S_k = ( k > 0 ) ? sin( k * dt ) / k : dt;
-        const std::complex<float> I1mC_k2 = ( k2 > 0 )? I * (1.0f - C) / k2 : 0;
+        const emf::complex_t I1mC_k2 = ( k2 > 0 )? I * (1.0f - C) / k2 : 0;
 
-        std::complex<float> Ex = fEtx[idx];
-        std::complex<float> Ey = fEty[idx];
-        std::complex<float> Ez = fEtz[idx];
+        emf::complex_t Ex = fEtx[idx];
+        emf::complex_t Ey = fEty[idx];
+        emf::complex_t Ez = fEtz[idx];
 
-        std::complex<float> Bx = fBx[idx];
-        std::complex<float> By = fBy[idx];
-        std::complex<float> Bz = fBz[idx];
+        emf::complex_t Bx = fBx[idx];
+        emf::complex_t By = fBy[idx];
+        emf::complex_t Bz = fBz[idx];
 
         Ex = C * Ex + S_k * ( I * (  ky *  fBz[idx]                  ) - fJtx );
         Ey = C * Ey + S_k * ( I * ( -kx *  fBz[idx]                  ) - fJty );
@@ -212,38 +244,44 @@ void advance_psatd( std::complex<float> * const __restrict__ fEt,
  * @param dims  Global grid dimensions
  * @param dk    k-space cell size
  */
-void update_fE( std::complex<float> * const __restrict__ d_fE, 
-                std::complex<float> * const __restrict__ d_fEt, 
-                std::complex<float> * const __restrict__ d_frho,
-                uint2 const dims, float2 const dk )
+void update_fE( 
+    grid::flat3<emf::complex_t> & fE, 
+    grid::flat3<emf::complex_t> & fEt, 
+    grid::flat<emf::complex_t>  & frho_src,
+    float2 const dk )
 {
 
-    std::complex<float> * const __restrict__ fEx = & d_fE[                   0 ];
-    std::complex<float> * const __restrict__ fEy = & d_fE[     dims.x * dims.y ];
-    std::complex<float> * const __restrict__ fEz = & d_fE[ 2 * dims.x * dims.y ];
+    emf::complex_t * const __restrict__ fEx = fE.x();
+    emf::complex_t * const __restrict__ fEy = fE.y();
+    emf::complex_t * const __restrict__ fEz = fE.z();
 
-    std::complex<float> const * const __restrict__ fEtx = & d_fEt[                   0 ];
-    std::complex<float> const * const __restrict__ fEty = & d_fEt[     dims.x * dims.y ];
-    std::complex<float> const * const __restrict__ fEtz = & d_fEt[ 2 * dims.x * dims.y ];
+    emf::complex_t const * const __restrict__ fEtx = fEt.x();
+    emf::complex_t const * const __restrict__ fEty = fEt.y();
+    emf::complex_t const * const __restrict__ fEtz = fEt.z();
 
-    std::complex<float> const * const __restrict__ frho = & d_frho[                   0 ];
+    emf::complex_t const * const __restrict__ frho = frho_src.data();
 
-    constexpr std::complex<float> I{0,1};
+    constexpr emf::complex_t I{0,1};
+
+    auto dims = fEt.get_grid_dims();
+    auto global = fEt.get_grid_dims();
 
     #pragma omp parallel for
     for( unsigned idx = 0; idx < dims.y * dims.x; idx++ ) {
-        int ix = idx % dims.x;
-        int iy = idx / dims.x;
+        const int ix = idx % dims.x;
+        const int iy = idx / dims.x;
 
-        const float ky = ((iy < int(dims.y)/2) ? iy : (iy - int(dims.y)) ) * dk.y;
+        const float2 kvec = grid::fft::k( make_int2(ix,iy), global, dk );
+        
+        const float kx = kvec.x;
+        const float ky = kvec.y;
 
-        const float kx = ix * dk.x;
         const float k2 = kx*kx + ky*ky;
         const float β = ( k2 > 0 ) ? 1.f / k2 : 0;
         
         fEx[idx] = -I * kx * frho[idx] * β + fEtx[idx];
-		fEy[idx] = -I * ky * frho[idx] * β + fEty[idx];
-		fEz[idx] =                                fEtz[idx] ;
+        fEy[idx] = -I * ky * frho[idx] * β + fEty[idx];
+        fEz[idx] =                           fEtz[idx] ;
     }
 }
 
@@ -251,18 +289,15 @@ void update_fE( std::complex<float> * const __restrict__ d_fE,
  * @brief Advance EM fields 1 time step (no current or charge)
  * 
  */
-void EMF::advance() {
+void emf::advance() {
 
     // Advance transverse fields
-    advance_psatd_nocurr ( fEt -> d_buffer, fB -> d_buffer,  fEt -> dims, fft::dk( box ), dt );
+    advance_psatd_nocurr ( *fEt, *fB, grid::fft::dk( box ), dt );
 
     // Transform to real fields
-    fft_backward -> transform( *fEt, *E );
-    fft_backward -> transform( *fB, *B );
-
-    // Update guard cell values
-    E -> copy_to_gc();
-    B -> copy_to_gc();
+    // This will already update halo values
+    fft_backward -> transform( *E, *fEt );
+    fft_backward -> transform( *B, *fB );
 
     // Advance internal iteration number
     iter += 1;
@@ -274,31 +309,22 @@ void EMF::advance() {
  * @param current   Electric current
  * @param charge    Electric charge
  */
-void EMF::advance( Current & current, Charge & charge ) {
+void emf::advance( current & current, charge & charge ) {
 
     // Advance transverse fields
-    advance_psatd ( 
-        fEt -> d_buffer,
-        fB -> d_buffer,
-        current.fJ -> d_buffer,
-        fEt -> dims, fft::dk( box ), dt
-    );
+    advance_psatd ( *fEt , *fB,*current.fJ,grid::fft::dk( box ), dt );
 
     // Update total E-field
     update_fE ( 
-        fE -> d_buffer,
-        fEt -> d_buffer,
-        charge.frho -> d_buffer,
-        fE -> dims, fft::dk( box )
+        *fE,
+        *fEt,
+        *charge.frho,
+        grid::fft::dk( box )
     );
 
     // Transform to real fields
-    fft_backward -> transform( *fE, *E );
-    fft_backward -> transform( *fB, *B );
-
-    // Update guard cell values
-    E -> copy_to_gc();
-    B -> copy_to_gc();
+    fft_backward -> transform( *E, *fE );
+    fft_backward -> transform( *B, *fB );
 
     // Advance internal iteration number
     iter += 1;
@@ -310,43 +336,42 @@ void EMF::advance( Current & current, Charge & charge ) {
  * @param field     Field to save (0:E, 1:B)
  * @param fc        Field component to save (0, 1 or 2)
  */
-void EMF::save( const emf::field field, fcomp::cart const fc ) {
+void emf::save( const quantity quant, fcomp::cart const fc ) const {
 
     std::string vfname;  // Dataset name
     std::string vflabel; // Dataset label (for plots)
 
-    vec3grid<float3> * f = nullptr;
-    basic_grid3<std::complex<float>> * cf = nullptr;
+    grid::tiled_vec3<float> * f = nullptr;
+    grid::flat3<complex_t> * cf = nullptr;
 
-    switch (field ) {
-        case emf::e :
+    switch ( quant ) {
+        case quantity::e :
             f = E;
             vfname = "E";
             vflabel = "E_";
             break;
-        case emf::b :
+        case quantity::b :
             f = B;
             vfname = "B";
             vflabel = "B_";
             break;
-        case emf::fe :
+        case quantity::fe :
             cf = fE;
             vfname = "fE";
-            vflabel = "\\mathcal{F} E_";
+            vflabel = "\\mathcal{F}\\,E_";
             break;
-        case emf::fet :
+        case quantity::fet :
             cf = fEt;
             vfname = "fEt";
-            vflabel = "\\mathcal{F} E^\\perp_";
+            vflabel = "\\mathcal{F}\\,E^\\perp_";
             break;
-        case emf::fb :
+        case quantity::fb :
             cf = fB;
             vfname = "fB";
-            vflabel = "\\mathcal{F} B_";
+            vflabel = "\\mathcal{F}\\,B_";
             break;
         default:
-            std::cerr << "Invalid field type selected, aborting\n";
-            std::exit(1);
+            util::fatal( "Invalid quantity selected" );
     }
 
     switch ( fc ) {
@@ -363,8 +388,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             vflabel += 'z';
             break;
         default:
-            std::cerr << "Invalid field component (fc) selected, aborting\n";
-            std::exit(1);
+            util::fatal( "Invalid field component (fc) selected" );
     }
 
     zdf::iteration iteration = {
@@ -383,8 +407,9 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
 
     zdf::grid_axis axis[2];
 
-    if ( field == emf::e || field == emf::b ) {
-        axis[0] = (zdf::grid_axis) {
+    if ( f != nullptr ) {
+        // Real field
+        axis[0] = zdf::grid_axis {
             .name = (char *) "x",
             .min = 0.0,
             .max = box.x,
@@ -392,7 +417,7 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
             .units = (char *) "c/\\omega_n"
         };
 
-        axis[1] = (zdf::grid_axis) {
+        axis[1] = zdf::grid_axis {
             .name = (char *) "y",
             .min = 0.0,
             .max = box.y,
@@ -401,38 +426,41 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
         };
 
         info.axis = axis;
-        info.count[0] = E -> dims.x;
-        info.count[1] = E -> dims.y;
 
         f -> save( fc, info, iteration, "EMF" );
 
     } else {
-        float2 dk = fft::dk( box );
+        // Complex (FFT) field
+        // kx: 0 ... nx/2 (r2c half spectrum)
+        // ky: kspace_save() rotates by ceil(ny/2) rows, so it runs from
+        //     -floor(ny/2) to floor((ny-1)/2) modes
+        const float2 dk = grid::fft::dk( box );
+        const int nky = cf -> get_grid_dims().y;
 
-        axis[0] = (zdf::grid_axis) {
+        axis[0] = zdf::grid_axis {
             .name = (char *) "kx",
             .min = 0.0,
-            .max = (fEt -> dims.x - 1) * dk.x,
-            .label = (char *) "k_x"
+            .max = (cf -> get_grid_dims().x - 1) * dk.x,
+            .label = (char *) "k_x",
+            .units = (char *) "\\omega_n/c"
         };
 
-        axis[1] = (zdf::grid_axis) {
+        axis[1] = zdf::grid_axis {
             .name = (char *) "ky",
-            .min =  - dk.y * ( fEt -> dims.y / 2 ),
-            .max =    dk.y * ( fEt -> dims.y / 2 - 1 ),
-            .label = (char *) "k_y"
+            .min = - dk.y * ( nky / 2 ),
+            .max =   dk.y * ( (nky - 1) / 2 ),
+            .label = (char *) "k_y",
+            .units = (char *) "\\omega_n/c"
         };
 
         info.axis = axis;
-        info.count[0] = fEt -> dims.x;
-        info.count[1] = fEt -> dims.y;
 
-        cf -> save( fc, info, iteration, "EMF" );
+        grid::fft::kspace_save( *cf, fc, info, iteration, "EMF" );
     }
 }
 
 /**
- * @brief Get total field energy per field component
+ * @brief Get local field energy per field component
  * 
  * @warning This function will always recalculate the energy each time it is
  *          called.
@@ -440,57 +468,49 @@ void EMF::save( const emf::field field, fcomp::cart const fc ) {
  * @param ene_E     Total E-field energy (per component)
  * @param ene_B     Total B-field energy (per component)
  */
-void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
+void emf::get_energy( double3 & ene_E, double3 & ene_B ) const {
 
-    ene_E = make_double3(0,0,0);
-    ene_B = make_double3(0,0,0);
+    const uint2 ntiles          = E -> get_grid_ntiles();
+    const uint2 tile_dims       = E -> tile_dims;
+    const unsigned int ystride  = E -> tile_ext_dims.x;
 
-    const uint2 ntiles          = E -> ntiles;
-    const unsigned int tile_vol = E -> tile_vol;
-    const uint2 nx              = E -> nx;
-    const unsigned int offset   = E -> offset;
-    const unsigned int ystride  = E -> ext_nx.x;
+    double ex, ey, ez, bx, by, bz;
+    ex = ey = ez = 0;
+    bx = by = bz = 0;
 
-    float3 * const __restrict__ d_E = E -> d_buffer;
-    float3 * const __restrict__ d_B = B -> d_buffer;
+    // Loop over all local tiles
+    #pragma omp parallel for \
+        reduction(+:ex,ey,ez) \
+        reduction(+:bx,by,bz)
+    for( unsigned tid = 0; tid < ntiles.y * ntiles.x; ++tid ) {
+        float3 * const __restrict__ d_E = E -> tile_data(tid);
+        float3 * const __restrict__ d_B = B -> tile_data(tid);
 
-    // Loop over tiles
-    for( unsigned ty = 0; ty < ntiles.y; ++ty ) {
-        for( unsigned tx = 0; tx < ntiles.x; ++tx ) {
+        double3 tile_ene_E = make_double3(0,0,0);
+        double3 tile_ene_B = make_double3(0,0,0);
 
-            const auto tile_idx = make_uint2( tx, ty );
-            const auto tid      = tile_idx.y * ntiles.x + tile_idx.x;
-            const auto tile_off = tid * tile_vol + offset ;
+        // Loop over inner tile cells 
+        for( unsigned iy = 0; iy < tile_dims.y; ++iy ) {
+            for( unsigned ix = 0; ix < tile_dims.y; ++ix ) {
+                float3 const efld = d_E[ iy * ystride + ix ];
+                float3 const bfld = d_B[ iy * ystride + ix ];
 
-            auto tile_ene_E = make_double3(0,0,0);
-            auto tile_ene_B = make_double3(0,0,0);
+                tile_ene_E.x += efld.x * efld.x;
+                tile_ene_E.y += efld.y * efld.y;
+                tile_ene_E.z += efld.z * efld.z;
 
-            // Loop over cells
-            for( unsigned iy = 0; iy < nx.y; ++iy ) {
-                for( unsigned ix = 0; ix < nx.y; ++ix ) {
-                    float3 const efld = d_E[ tile_off + iy * ystride + ix ];
-                    float3 const bfld = d_B[ tile_off + iy * ystride + ix ];
-
-                    tile_ene_E.x += efld.x * efld.x;
-                    tile_ene_E.y += efld.y * efld.y;
-                    tile_ene_E.z += efld.z * efld.z;
-
-                    tile_ene_B.x += bfld.x * bfld.x;
-                    tile_ene_B.y += bfld.y * bfld.y;
-                    tile_ene_B.z += bfld.z * bfld.z;
-                }
+                tile_ene_B.x += bfld.x * bfld.x;
+                tile_ene_B.y += bfld.y * bfld.y;
+                tile_ene_B.z += bfld.z * bfld.z;
             }
-            
-            // reduce(add) data inside tile
-            
-            {   // Only 1 thread per tile does this
-                // Atomic ops
-                ene_E += tile_ene_E;
-                ene_B += tile_ene_B;
-            }
-
         }
+        
+        ex += tile_ene_E.x; ey += tile_ene_E.y; ez += tile_ene_E.z;
+        bx += tile_ene_B.x; by += tile_ene_B.y; bz += tile_ene_B.z;
     }
+
+    ene_E = make_double3(ex, ey, ez);
+    ene_B = make_double3(bx, by, bz);
 
     ene_E.x *= 0.5 * dx.x * dx.y;
     ene_E.y *= 0.5 * dx.x * dx.y;
@@ -501,3 +521,5 @@ void EMF::get_energy( double3 & ene_E, double3 & ene_B ) {
     ene_B.z *= 0.5 * dx.x * dx.y;
 
 }
+
+} // namespace em2ds
