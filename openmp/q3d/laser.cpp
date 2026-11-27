@@ -1,152 +1,452 @@
-#include "laser.h"
+#include "laser.hpp"
+
+#include "filter.hpp"
 
 #include <iostream>
 #include <cassert>
 
-#include "filter.h"
+namespace q3d {
+
+namespace laser {
+namespace kernel {
 
 /**
- * @brief Sets the longitudinal field components of E and B to ensure 0 divergence
- * 
- * @warning The algorithm assumes 0 field at the right boundary of the box
- * 
- * @note This version only allows parallelism on the outermost (ty) loop
- * 
- * @param E     E field (mode 1)
- * @param B     B field (mode 1)
- * @param dx    cell size (z,r)
+ * @brief Plane wave kernel parameters
  */
-void div_corr_z( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>& B, const float2 dx ) {
+struct plane_wave_params {
+    /// @brief Longitudinal envelope
+    envelope env;
+    /// @brief Wavenumber (= omega0, normalized units)
+    float k;
+    /// @brief Field amplitude (omega0 * a0)
+    float amp;
+    /// @brief Cosine of the polarization angle
+    float cos_pol;
+    /// @brief Sine of the polarization angle
+    float sin_pol;
+};
 
-    const int2 ntiles   = make_int2( E.ntiles.x, E.ntiles.y );
-    const auto tile_vol = E.tile_vol;
-    const int2  nx      = make_int2( E.nx.x, E.nx.y );
-    const auto offset   = E.offset;
-    const int jstride   = E.ext_nx.x; // Make sure jstride is signed because j may be < 0
+/**
+ * @brief Gaussian beam kernel parameters
+ */
+struct gaussian_params {
+    /// @brief Longitudinal envelope
+    envelope env;
+    /// @brief Laser frequency
+    float omega0;
+    /// @brief Beam waist
+    float W0;
+    /// @brief Focal plane position
+    float focus;
+    /// @brief Field amplitude (omega0 * a0)
+    float amp;
+    /// @brief Cosine of the polarization angle
+    float cos_pol;
+    /// @brief Sine of the polarization angle
+    float sin_pol;
+};
 
-    const double dz = dx.x;
-    const double dr = dx.y;
+/**
+ * @brief Gets longitudinal laser envelope at a given position
+ * 
+ * @param env       Envelope parameters
+ * @param z         Position
+ * @return float    Laser envelope
+ */
+inline float lon_env( const laser::envelope & env, const float z ) {
 
-    auto rdim = E.get_dims().y;
+    if ( z > env.start ) {
+        // Ahead of laser
+        return 0.0f;
+    } else if ( z > env.start - env.rise ) {
+        // Laser rise
+        const float csi = z - env.start;
+        const float e = std::sin( static_cast<float>(M_PI_2) * csi / env.rise );
+        return e*e;
+    } else if ( z > env.start - (env.rise + env.flat) ) {
+        // Flat-top
+        return 1.0f;
+    } else if ( z > env.start - (env.rise + env.flat + env.fall) ) {
+        // Laser fall
+        const float csi = z - (env.start - env.rise - env.flat - env.fall);
+        const float e = std::sin( static_cast<float>(M_PI_2) * csi / env.fall );
+        return e*e;
+    }
 
-    /// @brief imaginary unit
-    constexpr std::complex<float> I{0,1};
+    // Before laser
+    return 0.0f;
+}
 
-    #pragma omp parallel for
-    for( unsigned int grid_j = 1; grid_j < rdim; grid_j ++ ) {
+/**
+ * @brief Divergence correction - Prefix scan local data to get longitudinal components
+ * 
+ * Grid layout (cell j centred at r = j Δr):
+ *  E: Ez, Eθ at (i+1/2, j-1/2), Er at (i, j)
+ *  B: Br at (i+1/2, j-1/2), Bz at (i, j), Bθ at (i+1/2, j)
+ * 
+ * For each node the transverse divergence of mode m = 1 is integrated
+ * right to left along z, so that div.E = div.B = 0.
+ * 
+ * @note Guard cells must be valid on entry. The axial cell (global j = 0) is
+ *       not processed here, see lon_z_axis().
+ *
+ * @param E_grid        E field grid
+ * @param B_grid        B field grid
+ * @param dx            Cell size
+ */
+void lon_z_scan (
+    const int global_j,
+    grid::tiled_cyl3_view<complex_t> E_grid, 
+    grid::tiled_cyl3_view<complex_t> B_grid,
+    float2 const dx
+)
+{
 
-        std::complex<double> divEz = 0;
-        std::complex<double> divBz = 0;
+    complex_double_t divEz = 0;
+    complex_double_t divBz = 0;
+    
+    if ( global_j > 0 ) { // non-axial values
 
-        ///@brief y tile index
-        int ty = grid_j / nx.y;
-        
-        ///@brief j coordinate inside tile
-        int j = grid_j - ty * nx.y;
-        
+        const int jstride = E_grid.tile_ystride();
+
+        /// @brief longitudinal (z) cell size
+        const auto dz = dx.x;
+
+        /// @brief transverse (r) cell size
+        const auto dr = dx.y;
+
+        // Get tile_idx.y
+        const int tile_idx_y = global_j / E_grid.tile_dims.y;
+        // Get local tile j coordinate
+        const int j = global_j - tile_idx_y * E_grid.tile_dims.y;
+
+        const int nz      = E_grid.tile_dims.x;
+
         ///@brief r/Δr at center of cell
-        const float rc  = grid_j;
+        const float rc  = global_j;
         ///@brief r/Δr at center of lower (j-1) cell
-        const float rcm = grid_j - 1;
+        const float rcm = global_j - 1;
         ///@brief r/Δr at upper edge of cell
-        const float rp = grid_j + 0.5;
+        const float rp = global_j + 0.5f;
         ///@brief r/Δr at lower edge of cell
-        const float rm = grid_j - 0.5;
+        const float rm = global_j - 0.5f;
 
         ///@brief Δz/r at center of cell
         const float dz_rc = dz / (rc * dr);
         ///@brief Δz/r at lower edge of cell
         const float dz_rm = dz / (rm * dr);
 
+
+        /// @brief imaginary unit
+        constexpr complex_t I{0,1};
+
         // Process tiles right to left
-        for( int tx = ntiles.x-1; tx >= 0; tx -- ) {
+        for( int tile_idx_x = E_grid.grid_ntiles.x-1; tile_idx_x >=0; tile_idx_x-- ) {
 
-            const auto tid      = ty * ntiles.x + tx;
-            const auto tile_off = tid * tile_vol;
+            auto * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, tile_idx_y );
+            auto * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, tile_idx_y );
 
-            auto * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-            auto * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-            for( int i = nx.x - 1; i >= 0; i-- ) {
+            for( int i = nz-1; i >= 0; i -- ) {
 
                 divEz += dz_rm * (
                         ( rc * tile_E[i+1 + j*jstride].r - rcm * tile_E[i+1 + (j-1)*jstride].r) + 
-                        I * tile_E[i+1 + j*jstride].θ
+                        I * tile_E[i+1 + j*jstride].th
                     ) ;
-                tile_E[ i + j * jstride].z = divEz;
-                
                 divBz += dz_rc * (
                         ( rp * tile_B[i   + (j+1)*jstride].r - rm * tile_B[i + j*jstride].r ) + 
-                        I * tile_B[i + j*jstride].θ
+                        I * tile_B[i + j*jstride].th
                     ) ;
-                tile_B[ i + j * jstride ].z = divBz;
+                tile_E[i + j * jstride].z = complex_t( divEz );
+                tile_B[i + j * jstride].z = complex_t( divBz );
             }
         }
     }
-
-    // Axial values
-    for( int tx = 0; tx < ntiles.x; tx++ ) {
-        const auto tid = tx; // ty = 0;
-    
-        const auto tile_off = tid * tile_vol;
-
-        auto * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-        auto * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-        for( int i = 0; i < nx.x; i++ ) {
-            tile_E[ i + 0 * jstride ].z = tile_E[ i + 1 * jstride ].z;
-            tile_B[ i + 0 * jstride ].z = 0;
-        }
-    }
-
-    E.copy_to_gc();
-    B.copy_to_gc();
 }
 
+/**
+ * @brief Mode m = 1 axial cell correction for the transverse components
+ * 
+ * Sets the axial cell (row j = 0) values to match the field solver axial
+ * cell treatment:
+ * 
+ *  E: Ez = 0, Er = ( 4 Er(1) - Er(2) ) / 3, Eθ = Eθ(1)
+ *  B: Bz = 0, Br = Br(1), Bθ = i ( 9 Br(1) - Br(2) ) / 8
+ * 
+ * and zeroes the j = -1 guard row (unused for linear interpolation). The
+ * longitudinal components are set later by lon_z() / lon_z_axis().
+ * 
+ * @note Must be called with grid( grid_ntiles.x ), on the node holding the
+ *       axis, after the field kernel (plane_wave / gaussian) has completed.
+ *       Requires tile_dims.y >= 3.
+ * 
+ * @param E_grid        E field grid
+ * @param B_grid        B field grid
+ */
+void axial_m1 (
+    const int tile_idx_x, 
+    grid::tiled_cyl3_view<complex_t> E_grid,
+    grid::tiled_cyl3_view<complex_t> B_grid
+)
+{
+    auto * const __restrict__ E = E_grid.tile_data( tile_idx_x, 0 );
+    auto * const __restrict__ B = B_grid.tile_data( tile_idx_x, 0 );
+    const int jstride = E_grid.tile_ystride();
+
+    ///@brief imaginary unit
+    constexpr complex_t I{0,1};
+
+    for( int i = 0; i < static_cast<int>( E_grid.tile_dims.x ); i ++ ) {
+        E[ i + 0 * jstride ].z  = complex_t{0,0};
+        E[ i + 0 * jstride ].r  = ( 4.f * E[ i + 1*jstride ].r - E[ i + 2*jstride ].r ) / 3.f;
+        E[ i + 0 * jstride ].th = E[ i + 1*jstride ].th;
+
+        B[ i + 0 * jstride ].z  = complex_t{0,0};
+        B[ i + 0 * jstride ].r  = B[ i + 1*jstride ].r;
+        B[ i + 0 * jstride ].th = 0.125f * I * ( 9.f * B[ i + 1*jstride ].r - B[ i + 2*jstride ].r );
+
+        // values for j < 0 are unused for linear interpolation
+        E[ i + (-1) * jstride ] = cyl3<complex_t>{ complex_t{0,0}, complex_t{0,0}, complex_t{0,0} };
+        B[ i + (-1) * jstride ] = cyl3<complex_t>{ complex_t{0,0}, complex_t{0,0}, complex_t{0,0} };
+    }
+}
+
+/**
+ * @brief Divergence correction - Longitudinal components on the axial cell
+ * 
+ * Axial cell (row j = 0) values, matching the field solver axial cell
+ * treatment for m = 1: Ez(0) = -Ez(1) (Ez = 0 on the axis), Bz(0) = 0.
+ * 
+ * @note Must be called with grid( grid_ntiles.x ), on the node holding the
+ *       axis, after lon_z_scan() / lon_z_sum()
+ * 
+ * @param E_grid        E field grid
+ * @param B_grid        B field grid
+ */
+void lon_z_axis (
+    const int tile_idx_x, 
+    grid::tiled_cyl3_view<complex_t> E_grid,
+    grid::tiled_cyl3_view<complex_t> B_grid
+)
+{
+    auto * const __restrict__ tile_E = E_grid.tile_data( tile_idx_x, 0 );
+    auto * const __restrict__ tile_B = B_grid.tile_data( tile_idx_x, 0 );
+    const int jstride = E_grid.tile_ystride();
+
+    for( int i = 0; i < static_cast<int>( E_grid.tile_dims.x ); i ++ ) {
+        tile_E[ i ].z = - tile_E[ i + jstride ].z;
+        tile_B[ i ].z = complex_t{ 0, 0 };
+    }
+}
+
+} // namespace kernel
+} // namespace laser
+
+namespace {
+
+/**
+ * @brief Apply the mode m = 1 axial cell correction
+ */
+void axial_m1( 
+    grid::tiled_cyl3<laser::complex_t> & E, 
+    grid::tiled_cyl3<laser::complex_t> & B ) 
+{
+    #pragma omp parallel for
+    for( int tx = 0; tx < static_cast<int>( E.get_grid_ntiles().x ); tx++ ) {
+        laser::kernel::axial_m1( tx, E.view(), B.view() );
+    }
+}
+
+/**
+ * @brief Get cell size from box size and global grid dimensions
+ */
+template< typename T >
+float2 cell_size( const grid::tiled_cyl3<T> & E, const float2 box ) {
+    return make_float2(
+        box.x / E.get_grid_dims().x,
+        box.y / E.get_grid_dims().y
+    );
+}
+
+} // anonymous namespace
 
 
 /**
  * @brief Validates laser parameters
  * 
- * @return      0 on success, -1 on error
+ * @note Invalid parameters cause the simulation to stop (util::fatal)
  */
-int Laser::Pulse::validate() {
+void laser::pulse::validate() const {
 
     if ( a0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser a0, must be > 0\n";
-        return -1;
+        util::fatal( "Invalid laser parameter (a0), must be > 0" );
     }    
 
     if ( omega0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser OMEGA0, must be > 0\n";
-        return -1;
+        util::fatal( "Invalid laser parameter (omega0), must be > 0" );
     }    
 
-    if ( fwhm > 0 ) {
-        // The fwhm parameter overrides the rise/flat/fall parameters
-        rise = fwhm;
-        fall = fwhm;
-        flat = 0.;
-    } else {
+    // If fwhm > 0 it overrides the rise/flat/fall parameters, so these are
+    // only checked when it is not set
+    if ( fwhm <= 0 ) {
         if ( rise <= 0 ) {
-            std::cerr << "(*error*) Invalid laser RISE, must be > 0\n";
-            return (-1);
+            util::fatal( "Invalid laser parameter (rise), must be > 0" );
         }
 
         if ( flat < 0 ) {
-            std::cerr << "(*error*) Invalid laser FLAT, must be >= 0\n";
-            return (-1);
+            util::fatal( "Invalid laser parameter (flat), must be >= 0" );
         }
 
         if ( fall <= 0 ) {
-            std::cerr << "(*error*) Invalid laser FALL, must be > 0\n";
-            return (-1);
+            util::fatal( "Invalid laser parameter (fall), must be > 0" );
         }
     }
-
-    return 0;
 }
 
+/**
+ * @brief Get the longitudinal envelope
+ * 
+ * @note If fwhm > 0 this returns rise = fall = fwhm and flat = 0, otherwise
+ *       the rise, flat and fall parameters are used
+ * 
+ * @return laser::envelope 
+ */
+laser::envelope laser::pulse::get_envelope() const {
+    if ( fwhm > 0 ) {
+        return laser::envelope{ start, fwhm, 0.0f, fwhm };
+    }
+    return laser::envelope{ start, rise, flat, fall };
+}
+
+
+/**
+ * @brief Get the polarization direction
+ * 
+ * @note Uses cos_pol / sin_pol if either is set, otherwise these are
+ *       calculated from the polarization angle
+ * 
+ * @return float2   { cos(polarization), sin(polarization) }
+ */
+float2 laser::pulse::get_polarization() const {
+    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
+        return make_float2( std::cos( polarization ), std::sin( polarization ) );
+    }
+    return make_float2( cos_pol, sin_pol );
+}
+
+/**
+ * @brief Adds a new laser pulse onto an EMF object
+ * 
+ * @param emf   EMF object
+ * @return      Returns 0 on success
+ */
+int laser::pulse::add( emf & emf ) const {
+
+    if ( emf.nmodes < 2 ) {
+        util::fatal( "laser pulses require at least 2 cylindrical modes (m = 0,1)");
+    }
+
+    // Create temporary grids for m=1 fields, with the same layout as the
+    // simulation grids
+    const auto & E1 = emf.E -> mode(1);
+    const auto & B1 = emf.B -> mode(1);
+    grid::tiled_cyl3<complex_t> tmp_E( E1.grid_ntiles, E1.tile_dims, E1.gc, E1.grid_periodic );
+    grid::tiled_cyl3<complex_t> tmp_B( B1.grid_ntiles, B1.tile_dims, B1.gc, B1.grid_periodic );
+
+    // copy_to_gc() never writes guard cells on non-periodic global
+    // boundaries, so these must start at zero
+    tmp_E.zero();
+    tmp_B.zero();
+
+    // Get mode m = 1 laser fields
+    int ierr = launch( tmp_E, tmp_B, emf.box );
+
+    // Add laser to simulation
+    if ( ! ierr ) {
+        // Get longitudinal components if needed
+        lon_z( tmp_E, tmp_B, cell_size( tmp_E, emf.box ) );
+
+        if ( filter > 0 ) {
+            // Filtering along z commutes with the discrete divergence, so
+            // the filtered field remains divergence free
+            filter::compensated fcomp( filter::axis::z, filter );
+            fcomp.apply( tmp_E );
+            fcomp.apply( tmp_B );
+        }
+        // add() includes guard cells, and tmp_E / tmp_B have valid guard
+        // cells at this point, so no further guard cell update is required
+        emf.E -> mode(1).add( tmp_E );
+        emf.B -> mode(1).add( tmp_B );
+    }
+
+    return ierr;
+}
+
+namespace laser {
+namespace kernel {
+
+/**
+ * @brief Sets plane wave laser fields
+ * 
+ * @note Fields are set on the Yee grid: the transverse E components at z
+ *       and the transverse B components at z + Δz/2. The plane wave does
+ *       not depend on r. Only the interior cells are set; the axial cell
+ *       values are then corrected by axial_m1().
+ * 
+ * @note Mode m = 1 of a field polarized along (cos φ, sin φ), with
+ *       F = Re( F_1 exp(iθ) ):
+ *          Er_1 = f exp(-iφ), Eθ_1 = i f exp(-iφ)
+ *       and B = ẑ × E, i.e. Br_1 = -Eθ_1, Bθ_1 = Er_1
+ * 
+ * @param p                 Plane wave parameters
+ * @param E_fld             E field grid
+ * @param B_fld             B field grid
+ * @param dx                Cell size
+ */
+void plane_wave(
+    const uint2 tile_idx,
+    plane_wave_params const p,
+    grid::tiled_cyl3_view<complex_t> E_fld, grid::tiled_cyl3_view<complex_t> B_fld, 
+    float2 const dx )
+{
+    auto * const __restrict__ E = E_fld.tile_data( tile_idx );
+    auto * const __restrict__ B = B_fld.tile_data( tile_idx );
+
+    const int i0 = tile_idx.x * E_fld.tile_dims.x;
+
+    const auto nx = E_fld.tile_dims;
+
+    ///@brief cell size in longitudinal direction
+    const auto dz = dx.x;
+
+    ///@brief exp( -I pol )
+    const complex_t pol_r{ p.cos_pol, -p.sin_pol };
+    ///@brief I exp( -I pol )
+    const complex_t pol_th{ p.sin_pol, +p.cos_pol };
+
+    int jstride = E_fld.tile_ystride();
+
+    for( unsigned idx = 0; idx < nx.y * nx.x; idx ++ ) {
+        const int i = idx % nx.x;
+        const int j = idx / nx.x; 
+
+        const float z   = ( i0 + i ) * dz;
+        const float z_2 = ( i0 + i + 0.5f ) * dz;
+
+        const float fld   = p.amp * lon_env( p.env, z   ) * cosf( p.k * z   );
+        const float fld_2 = p.amp * lon_env( p.env, z_2 ) * cosf( p.k * z_2 );
+
+        E[ i + j * jstride ].z = 0;
+        E[ i + j * jstride ].r = +fld * pol_r;
+        E[ i + j * jstride ].th =+fld * pol_th;
+
+        B[ i + j * jstride ].z = 0;
+        B[ i + j * jstride ].r = -fld_2 * pol_th;
+        B[ i + j * jstride ].th = +fld_2 * pol_r;
+    }
+}
+
+} // namespace kernel
+} // namespace laser
 
 /**
  * @brief Launches a plane wave
@@ -156,116 +456,33 @@ int Laser::Pulse::validate() {
  * @param E     Electric field
  * @param B     Magnetic field
  * @param box   Box size
- * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ * @return      Returns 0 on success
  */
-int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>& B, float2 box ) {
+int laser::plane_wave::launch( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<complex_t>& B, const float2 box ) const {
 
-    // std::cout << "Launching plane wave...\n";
+    validate();
 
-    if ( validate() < 0 ) return -1;
+    const float2 dx  = cell_size( E, box );
+    const float2 pol = get_polarization();
 
-    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = std::cos( polarization );
-        sin_pol = std::sin( polarization );
+    const kernel::plane_wave_params p {
+        get_envelope(), omega0, omega0 * a0, pol.x, pol.y
+    };
+
+    auto ntiles = E.get_grid_ntiles();
+
+    #pragma omp parallel for collapse(2)
+    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+            kernel::plane_wave ( make_uint2( tx, ty ), p, E.view(), B.view(), dx );
+        }
     }
 
-    uint2 g_nx = E.dims;
-
-    float2 dx = make_float2(
-        box.x / g_nx.x,
-        box.y / g_nx.y
-    );
-
-    // Grid tile parameters
-    const auto ntiles   = E.ntiles;
-    const auto tile_vol = E.tile_vol;
-    const auto nx       = E.nx;
-    const auto offset   = E.offset;
-    const int  jstride  = E.ext_nx.x; // jstride should be signed
-
-    const float k = omega0;
-    const float amp = omega0 * a0;
-
-    ///@brief cell size in longitudinal direction
-    const auto dz = dx.x;
-
-    ///@brief imaginary unit
-    constexpr std::complex<float> I{0,1};
-    ///@brief exp( I pol )
-    const std::complex<float> pol_r{ cos_pol, -sin_pol };
-    ///@brief exp( I (pol-π/2) )
-    const std::complex<float> pol_θ{ sin_pol, +cos_pol };
-
-    // Loop over tiles
-    #pragma omp parallel for
-    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
-
-        const auto ty = tid / ntiles.x;
-        const auto tx = tid % ntiles.x;
-
-        const auto tile_off = tid * tile_vol;
-
-        // Copy data to shared memory and block
-        auto * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-        auto * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-        const int i0 = tx * nx.x;
-
-        for( unsigned j = 0; j < nx.y; j++ ) {
-            for( unsigned i = 0; i < nx.x; i++ ) {
-                const float z   = ( i0 + i ) * dz;
-                const float z_2 = ( i0 + i + 0.5 ) * dz;
-
-                float lenv   = amp * lon_env( z   );
-                float lenv_2 = amp * lon_env( z_2 );
-
-                tile_E[ i + j * jstride ].z = 0;
-                tile_E[ i + j * jstride ].r = +lenv * std::cos( k * z ) * pol_r;
-                tile_E[ i + j * jstride ].θ = -lenv * std::cos( k * z ) * pol_θ;
-
-                tile_B[ i + j * jstride ].z = 0;
-                tile_B[ i + j * jstride ].r = lenv_2 * std::cos( k * z_2 ) * pol_θ;
-                tile_B[ i + j * jstride ].θ = lenv_2 * std::cos( k * z_2 ) * pol_r;
-            }
-        }
-
-        // Correct axial cell values, see field solver
-        if ( ty == 0 ) {
-            // This is an m = 1 field
-            for( unsigned int i = 0; i < nx.x; i++ ) {
-                tile_E[ i + 0 * jstride ].z = 0;
-                tile_E[ i + 0 * jstride ].r = ( 4.f * tile_E[ i + 1*jstride ].r - tile_E[ i + 2*jstride ].r ) / 3.f;
-                tile_E[ i + 0 * jstride ].θ = tile_E[ i + 1*jstride ].θ;
-
-                tile_E[ i + 0 * jstride ].z = 0;
-                tile_B[ i + 0 * jstride ].r = + tile_B[ i + 1*jstride ].r;  
-                tile_B[ i + 0 * jstride ].θ = 0.125f * I * ( tile_B[ i + 2*jstride ].r - 9.f * tile_B[ i + 2*jstride ].r );
-            }
-
-            // values for j < 0 are unused for linear interpolation
-            for( unsigned int i = 0; i < nx.x; i++ ) {
-                tile_E[ i + (-1) * jstride ].z = 0;
-                tile_E[ i + (-1) * jstride ].r = 0;
-                tile_E[ i + (-1) * jstride ].θ = 0;
-
-                tile_B[ i + (-1) * jstride ].z = 0;
-                tile_B[ i + (-1) * jstride ].r = 0;
-                tile_B[ i + (-1) * jstride ].θ = 0;
-            }
-        }
-
-    }
+    // Correct axial cell values, see field solver
+    axial_m1( E, B );
 
     E.copy_to_gc();
     B.copy_to_gc();
-
-    if ( filter > 0 ) {
-        Filter::Compensated fcomp( coord::z, filter );
-        fcomp.apply(E);
-        fcomp.apply(B);
-    }
-
-    // std::cout << "Plane wave launched\n";
 
     return 0;
 }
@@ -273,165 +490,184 @@ int Laser::PlaneWave::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::co
 /**
  * @brief Validate Gaussian laser parameters
  * 
- * @return      0 on success, -1 on error
+ * @note Invalid parameters cause the simulation to stop (util::fatal)
  */
-int Laser::Gaussian::validate() {
+void laser::gaussian::validate() const {
     
-    if ( Laser::Pulse::validate() < 0 ) {
-        return -1;
-    }
+    laser::pulse::validate();
 
     if ( W0 <= 0 ) {
-        std::cerr << "(*error*) Invalid laser W0, must be > 0\n";
-        return (-1);
+        util::fatal( "Invalid laser parameter (W0), must be > 0" );
     }
-
-    return 0;
 }
 
+namespace laser {
+namespace kernel {
 
 /**
- * @brief Returns local phase for a gaussian beamn
+ * @brief Gaussian beam transverse profile and phase (3D, paraxial)
  * 
- * @param omega0    Beam frequency
- * @param W0        Beam waist
- * @param z         Position along focal line (focal plane at z = 0)
- * @param r         Position transverse to focal line (focal line at r = 0)
- * @return          Local field value
+ * @note Amplitude W0/W(z) and Gouy phase atan(z/z0), as for a 3D beam
+ *       (2D slab geometry would use (W0/W)^(1/2) and 0.5 atan(z/z0))
+ * 
+ * @param p     Gaussian beam parameters
+ * @param z     Distance from focal plane
+ * @param r     Distance from beam axis
+ * @return      Field profile (normalized)
  */
-inline float gauss_phase( const float omega0, const float W0, const float z, const float r ) {
-    const float z0   = omega0 * ( W0 * W0 ) / 2;
+inline float gauss_phase( const gaussian_params & p, const float z, const float r ) {
+    const float z0   = p.omega0 * ( p.W0 * p.W0 ) / 2;
     const float rho2 = r*r;
-    const float curv = rho2 * z / (z0*z0 + z*z);
-    const float rWl2 = (z0*z0)/(z0*z0 + z*z);
-    const float gouy_shift = atan2( z, z0 );
+    const float curv = 0.5f * rho2 * z / ( z0*z0 + z*z );
+    const float rWl2 = ( z0*z0 ) / ( z0*z0 + z*z );
+    const float gouy_shift = atan2f( z, z0 );
 
-    return std::sqrt( std::sqrt(rWl2) ) * 
-        std::exp( - rho2 * rWl2/( W0 * W0 ) ) * 
-        std::cos( omega0*( z + curv ) - gouy_shift );
+    return sqrtf( rWl2 ) * 
+        expf( - rho2 * rWl2 / ( p.W0 * p.W0 ) ) * 
+        cosf( p.omega0 * ( z + curv ) - gouy_shift );
 }
+
+/**
+ * @brief Sets Gaussian beam laser fields (transverse components)
+ * 
+ * @note Fields are set on the Yee grid (cell j centred at r = j Δr):
+ *       Er at (z, j Δr), Eθ at (z, (j-1/2) Δr),
+ *       Br at (z + Δz/2, (j-1/2) Δr), Bθ at (z + Δz/2, j Δr).
+ *       Only the interior cells are set; the axial cell values are then
+ *       corrected by axial_m1().
+ * 
+ * @note Polarization and B = ẑ × E as in the plane wave kernel
+ * 
+ * @param p                 Gaussian beam parameters
+ * @param E_fld             E field grid
+ * @param B_fld             B field grid
+ * @param dx                Cell size
+ */
+void gaussian( 
+    const uint2 tile_idx,
+    gaussian_params const p, 
+    grid::tiled_cyl3_view<complex_t> E_fld,
+    grid::tiled_cyl3_view<complex_t> B_fld, 
+    float2 const dx )
+{
+    auto * const __restrict__ E = E_fld.tile_data( tile_idx );
+    auto * const __restrict__ B = B_fld.tile_data( tile_idx );
+
+    const int i0 = tile_idx.x * E_fld.tile_dims.x;
+    const int j0 = tile_idx.y * E_fld.tile_dims.y;
+    const int jstride = E_fld.tile_ystride();
+
+    const auto nx = E_fld.tile_dims;
+
+    ///@brief exp( -I pol )
+    complex_t pol_r{ p.cos_pol, -p.sin_pol };
+    ///@brief I exp( -I pol )
+    complex_t pol_th{ p.sin_pol, +p.cos_pol };
+
+    for( unsigned idx = 0; idx < nx.y * nx.x; idx ++ ) {
+        const int i = idx % nx.x;
+        const int j = idx / nx.x; 
+
+        const float z   = ( i0 + i ) * dx.x;
+        const float z_2 = ( i0 + i + 0.5f ) * dx.x;
+
+        ///@brief r at center of cell (Er, Bθ)
+        const float rc = ( j0 + j ) * dx.y;
+        ///@brief r at lower edge of cell (Eθ, Br)
+        const float rl = ( j0 + j - 0.5f ) * dx.y;
+
+        const float lenv   = p.amp * lon_env( p.env, z );
+        const float lenv_2 = p.amp * lon_env( p.env, z_2 );
+
+        E[ i + j * jstride ].z  = 0;
+        E[ i + j * jstride ].r  = +lenv * gauss_phase( p, z - p.focus, rc ) * pol_r;
+        E[ i + j * jstride ].th = +lenv * gauss_phase( p, z - p.focus, rl ) * pol_th;
+
+        B[ i + j * jstride ].z  = 0;
+        B[ i + j * jstride ].r  = -lenv_2 * gauss_phase( p, z_2 - p.focus, rl ) * pol_th;
+        B[ i + j * jstride ].th = +lenv_2 * gauss_phase( p, z_2 - p.focus, rc ) * pol_r;
+    }
+}
+
+} // namespace kernel
+} // namespace laser
 
 /**
  * @brief Launches a Gaussian pulse
  * 
- * The E and B tiled grids have the complete laser field.
+ * The E and B tiled grids have only the transverse field components
  * 
  * @param E     Electric field
  * @param B     Magnetic field
- * @param dx    Cell size
- * @return      Returns 0 on success, -1 on error (invalid laser parameters)
+ * @param box   Box size
+ * @return      Returns 0 on success
  */
-int Laser::Gaussian::launch( cyl3grid<std::complex<float>>& E, cyl3grid<std::complex<float>>& B, float2 const box ) {
+int laser::gaussian::launch( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<complex_t>& B, const float2 box ) const {
 
-    if ( validate() < 0 ) return -1;
+    validate();
 
-    if (( cos_pol == 0 ) && ( sin_pol == 0 )) {
-        cos_pol = std::cos( polarization );
-        sin_pol = std::sin( polarization );
-    }
+    const float2 dx  = cell_size( E, box );
+    const float2 pol = get_polarization();
 
-    uint2 g_nx = E.dims;
+    const kernel::gaussian_params p {
+        get_envelope(), omega0, W0, focus, omega0 * a0, pol.x, pol.y
+    };
 
-    float2 dx = make_float2(
-        box.x / g_nx.x,
-        box.y / g_nx.y
-    );
+    auto ntiles = E.get_grid_ntiles();
 
-    // Grid tile parameters
-    const auto ntiles   = E.ntiles;
-    const auto tile_vol = E.tile_vol;
-    const auto nx       = E.nx;
-    const auto offset   = E.offset;
-    const int  jstride  = E.ext_nx.x;   // ystride must be signed
-
-    const float amp = omega0 * a0;
-
-    ///@brief cell size in longitudinal direction
-    const auto dz = dx.x;
-    ///@brief cell size in radial direction
-    const auto dr = dx.y;
-
-    ///@brief imaginary unit
-    constexpr std::complex<float> I{0,1};
-    ///@brief exp( I pol )
-    std::complex<float> pol_r{ cos_pol, -sin_pol };
-    ///@brief exp( I (pol-π/2) )
-    std::complex<float> pol_θ{ sin_pol, +cos_pol };
-
-    // Loop over tiles
-    #pragma omp parallel for
-    for( unsigned int tid = 0; tid < ntiles.y * ntiles.x; tid++ ) {
-
-        const auto tx = tid % ntiles.x;
-        const auto ty = tid / ntiles.x;
-        const auto tile_off = tid * tile_vol;
-
-        // Copy data to shared memory and block
-        auto * const __restrict__ tile_E = & E.d_buffer[ tile_off + offset ];
-        auto * const __restrict__ tile_B = & B.d_buffer[ tile_off + offset ];
-
-        const int i0 = tx * nx.x;
-        const int j0 = ty * nx.y;
-
-        for( unsigned j = 0; j < nx.y; j++ ) {
-            for( unsigned i = 0; i < nx.x; i++ ) {
-                const float z   = ( i0 + i       ) * dz;
-                const float z_2 = ( i0 + i + 0.5 ) * dz;
-
-                const float r   = ( j0 + j - 0.5 ) * dr;
-                const float r_2 = ( j0 + j       ) * dr;
-
-                const float lenv   = amp * lon_env( z   );
-                const float lenv_2 = amp * lon_env( z_2 );
-
-                tile_E[ i + j * jstride ].z = 0;
-                tile_E[ i + j * jstride ].r = +lenv * gauss_phase( omega0, W0, z - focus, r_2 ) * pol_r;
-                tile_E[ i + j * jstride ].θ = +lenv * gauss_phase( omega0, W0, z - focus, r   ) * pol_θ;
-
-                tile_B[ i + j * jstride ].z = 0;
-                tile_B[ i + j * jstride ].r = -lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r   ) * pol_θ;
-                tile_B[ i + j * jstride ].θ = +lenv_2 * gauss_phase( omega0, W0, z_2 - focus, r_2 ) * pol_r;
-            }
-        }
-
-        // Correct axial cell values, see field solver
-        if ( ty == 0 ) {
-            // This is an m = 1 field
-            for( int i = 0; i < static_cast<int>(nx.x); i++ ) {
-                tile_E[ i + 0 * jstride ].z = 0;
-                tile_E[ i + 0 * jstride ].r = ( 4.f * tile_E[ i + 1*jstride ].r - tile_E[ i + 2*jstride ].r ) / 3.f;
-                tile_E[ i + 0 * jstride ].θ = tile_E[ i + 1*jstride ].θ;
-
-                tile_B[ i + 0 * jstride ].z = 0;
-                tile_B[ i + 0 * jstride ].r = + tile_B[ i + 1*jstride ].r;  
-                tile_B[ i + 0 * jstride ].θ = 0.125f * I * ( 9.f * tile_B[ i + 1*jstride ].r - tile_B[ i + 2*jstride ].r );
-            }
-
-            // values for j < 0 are unused for linear interpolation
-            for( int i = 0; i < static_cast<int>( nx.x ); i++ ) {
-                tile_E[ i + (-1) * jstride ].z = 0;
-                tile_E[ i + (-1) * jstride ].r = 0;
-                tile_E[ i + (-1) * jstride ].θ = 0;
-
-                tile_B[ i + (-1) * jstride ].z = 0;
-                tile_B[ i + (-1) * jstride ].r = 0;
-                tile_B[ i + (-1) * jstride ].θ = 0;
-            }
+    #pragma omp parallel for collapse(2)
+    for( unsigned ty = 0; ty < ntiles.y; ty ++ ) {
+        for( unsigned tx = 0; tx < ntiles.x; tx ++ ) {
+            kernel::gaussian ( make_uint2( tx, ty ), p, E.view(), B.view(), dx );
         }
     }
 
+    // Correct axial cell values, see field solver
+    axial_m1( E, B );
+
+    // lon_z() reads neighboring cells across tile / node boundaries, so the
+    // guard cells must be valid first
     E.copy_to_gc();
     B.copy_to_gc();
 
-    if ( filter > 0 ) {
-        Filter::Compensated fcomp( coord::z, filter);
-        fcomp.apply(E);
-        fcomp.apply(B);
-    } 
+    return 0;
+}
 
-    div_corr_z( E, B, dx );
 
-    // std::cout << "Launched gaussian pulse\n";
+/**
+ * @brief Sets the longitudinal field components of E and B to ensure 0
+ *        divergence
+ * 
+ * @note Guard cells must be valid on entry. Guard cells are updated on exit.
+ * 
+ * @warning The algorithm assumes 0 field at the right boundary of the box. If
+ *          this is not true then the field values will be wrong.
+ * 
+ * @param E     E field
+ * @param B     B field
+ * @param dx    Cell size
+ * @return      Returns 0 on success
+ */
+int laser::gaussian::lon_z( grid::tiled_cyl3<complex_t>& E, grid::tiled_cyl3<complex_t>& B, const float2 dx ) const {
+
+    auto grid_dims = E.get_grid_dims();
+
+    #pragma omp parallel for
+    for( int j = 0; j < static_cast<int>( grid_dims.y ) ; j++ ) {
+        laser::kernel::lon_z_scan( j, E.view(), B.view(), dx );
+    }
+
+    // Longitudinal components on the axial cell
+    #pragma omp parallel for
+    for( int tx = 0; tx < static_cast<int>( E.get_grid_ntiles().x ); tx++ ) {
+        laser::kernel::lon_z_axis( tx, E.view(), B.view() );
+    }
+
+    // Correct longitudinal values on guard cells
+    E.copy_to_gc();
+    B.copy_to_gc();
 
     return 0;
 }
+
+} // namespace q3d

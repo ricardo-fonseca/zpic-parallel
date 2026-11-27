@@ -34,7 +34,7 @@ CC = clang
 CFLAGS = -O3
 
 CXX = clang++
-CXXFLAGS = -O3 -g
+CXXFLAGS = -O3
 
 # OpenMP support
 CXXFLAGS += -fopenmp
@@ -93,10 +93,7 @@ CFLAGS   += $(INCLUDES)
 # --------------------------------------------------------------------------- #
 
 SOURCE = current.cpp density.cpp emf.cpp laser.cpp \
-         udist.cpp species.cpp
-
-#emf.cpp laser.cpp  \
-#         udist.cpp density.cpp species.cpp cathode.cpp
+         udist.cpp species.cpp cathode.cpp
 
 SOURCE += main.cpp
 

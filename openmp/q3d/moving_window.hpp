@@ -1,8 +1,8 @@
-#ifndef __MOVING_WINDOW__
-#define __MOVING_WINDOW__
+#pragma once
 
+namespace q3d {
 
-class MovingWindow {
+class moving_window {
     private:
     bool active_;
     unsigned int n_move_;
@@ -10,7 +10,7 @@ class MovingWindow {
 
     public:
 
-    MovingWindow() : active_(false), n_move_(0), dx_(0) {};
+    moving_window() : active_(false), n_move_(0), dx_(0) {};
 
     /**
      * @brief Turns moving window on
@@ -20,6 +20,16 @@ class MovingWindow {
         active_ = true;
         n_move_ = 0;
         dx_ = dx;
+    }
+
+    /**
+     * @brief Turns moving window on
+     * 
+     */
+    void init( float const box, unsigned int const ncells ) {
+        active_ = true;
+        n_move_ = 0;
+        dx_ = box / ncells;
     }
 
     bool active() const {
@@ -54,4 +64,4 @@ class MovingWindow {
     }
 };
 
-#endif
+} // namespace q3d

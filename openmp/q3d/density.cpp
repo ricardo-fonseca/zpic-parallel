@@ -1,246 +1,347 @@
-#include "density.h"
+#include "density.hpp"
+#include "util/math.hpp"
+#include <cmath>
+#include <iostream>
+
+namespace q3d {
+
+/**
+ * @note The kernel:: functions process a single tile, mirroring the CUDA
+ *       kernels (one thread block per tile) in cuda-mpi/q3d/density.cu. The
+ *       host methods loop over all local tiles using OpenMP.
+ * 
+ *       On the CPU each tile is processed serially, so particles are simply
+ *       stored in the order they are generated. This is the same order the
+ *       GPU version obtains through its block scan: candidate particles are
+ *       ordered with the particle-in-cell index (i1, i0) as the slowest
+ *       index and the cell index as the fastest one, so that contiguous
+ *       particles are in different cells.
+ * 
+ *       Everything is in an anonymous namespace (internal linkage) to avoid
+ *       clashes with kernel:: symbols in other translation units.
+ */
+namespace {
+
+/**
+ * @brief Loops over all local tiles (OpenMP parallel), calling f( tile_idx )
+ * 
+ * @param part  Particle data object
+ * @param f     Function to call for each tile
+ */
+template < class F >
+inline void for_each_tile( cyl_part::particles_view const & view, F && f ) {
+    int const nx = view.grid_ntiles.x;
+    int const ny = view.grid_ntiles.y;
+
+    #pragma omp parallel for collapse(2) schedule(dynamic)
+    for( int ty = 0; ty < ny; ty++ ) {
+        for( int tx = 0; tx < nx; tx++ ) {
+            f( make_int2( tx, ty ) );
+        }
+    }
+}
 
 namespace kernel {
 
 /**
- * @brief kernel for injecting a uniform plasma density 
+ * @brief Injection range clipped to a single tile (tile cell coordinates)
  * 
- * @param tile_idx      Tile id
- * @param range         Cell range (global) to inject particles in 
- * @param ppc           Number of particles per cell (z,r,θ)
- * @param dr            Radial cell size
- * @param part          Particle data
  */
-inline void inject_uniform( 
-    uint2 const tile_idx, 
-    bnd<unsigned int> range,
+struct tile_range {
+    /// @brief Lower / upper (inclusive) x cell
+    int ri0, ri1;
+    /// @brief Lower / upper (inclusive) y cell
+    int rj0, rj1;
+    /// @brief Number of cells along x
+    int row;
+    /// @brief Total number of cells
+    int vol;
+};
+
+/**
+ * @brief Clips the (local) injection range to the current tile
+ * 
+ * @param range         Cell range (local, inclusive)
+ * @param tile_idx      Tile index (x,y)
+ * @param tile_dims     Tile dimensions
+ * @param r             (out) Clipped range in tile coordinates
+ * @return true         Range overlaps the tile
+ * @return false        Range does not overlap the tile
+ */
+inline bool clip_range( 
+    bounds_2d<unsigned int> const range, int2 const tile_idx, int2 const tile_dims,
+    tile_range & r )
+{
+    r.ri0 = static_cast<int>( range.x.lower ) - tile_idx.x * tile_dims.x;
+    r.ri1 = static_cast<int>( range.x.upper ) - tile_idx.x * tile_dims.x;
+    r.rj0 = static_cast<int>( range.y.lower ) - tile_idx.y * tile_dims.y;
+    r.rj1 = static_cast<int>( range.y.upper ) - tile_idx.y * tile_dims.y;
+
+    if (( r.ri0 >= tile_dims.x ) || ( r.ri1 < 0 ) ||
+        ( r.rj0 >= tile_dims.y ) || ( r.rj1 < 0 )) return false;
+
+    if ( r.ri0 < 0 ) r.ri0 = 0;
+    if ( r.rj0 < 0 ) r.rj0 = 0;
+    if ( r.ri1 >= tile_dims.x ) r.ri1 = tile_dims.x - 1;
+    if ( r.rj1 >= tile_dims.y ) r.rj1 = tile_dims.y - 1;
+
+    r.row = r.ri1 - r.ri0 + 1;
+    int const col = r.rj1 - r.rj0 + 1;
+
+    // Empty (inverted) range
+    if (( r.row <= 0 ) || ( col <= 0 )) return false;
+
+    r.vol = r.row * col;
+    return true;
+}
+
+/**
+ * @brief Cell (tile coordinates) corresponding to linear index inside the clipped range
+ * 
+ */
+inline int2 range_cell( tile_range const & r, int const idx ) {
+    return make_int2( idx % r.row + r.ri0, idx / r.row + r.rj0 );
+}
+
+/**
+ * @brief Position of particle (i0,i1) inside the cell, in [-0.5, 0.5)
+ *
+ */
+inline float2 cell_pos( unsigned const i0, unsigned const i1, double const dpcx, double const dpcy ) {
+
+    return make_float2(
+        ops::fma( dpcx, i0 + 0.5, -0.5 ),
+        ops::fma( dpcy, i1 + 0.5, -0.5 )
+    );
+}
+
+/**
+ * @brief Global cell offset of the current tile
+ * 
+ */ 
+inline int2 tile_shift( cyl_part::particles_view const & part, int2 const tile_idx ) {
+    return make_int2(
+        tile_idx.x * static_cast<int>( part.tile_dims.x ),
+        tile_idx.y * static_cast<int>( part.tile_dims.y )
+    );
+}
+
+/**
+ * @brief Radial position of a particle, in cell units (r / Δr)
+ * 
+ * Cell j is centred at r = j Δr, so the axial cell (j = 0) spans
+ * [-Δr/2, Δr/2].
+ * 
+ * @param shift     Global cell offset of the tile (see tile_shift())
+ * @param cell      Cell (tile coordinates)
+ * @param pos       Position inside the cell, in [-0.5, 0.5)
+ * @return double   r / Δr
+ */
+inline double part_r( int2 const shift, int2 const cell, float2 const pos ) {
+    return ( shift.y + cell.y ) + double( pos.y );
+}
+
+/**
+ * @brief Injection test for mask profiles
+ * 
+ * A particle is injected if it lies strictly off axis (r > 0) and inside the
+ * mask. Used by both inject_mask() and np_mask(), so that the particle count
+ * always matches the particles injected.
+ * 
+ * @tparam mask_t   Mask type
+ * @param mask      Injection mask
+ * @param shift     Global cell offset of the tile (see tile_shift())
+ * @param cell      Cell (tile coordinates)
+ * @param pos       Position inside the cell
+ * @return          true if the particle is to be injected
+ */
+template < class mask_t >
+inline bool inject_test( mask_t const & mask, int2 const shift, int2 const cell, float2 const pos ) {
+    return ( part_r( shift, cell, pos ) > 0 ) && mask( shift, cell, pos );
+}
+
+/**
+ * @brief kernel for injecting a uniform plasma density (mk2)
+ *
+ * @note Places contiguous particles in different cells. This minimizes memory
+ *       collisions when depositing current, especially for very low 
+ *       temperatures.
+ * 
+ * @param tile_idx  Tile index
+ * @param range     Cell range (local) to inject particles in
+ * @param ppc       Number of particles per cell 
+ * @param part      Particle data 
+ */
+void inject_uniform( 
+    int2 const tile_idx,
+    bounds_2d<unsigned int> range,
     uint3 const ppc,
     const float q0,
     double const dr,
-    ParticleData const part )
+    cyl_part::particles_view const part )
 {
+    int2 const tile_dims = make_int2( part.tile_dims.x, part.tile_dims.y );
+    int const tile_id = tile_idx.y * static_cast<int>( part.grid_ntiles.x ) + tile_idx.x;
 
-    const int2 nx     = make_int2( part.nx.x, part.nx.y );
+    tile_range r;
+    if ( ! clip_range( range, tile_idx, tile_dims, r ) ) return;
+
+    // Number of particles before injection
+    int np = part.tile_np[ tile_id ];
+
+    int const offset = part.tile_offset[ tile_id ];
+    int2   * __restrict__ const ix = &part.ix[ offset ];
+    float2 * __restrict__ const x  = &part.x[ offset ];
+    float3 * __restrict__ const u  = &part.u[ offset ];
+    float  * __restrict__ const q  = &part.q[ offset ];
+    float2 * __restrict__ const th = &part.th[ offset ];
+
+    double const dpcz = 1.0 / ppc.x;
+    double const dpcr = 1.0 / ppc.y;
+
+    /// @brief angular positions of particles
+    float2 pos_th[ ppc.z ];
+    pos_th[0] = { 1, 0 };
     
-    // Tile ID
-    int const tid = tile_idx.y * part.ntiles.x + tile_idx.x;
-
-    // Store number of particles before injection
-    const int np = part.np[ tid ];
-
-    // sync;
-
-    // Find injection range in tile coordinates
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
-
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row = (ri1-ri0+1);
-
-        const int offset =  part.offset[ tid ];
-
-        auto * __restrict__ const ix = &part.ix[ offset ];
-        auto * __restrict__ const x  = &part.x[ offset ];
-        auto * __restrict__ const u  = &part.u[ offset ];
-        auto * __restrict__ const q  = &part.q[ offset ];
-        auto * __restrict__ const θ  = &part.θ[ offset ];
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        /// @brief radial position shift for this tile
-        const int shiftr = tile_idx.y * nx.y;
-
-        /// @brief angular positions of particles
-        float2 posθ[ ppc.z ];
-        posθ[0] = { 1, 0 };
-        if ( ppc.z > 1 ) {
-            const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = {std::cos( Δθ ),std::sin( Δθ ) };
-            // Use recurrence formulas for remaining angles
-            for( unsigned i = 2; i < ppc.z; i++ ) {
-                posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
-                };
-            }
-        }
-
-        // Check if axial cell is part of injection domain
-        int axis = ( rj0 == 0 && shiftr == 0 );
-        if ( axis ) rj0 = 1;
-
-        /// @brief grid volume not including axial cell
-        int const grid_vol = (rj1 - rj0 + 1 ) * row;
-
-        // Inject particles outside axial cell
-        for( unsigned iθ = 0; iθ < ppc.z; iθ++ ) {
-            for( unsigned ir = 0; ir < ppc.y; ir++ ) {
-                for( unsigned iz = 0; iz < ppc.x; iz++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( iz + 0.5 ) - 0.5,
-                        dpcr * ( ir + 0.5 ) - 0.5
-                    );
-
-                    int ppc_idx = ( iθ * ppc.y + ir ) * ppc.x + iz;
-
-                    // On GPU each thread takes 1 cell
-                    for( int grid_idx = 0; grid_idx < grid_vol; grid_idx ++ ) {
-                        int2 const cell = make_int2( 
-                            grid_idx % row + ri0,
-                            grid_idx / row + rj0
-                        );
-
-                        double r = ( shiftr + cell.y ) + double( pos.y );
-                        float qnorm = q0 * r * dr;
-
-                        int part_idx = np + grid_vol * ppc_idx + grid_idx;
-
-                        ix[ part_idx ] = cell;
-                        x [ part_idx ] = pos;
-                        u [ part_idx ] = make_float3(0,0,0);
-                        q [ part_idx ] = qnorm;
-                        θ [ part_idx ] = posθ[ iθ ];
-                    }
-                }
-            }
-        }
-
-        ///@brief particles already injected in tile
-        int tile_np = grid_vol * ppc.z * ppc.y * ppc.x ;
-
-        // Axial cells get special treatment
-        if ( axis ) {
-            
-            // Additional charge correction for particles on axial cell
-            // see notes
-            double α, roff;
-            if ( ppc.y % 2 == 0) {
-                α = q0 * ( 2. * ( ppc.y*ppc.y - 1) ) / ( 3 * ( ppc.y * ppc.y ) );
-                roff = 0.5;
-            } else {
-                α  = q0 * (2. / 3.);
-                roff = 1;
-            }
-
-            for( unsigned iθ = 0; iθ < ppc.z; iθ++ ) {
-                for( unsigned ir = 0; ir < ppc.y/2; ir++ ) {
-                    for( unsigned iz = 0; iz < ppc.x; iz++) {
-                        float2 const pos = make_float2(
-                            dpcz * ( iz + 0.5 ) - 0.5,
-                            dpcr * ( ir + roff )
-                        );
-
-                        int ppc_idx = ( iθ * (ppc.y/2) + ir ) * ppc.x + iz;
-
-                        // On GPU each thread takes 1 cell
-                        for( int grid_idx = 0; grid_idx < row; grid_idx ++ ) {
-                            int2 const cell = make_int2( grid_idx, 0 );
-
-                            int part_idx = np + tile_np + row * ppc_idx + grid_idx;
-
-                            ix[ part_idx ] = cell;
-                            x [ part_idx ] = pos;
-                            u [ part_idx ] = make_float3(0,0,0);
-                            q [ part_idx ] = α * pos.y * dr;
-                            θ [ part_idx ] = posθ[ iθ ];
-                        }
-                    }
-                }
-            }
-            tile_np += row * ppc.z * ( ppc.y / 2 ) * ppc.x;
-        }
-
-        // Update global number of particles in tile
-        { // only one thread per tile does this
-            part.np[ tid ] = np + tile_np;
+    if ( ppc.z > 1 ) {
+        const float Δt = ( 2 * M_PI ) / ppc.z;
+        for( unsigned i = 1; i < ppc.z; i ++) {
+            pos_th[i] = { std::cos( i * Δt ), std::sin( i * Δt ) };
         }
     }
-}
 
+    // Charge normalization
+    double const qnorm =  q0 * dr;
+
+    /// @brief radial position shift for this tile
+    const int shiftr = tile_idx.y * tile_dims.y;
+
+    // If range include radial axis handle it separately
+    bool axis = ( r.rj0 == 0 && shiftr == 0 );
+    if (axis) {
+        r.rj0 = 1;
+        r.vol -= r.row;
+    }
+
+    // Particles are processed in flat loops (same as the CUDA version, where
+    // this keeps all threads busy even when the injection range is small).
+    // The flat index is n = ppc_idx * ncells + cell_idx,
+    // i.e., the particle-in-cell index is the slowest, so that contiguous
+    // particles are in different cells (same ordering as the original nested
+    // loop version), with ppc_idx = ( ith * nr + ir ) * ppc.x + iz
+
+    // Inject particles outside axial cell
+    {
+        int const total = r.vol * static_cast<int>( ppc.x * ppc.y * ppc.z );
+
+        for( int n = 0; n < total; n ++ ) {
+            int const ppc_idx = n / r.vol;
+            int const idx     = n - ppc_idx * r.vol;
+
+            unsigned const iz  = ppc_idx % ppc.x;
+            unsigned const t   = ppc_idx / ppc.x;
+            unsigned const ir  = t % ppc.y;
+            unsigned const ith = t / ppc.y;
+
+            float2 const pos = cell_pos( iz, ir, dpcz, dpcr );
+            int2 const cell  = range_cell( r, idx );
+
+            // Radial position (cell units), the axial cell is handled below
+            double const rpos = ( shiftr + cell.y ) + double( pos.y );
+
+            int const part_idx = np + n;
+            ix[ part_idx ] = cell;
+            x[ part_idx ]  = pos;
+            u[ part_idx ]  = make_float3( 0, 0, 0 );
+            q [ part_idx ] = rpos * qnorm;
+            th[ part_idx ] = pos_th[ ith ];
+        }
+
+        // add particles already injected in tile
+        np += total;
+    }
+
+    // Axial cells get special treatment
+    if ( axis ) {
+        
+        // Additional charge correction for particles on axial cell
+        // see notes
+        double α, roff;
+        if ( ppc.y % 2 == 0) {
+            α = q0 * ( 2. * ( ppc.y*ppc.y - 1) ) / ( 3 * ( ppc.y * ppc.y ) );
+            roff = 0.5;
+        } else {
+            α  = q0 * (2. / 3.);
+            roff = 1;
+        }
+
+        // Only particles with r > 0 are injected in the axial cell
+        unsigned const nr_axis = ppc.y / 2;
+        int const total = r.row * static_cast<int>( ppc.x * nr_axis * ppc.z );
+
+        for( int n = 0; n < total; n ++ ) {
+            int const ppc_idx  = n / r.row;
+            int const grid_idx = n - ppc_idx * r.row;
+
+            unsigned const iz  = ppc_idx % ppc.x;
+            unsigned const t   = ppc_idx / ppc.x;
+            unsigned const ir  = t % nr_axis;
+            unsigned const ith = t / nr_axis;
+
+            float2 const pos = make_float2(
+                dpcz * ( iz + 0.5 ) - 0.5,
+                dpcr * ( ir + roff )
+            );
+
+            int2 const cell = make_int2( r.ri0 + grid_idx, 0 );
+
+            int const part_idx = np + n;
+            ix[ part_idx ] = cell;
+            x [ part_idx ] = pos;
+            u [ part_idx ] = make_float3(0,0,0);
+            q [ part_idx ] = α * pos.y * dr;
+            th[ part_idx ] = pos_th[ ith ];
+        }
+        np += total;
+    }
+
+    // Update global number of particles in tile
+    part.tile_np[ tile_id ] = np;
+}
 
 /**
  * @brief Kernel for counting how many particles will be injected
  * 
- * @note Uses only 1 thread per tile
- * 
- * @param range     Cell range to inject particles in
- * @param ppc       Number of particles per cell
- * @param nx        Number of cells in tile
- * @param d_tiles   Particle tile information
- * @param np        Number of particles to inject (out)
+ * @param tile_idx  Tile index
+ * @param range     Cell range (local) to inject particles in
+ * @param ppc       Number of particles per cell 
+ * @param part      Particle data
+ * @param tile_np   (out) Number of particles to inject per tile
  */
-inline void np_inject_uniform( 
-    uint2 const tile_idx, 
-    bnd<unsigned int> range,
+void np_uniform( 
+    int2 const tile_idx,
+    bounds_2d<unsigned int> range,
     uint3 const ppc,
-    ParticleData const part,
-    int * np )
+    cyl_part::particles_view const part,
+    int * tile_np )
 {
+    int2 const tile_dims = make_int2( part.tile_dims.x, part.tile_dims.y );
+    int const tile_id = tile_idx.y * static_cast<int>( part.grid_ntiles.x ) + tile_idx.x;
 
-    const uint2 ntiles  = part.ntiles;
-    const uint2 nx = part.nx;
-
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-        // Find injection range in tile coordinates
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // Comparing signed and unsigned integers does not work here
-    int const nxx = nx.x;
-    int const nxy = nx.y;
-
-    int local_np;
-
-    const auto ppc_zθ = ppc.x * ppc.z;
-    const auto ppc_r  = ppc.y;
-
-    // If range overlaps with tile
-    if (( ri0 < nxx ) && ( ri1 >= 0 ) &&
-        ( rj0 < nxy ) && ( rj1 >= 0 )) {
-        
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nxx ) ri1 = nxx-1;
-        if (rj1 >= nxy ) rj1 = nxy-1;
-
-        int const row = (ri1-ri0+1);
-
-        if ( tile_idx.y * nx.y + rj0 > 0 ) {
-            // Tile does not include axial boundary
-            local_np = (rj1-rj0+1) * row * ppc_zθ * ppc_r;
+    tile_range r;
+    if ( clip_range( range, tile_idx, tile_dims, r  ) ) {
+        bool axis = ( r.rj0 == 0 && tile_idx.y == 0 );
+        if ( ! axis ) {
+            tile_np[ tile_id ] = r.vol * static_cast<int>( ppc.x * ppc.y * ppc.z );
         } else {
-            // Tile includes axial boundary
-            //std::since no particles will be injected for r <= 0, we only inject
-            // half the particles in the axial cell
-            local_np = row * ppc_zθ * ( (rj1-rj0) * ppc_r + ppc_r / 2 );
+            tile_np[ tile_id ] = r.row * static_cast<int>( ppc.x * ppc.z * ( (r.rj1-r.rj0) * ppc.y + ppc.y / 2 ) );
         }
     } else {
-        local_np = 0;
+        tile_np[ tile_id ] = 0;
     }
-
-    np[ tid ] = local_np;
-
-    // std::cout << __func__ << " np[" << tid << "] = " << np[tid] << '\n';
-
 }
+
+} // namespace kernel
 
 }
 
@@ -255,22 +356,17 @@ inline void np_inject_uniform(
  *                  units (z,r)
  * @param range     Cell range in which to inject
  */
-void Density::Uniform::inject( Particles & part, const float norm,
-    uint3 const ppc, float2 const dx, float2 const ref,
-    bnd<unsigned int> range ) const
+void density::uniform::inject( cyl_part::particles & part, float const norm, 
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {
-    auto ntiles = part.ntiles;
+    /// @brief single particle charge
+    float q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
-    /// @briefstd::single particle charge
-    auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
-
-    #pragma omp parallel for
-    for( unsigned tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-        auto tx = tid % ntiles.x;
-        auto ty = tid / ntiles.x;
-        const uint2 tile_idx = make_uint2( tx, ty );
-        kernel::inject_uniform( tile_idx, range, ppc, q0, dx.y, part );
-    }
+    auto const view = part.view();
+    for_each_tile( view, [&]( int2 const tile_idx ) {
+        kernel::inject_uniform( tile_idx, 
+            range, ppc, q0, dx.y, view );
+    });
 }
 
 /**
@@ -284,253 +380,239 @@ void Density::Uniform::inject( Particles & part, const float norm,
  * @param range     Cell range in which to inject
  * @param np        (out) Number of particles to inject per tile
  */
-void Density::Uniform::np_inject( Particles & part, 
-    uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+void density::uniform::np_inject( cyl_part::particles & part, 
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-
-    #pragma omp parallel for
-    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-        auto tx = tid % ntiles.x;
-        auto ty = tid / ntiles.x;
-        const auto tile_idx = make_uint2( tx, ty );
-        kernel::np_inject_uniform(
-            tile_idx, range, ppc,
-            part, np
-        );
-    }
+    auto const view = part.view();
+    for_each_tile( view, [&]( int2 const tile_idx ) {
+        kernel::np_uniform( tile_idx, range, ppc, part.view(), np );
+    });
 }
 
+namespace {
 namespace kernel {
 
-/**
- * @brief Kernel for injecting step profile
- * 
- * @tparam dir      Step direction ( coord::x | coord::y )
- * @param tile_idx  Tile index (x,y)
- * @param range     Cell range to inject particles in
- * @param step      Step position (normalized to node grid coordinates)
- * @param ppc       Number of particles per cell
- * @param dr        Radial cell size
- * @param part      Particle data
- */
 template < coord::cyl dir >
-void inject_step( 
-    uint2 const tile_idx, 
-    bnd<unsigned int> range,
-    const float step, const uint3 ppc, const float q0,
+struct step_mask {
+    /// @brief Step position (normalized to node grid coordinates)
+    float step;
+
+    int operator()( const int2 shift, const int2 cell, const float2 pos ) const {
+        float t;
+        if constexpr ( dir == coord::cyl::z ) t = (shift.x + cell.x) + (pos.x + 0.5);
+        if constexpr ( dir == coord::cyl::r ) t = (shift.y + cell.y) + pos.y;
+
+        return (t >= step);
+    }
+};
+
+template < coord::cyl dir >
+struct slab_mask {
+    /// @brief Slab start position (normalized to node grid coordinates)
+    float start;
+    /// @brief Slab end position (normalized to node grid coordinates)
+    float finish;
+
+    int operator()( const int2 shift, const int2 cell, const float2 pos ) const {
+        float s;
+        if constexpr ( dir == coord::cyl::z ) s = (shift.x + cell.x) + (pos.x + 0.5);
+        if constexpr ( dir == coord::cyl::r ) s = (shift.y + cell.y) + pos.y;
+        return ( s >= start ) && ( s < finish );
+    }
+};
+
+/**
+ * @brief Sphere mask: inject for positions strictly inside the circle
+ * 
+ */
+struct sphere_mask {
+    /// @brief Sphere center in simulation units (relative to ref)
+    float2 center;
+    /// @brief Square of sphere radius in simulation units
+    double r2;
+    /// @brief Cell size
+    float2 dx;
+ 
+    int operator()( const int2 shift, const int2 cell, const float2 pos ) const {
+        double gz = ops::fma((shift.x + cell.x) + (pos.x+0.5), 
+            static_cast<double>(dx.x),
+            -static_cast<double>(center.x));
+        double gr = ops::fma((shift.y + cell.y) + static_cast<double>(pos.y), 
+            static_cast<double>(dx.y),
+            -static_cast<double>(center.y));
+        return ops::fma( gz, gz, gr*gr) < r2;
+    }
+};
+
+/**
+ * @brief Kernel for injecting particles using a mask profile
+ * 
+ * @details All candidate particles in the tile (cells in range x particles per
+ *          cell) are processed in a single flat loop (in the CUDA version this
+ *          keeps all threads busy even when the injection range is small,
+ *          e.g. a single cell column when a moving window advances).
+ * 
+ *          The flat candidate index is `n = ppc_idx * vol + cell_idx`, with
+ *          `ppc_idx = ( ith * ppc.y + ir ) * ppc.x + iz`, i.e. the
+ *          particle-in-cell index is the slowest, which reproduces the
+ *          particle ordering of the original (nested loop) version.
+ * 
+ *          Particle positions in the buffer are deterministic: each injected
+ *          particle is stored at the position given by the number of injected
+ *          candidates with a lower flat index. Here this is simply the
+ *          generation order; the CUDA version obtains the same order with a
+ *          ballot-based block scan.
+ * 
+ * @tparam mask_t       Mask type
+ * @param tile_idx      Tile index
+ * @param mask          Injection mask
+ * @param range         Cell range (local) to inject particles in
+ * @param ppc           Number of particles per cell
+ * @param q0            Reference charge
+ * @param dr            Radial cell size
+ * @param part          Particle data
+ */
+template < class mask_t >
+void inject_mask( 
+    int2 const tile_idx,
+    mask_t mask,
+    bounds_2d<unsigned int> range,
+    const uint3 ppc,
+    const float q0,
     double const dr,
-    ParticleData const part )
+    cyl_part::particles_view const part )
 {
-    const uint2 ntiles  = part.ntiles;
-    const int2 nx = make_int2( part.nx.x, part.nx.y );
+    int2 const tile_dims = make_int2( part.tile_dims.x, part.tile_dims.y );
+    int const tile_id = tile_idx.y * static_cast<int>( part.grid_ntiles.x ) + tile_idx.x;
 
-    // Tile ID
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
+    // Block-uniform early exit
+    tile_range local_range;
+    if ( ! clip_range( range, tile_idx, tile_dims, local_range ) ) return;
 
-    // Store number of particles before injection
-    int np_tile = part.np[ tid ];
+    // Total number of candidate particles in tile
+    int const total = local_range.vol * static_cast<int>( ppc.x * ppc.y * ppc.z );
 
-    // sync
+    // Block-uniform early exit (e.g. ppc = 0)
+    if ( total == 0 ) return;
 
-    // Find injection range in tile coordinates
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
+    // Number of particles before injection
+    int np = part.tile_np[ tile_id ];
 
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-   
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
+    /// @brief angular positions of particles
+    float2 pos_th[ ppc.z ];
+    pos_th[0] = { 1, 0 };
 
-        // Limit to range inside this tile
-        if ( ri0 < 0 ) ri0 = 0;
-        if ( rj0 < 0 ) rj0 = 0;
-        if ( ri1 >= nx.x ) ri1 = nx.x-1;
-        if ( rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row      = (ri1 - ri0 + 1);
-        int const grid_vol = (rj1 - rj0 + 1) * row;
-
-        const int offset =  part.offset[ tid ];
-
-        auto * __restrict__ const ix = &part.ix[ offset ];
-        auto * __restrict__ const x  = &part.x[ offset ];
-        auto * __restrict__ const u  = &part.u[ offset ];
-        auto * __restrict__ const q  = &part.q[ offset ];
-        auto * __restrict__ const θ  = &part.θ[ offset ];
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        const int shiftz = tile_idx.x * nx.x;
-        const int shiftr = tile_idx.y * nx.y;
-
-        /// @brief angular positions of particles
-        float2 posθ[ ppc.z ];
-        posθ[0] = { 1, 0 };
-        if ( ppc.z > 1 ) {
-            const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = {std::cos( Δθ ),std::sin( Δθ ) };
-            // Use recurrence formulas for remaining angles
-            for( unsigned i = 2; i < ppc.z; i++ ) {
-                posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
-                };
-            }
+    if ( ppc.z > 1 ) {
+        const float Δt = ( 2 * M_PI ) / ppc.z;
+        for( unsigned i = 1; i < ppc.z; i ++ ) {
+            pos_th[i] = { std::cos( i * Δt ), std::sin( i * Δt ) };
         }
+    }
 
-        // Charge normalization
-        auto qnorm =  q0 * dr;
-        auto α = ( ppc.y % 2 == 0) ? 
-            ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
-            (2. / 3.);
+    int const offset =  part.tile_offset[ tile_id ];
+    int2   * __restrict__ ix = &part.ix[ offset ];
+    float2 * __restrict__ x  = &part.x[ offset ];
+    float3 * __restrict__ u  = &part.u[ offset ];
+    float  * __restrict__ const q  = &part.q[ offset ];
+    float2 * __restrict__ const th = &part.th[ offset ];
 
-        for( unsigned iθ = 0; iθ < ppc.z; iθ++ ) {
-            for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-                for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( i0 + 0.5 ) - 0.5,
-                        dpcr * ( i1 + 0.5 ) - 0.5
-                    );
-                    for( int idx = 0; idx < grid_vol; idx++) {
-                        int2 const cell = make_int2(
-                            idx % row + ri0,
-                            idx / row + rj0
-                        );
-                        auto r = (shiftr + cell.y) + pos.y;
+    double const dpcz = 1.0 / ppc.x;
+    double const dpcr = 1.0 / ppc.y;
 
-                        int inj;
-                        if constexpr ( dir == coord::z ) inj = ((shiftz + cell.x) + (pos.x + 0.5) > step ) && (r > 0);
-                        if constexpr ( dir == coord::r ) inj = r > step && r > 0;
-                        
-                        // int off = device::block_exscan_add( inj );
-                        int off = 0; // always 0 with 1 thread
+    // Position in global tile array
+    int2 const shift = tile_shift( part, tile_idx );
 
-                        if ( inj ) {
-                            const int k = np_tile + off;
-                            ix[ k ] = cell;
-                            x[ k ]  = pos;
-                            u[ k ]  = float3{0};
-                            q [ k ] = r * ( (shiftr + cell.y == 0) ? α * qnorm : qnorm );
-                            θ [ k ] = posθ[ iθ ];
-                        }
+    // Charge normalization
+    double const qnorm =  q0 * dr;
+    /// @brief Axial cell charge correction (same as inject_uniform)
+    double const α = ( ppc.y % 2 == 0) ? 
+        ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
+        (2. / 3.);
 
-                        // Not needed with 1 thread / tile
-                        // inj = device::warp_reduce_add( inj );
-                        
-                        {   // only 1 thread / tile does this
-                            // atomicAdd( &_np, inj );
-                            np_tile += inj;
-                        }
+    /// @brief radial position shift for this tile
+    const int shiftr = shift.y;
+
+    for( int n = 0; n < total; n++ ) {
+
+        // Particle-in-cell index (slowest) and cell index (fastest)
+        int const ppc_idx  = n / local_range.vol;
+        int const cell_idx = n - ppc_idx * local_range.vol;
+
+        unsigned const iz = ppc_idx % ppc.x;
+        unsigned const t  = ppc_idx / ppc.x;
+        unsigned const ir = t % ppc.y;
+        unsigned ith = t / ppc.y;
+
+        float2 pos  = cell_pos( iz, ir, dpcz, dpcr );
+        int2 cell = range_cell( local_range, cell_idx );
+        int inj  = inject_test( mask, shift, cell, pos );
+
+
+        if ( inj ) {
+            // Radial position (cell units)
+            double const rpos = part_r( shift, cell, pos );
+            ix[ np ] = cell;
+            x [ np ]  = pos;
+            u [ np ]  = make_float3(0,0,0);
+            q [ np ] = rpos * ( (shiftr + cell.y == 0) ? α * qnorm : qnorm );
+            th[ np ] = pos_th[ ith ];
+            np ++;
+        }
+    }
+
+    part.tile_np[ tile_id ] = np;
+}
+
+/**
+ * @brief Kernel for counting how many particles will be injected by a mask profile
+ * 
+ * @tparam mask_t       Mask type
+ * @param tile_idx      Tile index
+ * @param mask          Injection mask
+ * @param range         Cell range (local) to inject particles in
+ * @param ppc           Number of particles per cell
+ * @param part          Particle data
+ * @param tile_np       (out) Number of particles to inject per tile
+ */
+template < class mask_t >
+void np_mask( 
+    int2 const tile_idx,
+    mask_t mask,
+    bounds_2d<unsigned int> range,
+    const uint3 ppc,
+    cyl_part::particles_view const part, int * tile_np )
+{
+    int2 const tile_dims = make_int2( part.tile_dims.x, part.tile_dims.y );
+    int const tile_id = tile_idx.y * static_cast<int>( part.grid_ntiles.x ) + tile_idx.x;
+
+    int inj_np = 0;
+
+    tile_range r;
+    if ( clip_range( range, tile_idx, tile_dims, r ) ) {
+
+        double const dpcz = 1.0 / ppc.x;
+        double const dpcr = 1.0 / ppc.y;
+
+        int2 const shift = tile_shift( part, tile_idx );
+
+        for( int idx = 0; idx < r.vol; idx++ ) {
+            int2 const cell = range_cell( r, idx );
+            for( unsigned ith = 0; ith < ppc.z; ith++ ) {
+                for( unsigned ir = 0; ir < ppc.y; ir++ ) {
+                    for( unsigned iz = 0; iz < ppc.x; iz++ ) {
+                        float2 const pos = cell_pos( iz, ir, dpcz, dpcr );
+                        inj_np += inject_test( mask, shift, cell, pos );
                     }
                 }
             }
         }
-
-        // sync;
-
-        {   // Only 1 thread per tile does this
-            part.np[ tid ] = np_tile;
-        }
     }
+
+    tile_np[ tile_id ] = inj_np;
 }
 
-
-/**
- * @brief Kernel for counting how many particles will be injected by a step
- *        profile
- * 
- * @note Uses only 1 thread per tile
- * 
- * @tparam dir          Step direction ( coord::z | coord::r )
- * @param tile_idx      Tile index (x,y)
- * @param range         Cell range to inject particles in
- * @param step          Step position (normalized to node grid coordinates)
- * @param ppc           Number of particles per cell
- * @param part          Particle data
- * @param np            (out) Number of particles per tile to inject
- */
-template < coord::cyl dir >
-void np_inject_step( 
-    uint2 const tile_idx, 
-    bnd<unsigned int> range,
-    float step, const uint3 ppc,
-    ParticleData const part, int * np )
-{
-    int const tid = tile_idx.y * part.ntiles.x + tile_idx.x;
-
-    int np_tile; np_tile = 0;
-    // sync;
-
-    // Find injection range in tile coordinates
-    const int2 nx = make_int2( part.nx.x, part.nx.y );
-
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-    
-    int inj_np = 0;
-
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
-
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row = (ri1-ri0+1);
-        int const vol = (rj1-rj0+1) * row;
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        const int shiftz = tile_idx.x * nx.x;
-        const int shiftr = tile_idx.y * nx.y;
-
-        for( int idx = 0; idx < vol; idx++) {
-            int2 const cell = make_int2(
-                idx % row + ri0,
-                idx / row + rj0
-            );
-            for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-                for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( i0 + 0.5 ) - 0.5,
-                        dpcr * ( i1 + 0.5 ) - 0.5
-                    );
-                    float r = (shiftr + cell.y) + pos.y;
-                    
-                    int inj;
-                    if constexpr ( dir == coord::z ) inj = ((shiftz + cell.x) + (pos.x + 0.5) > step ) && (r > 0);
-                    if constexpr ( dir == coord::r ) inj = r > step;
-                    inj_np += inj;
-                }
-            }
-        }
-    }    
-
-    // Not needed with 1 thread / tile
-    // inj_np = device::warp_reduce_add( inj_np );
-    {   // only 1 thread / tile does this
-        // atomicAdd( &np_tile, inj_np );
-        np_tile += inj_np;
-    } 
-
-    // sync
-
-    {   // Only 1 thread per tile does this
-        np[ tid ] = np_tile * ppc.z;
-    }
-}
+} // namespace kernel
 
 }
 
@@ -538,44 +620,36 @@ void np_inject_step(
  * @brief Injects a step density profile
  * 
  * @param part      Particle data object
+ * @param norm      Charge normalization constant
  * @param ppc       Number of particles per cell
  * @param dx        Cell size
  * @param ref       Position of local grid on global simulation box in simulation
  *                  units
  * @param range     Cell range in which to inject
  */
-void Density::Step::inject( Particles & part, const float norm,
-    uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range ) const
+void density::step::inject( cyl_part::particles & part, float const norm,
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {    
-    /// @brief Step position (normalized to node grid coordinates)
-    float step_pos;
-   /// @brief single particle charge
+    /// @brief single particle charge
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
-    const int2 ntiles = make_int2( part.ntiles.x, part.ntiles.y );
- 
+    auto view = part.view();
+
     switch( dir ) {
-    case( coord::z ):
-        step_pos = (pos - ref.x) / dx.x;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::inject_step <coord::z> (
-                tile_idx, range, step_pos, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    case( coord::r ):
-        step_pos = (pos - ref.y) / dx.y;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::inject_step <coord::r> (
-                tile_idx, range, step_pos, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    break;
+    case( coord::cyl::z ): {
+        kernel::step_mask<coord::cyl::z> const mask { (pos - ref.x) / dx.x };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::inject_mask( tile_idx, mask, range, ppc, q0, dx.y, view );
+        });
+        break; }
+    case( coord::cyl::r ): {
+        kernel::step_mask<coord::cyl::r> const mask { (pos - ref.y) / dx.y };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::inject_mask( tile_idx, mask, range, ppc, q0, dx.y, view );
+        });
+        break; }
+    default:
+        util::fatal( "Invalid direction for step density profile");
     }
 }
 
@@ -590,326 +664,74 @@ void Density::Step::inject( Particles & part, const float norm,
  * @param range     Cell range in which to inject
  * @param np        (out) Number of particles to inject per tile
  */
-void Density::Step::np_inject( Particles & part,
-    uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+void density::step::np_inject( cyl_part::particles & part, 
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
-    /// @brief Step position (normalized to node grid coordinates)
-    float step_pos;
-
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-
+    auto view = part.view();
     switch( dir ) {
-    case( coord::z ):
-        step_pos = (pos - ref.x) / dx.x;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::np_inject_step <coord::z> (
-                tile_idx, range, step_pos, ppc,
-                part, np );
-        }
-        break;
-    case( coord::r ):
-        step_pos = (pos - ref.y) / dx.y;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::np_inject_step <coord::r> (
-                tile_idx, range, step_pos, ppc,
-                part, np );
-        }
-        break;
-    break;
-    }
-}
-
-namespace kernel {
-
-/**
- * @brief Kernel for injecting slab profile
- * 
- * @tparam dir          Slab direction ( coord::z | coord::r )
- * @param tile_idx      Tile index (x,y)
- * @param range         Cell range to inject particles in
- * @param start         Slab start position (normalized to node grid coordinates)
- * @param finish        Slab end position (normalized to node grid coordinates)
- * @param ppc           Number of particles per cell
- * @param dr            Radial cell size
- * @param part          Particle data
- */
-template < coord::cyl dir >
-void inject_slab( 
-    uint2 const tile_idx,
-    bnd<unsigned int> range,
-    const float start, const float finish, uint3 ppc, const float q0, 
-    double const dr,
-    ParticleData const part )
-{
-    const uint2 ntiles  = part.ntiles;
-    const int2 nx = make_int2( part.nx.x, part.nx.y );
-
-    // Tile ID
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    int _np = part.np[ tid ];
-
-    // Find injection range in tile coordinates
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
-
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row = (ri1-ri0+1);
-        int const vol = (rj1-rj0+1) * row;
-
-        const int offset =  part.offset[ tid ];
-
-        auto * __restrict__ const ix = &part.ix[ offset ];
-        auto * __restrict__ const x  = &part.x[ offset ];
-        auto * __restrict__ const u  = &part.u[ offset ];
-        auto * __restrict__ const q  = &part.q[ offset ];
-        auto * __restrict__ const θ  = &part.θ[ offset ];
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        const int shiftz = tile_idx.x * nx.x;
-        const int shiftr = tile_idx.y * nx.y;
-
-        /// @brief angular positions of particles
-        float2 posθ[ ppc.z ];
-        posθ[0] = { 1, 0 };
-        if ( ppc.z > 1 ) {
-            const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = {std::cos( Δθ ),std::sin( Δθ ) };
-            // Use recurrence formulas for remaining angles
-            for( unsigned i = 2; i < ppc.z; i++ ) {
-                posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
-                };
-            }
-        }
-
-        // Charge normalization
-        auto qnorm =  q0 * dr;
-        auto α = ( ppc.y % 2 == 0) ? 
-            ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
-            (2. / 3.);
-
-        for( unsigned iθ = 0; iθ < ppc.z; iθ++ ) {
-            for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-                for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( i0 + 0.5 ) - 0.5,
-                        dpcr * ( i1 + 0.5 ) - 0.5
-                    );
-                    for( int idx = 0; idx < vol; idx++ ) {
-                        int2 const cell = make_int2(
-                            idx % row + ri0,
-                            idx / row + rj0
-                        );
-                        auto r = (shiftr + cell.y) + pos.y;
-
-                        float t;
-                        if constexpr ( dir == coord::z ) t = (shiftz + cell.x) + (pos.x + 0.5);
-                        if constexpr ( dir == coord::r ) t = r;
-                        
-                        int inj = (t >= start) && (t<finish ) && ( r > 0 );
-
-                        // int off = device::block_exscan_add( inj );
-                        int off = 0; // always 0 with 1 thread
-                        
-                        if (inj) {
-                            const int k = _np + off;
-                            ix[ k ] = cell;
-                            x[ k ] = pos;
-                            u[ k ] = make_float3(0,0,0);
-                            q [ k ] = r * ( (shiftr + cell.y == 0) ? α * qnorm : qnorm );
-                            θ [ k ] = posθ[ iθ ];
-                        }
-
-                        // Not needed with 1 thread / tile
-                        // inj = device::warp_reduce_add( inj );
-                        
-                        {   // only 1 thread / tile does this
-                            // atomicAdd( &_np, inj );
-                            _np += inj;
-                        }
-                    }
-                }
-            }
-        }
-
-        // sync;
-
-        {   // Only 1 thread per tile does this
-            part.np[ tid ] = _np;
-        }
+    case( coord::cyl::z ): {
+        kernel::step_mask<coord::cyl::z> const mask { (pos - ref.x) / dx.x };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::np_mask( tile_idx, mask, range, ppc, view, np );
+        });
+        break; }
+    case( coord::cyl::r ): {
+        kernel::step_mask<coord::cyl::r> const mask { (pos - ref.y) / dx.y };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::np_mask( tile_idx, mask, range, ppc, view, np );
+        });
+        break; }
+    default:
+        util::fatal( "Invalid direction for step density profile");
     }
 }
 
 
-/**
- * @brief Kernel for counting how many particles will be injected by slab profie
- * 
- * @tparam dir          Slab direction ( coord::x | coord::y )
- * @param tile_idx      Tile index (x,y)
- * @param range         Cell range to inject particles in
- * @param start         Slab start position (normalized to node grid coordinates)
- * @param finish        Slab end position (normalized to node grid coordinates)
- * @param ppc           Number of particles per cell
- * @param part          Particle data
- * @param np            (out) Number of particles to inject per tile
- */
-template < coord::cyl dir >
-void np_inject_slab( 
-    uint2 const tile_idx,
-    bnd<unsigned int> range,
-    const float start, const float finish, uint3 ppc,
-    ParticleData const part, int * np )
-{
-    const uint2 ntiles  = part.ntiles;
-    const int2 nx = make_int2( part.nx.x, part.nx.y );
-
-    int const tid = tile_idx.y * ntiles.x + tile_idx.x;
-
-    int np_tile; np_tile = 0;
-    
-    // sync
-
-    // Find injection range in tile coordinates
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    unsigned int inj_np = 0;
-
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
-
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row = (ri1-ri0+1);
-        int const vol = (rj1-rj0+1) * row;
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        const int shiftz = tile_idx.x * nx.x;
-        const int shiftr = tile_idx.y * nx.y;
-
-        for( int idx = 0; idx < vol; idx++) {
-            int2 const cell = make_int2(
-                idx % row + ri0,
-                idx / row + rj0
-            );
-            for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-                for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( i0 + 0.5 ) - 0.5,
-                        dpcr * ( i1 + 0.5 ) - 0.5
-                    );
-                    float r = (shiftr + cell.y) + pos.y;
-
-                    float t;
-                    if constexpr ( dir == coord::z ) t = (shiftz + cell.x) + (pos.x + 0.5);
-                    if constexpr ( dir == coord::r ) t = r;
-                    
-                    int inj = (t >= start) && (t<finish ) && r > 0;
-                    inj_np += inj;
-                }
-            }
-        }
-    }
-
-    // Not needed with 1 thread / tile
-    // inj_np = device::warp_reduce_add( inj_np );
-    {   // only 1 thread / tile does this
-        // atomicAdd( &_np, inj_np );
-        np_tile += inj_np;
-    } 
-
-    // sync
-    {   // Only 1 thread per tile does this
-        np[ tid ] = np_tile * ppc.z;;
-    }
-
-}
-
-}
 
 /**
  * @brief Injects a slab density profile
  * 
  * @param part      Particle data object
+ * @param norm      Charge normalization constant
  * @param ppc       Number of particles per cell
  * @param dx        Cell size
  * @param ref       Position of local grid on global simulation box in simulation
  *                  units
  * @param range     Cell range in which to inject
  */
-void Density::Slab::inject( Particles & part, const float norm,
-    uint3 const ppc,float2 const dx, float2 const ref,
-    bnd<unsigned int> range ) const
+void density::slab::inject( cyl_part::particles & part, float const norm,
+    uint3 const ppc,float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {
-    /// @brief Slab start position (normalized to node grid coordinates) 
-    float slab_begin;
-    /// @brief Slab end position (normalized to node grid coordinates) 
-    float slab_end;
     /// @brief single particle charge
-
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+
+    auto view = part.view();
 
     switch( dir ) {
-    case( coord::z ):
-        slab_begin = (begin - ref.x)/ dx.x;
-        slab_end   = (end - ref.x)/ dx.x;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::inject_slab < coord::z > (
-                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
-                part );
-        }
-        break;
-    case( coord::r ):
-        slab_begin = (begin - ref.y)/ dx.y;
-        slab_end   = (end - ref.y)/ dx.y;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::inject_slab < coord::r > (
-                tile_idx, range, slab_begin, slab_end, ppc, q0, dx.y,
-                part );
-        }
-        break;
+    case( coord::cyl::z ): {
+        kernel::slab_mask<coord::cyl::z> const mask { 
+            (begin - ref.x)/ dx.x,
+            (end - ref.x)/ dx.x };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::inject_mask( tile_idx, mask, range, ppc, q0, dx.y, view );
+        });
+        break; }
+    case( coord::cyl::r ): {
+        kernel::slab_mask<coord::cyl::r> const mask { 
+            (begin - ref.y)/ dx.y,
+            (end - ref.y)/ dx.y };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::inject_mask( tile_idx, mask, range, ppc, q0, dx.y, view );
+        });
+        break; }
+    default:
+        util::fatal( "Invalid direction for slab density profile");
     }
-
 }
 
 /**
- * Returns number of particles per tile that a slab profile would inject
+ * @brief Returns number of particles per tile that a slab profile would inject
  * 
  * @param part      Particle data object
  * @param ppc       Number of particles per cell
@@ -919,308 +741,61 @@ void Density::Slab::inject( Particles & part, const float norm,
  * @param range     Cell range in which to inject
  * @param np        (out) Number of particles to inject per tile
  */
-void Density::Slab::np_inject( Particles & part, 
-    uint3 const ppc, float2 const dx, float2 const ref,
-    bnd<unsigned int> range,
+void density::slab::np_inject( cyl_part::particles & part, 
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
-    /// @brief Slab start position (normalized to node grid coordinates) 
-    float slab_begin;
-    /// @brief Slab end position (normalized to node grid coordinates) 
-    float slab_end;
-
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    auto view = part.view();
 
     switch( dir ) {
-    case( coord::z ):
-        slab_begin = (begin - ref.x)/ dx.x;
-        slab_end   = (end - ref.x)/ dx.x;
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::np_inject_slab < coord::z > (
-                tile_idx,
-                range, slab_begin, slab_end, ppc,
-                part, np );
-        }
-        break;
-    case( coord::r ):
-        slab_begin = (begin - ref.y)/ dx.y;
-        slab_end   = (end - ref.y)/ dx.y;
-
-        if ( slab_begin < 0 ) slab_begin = 0;
-        if ( slab_end   < 0 ) slab_end   = 0;
-
-        #pragma omp parallel for
-        for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-            const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-            kernel::np_inject_slab < coord::r > (
-                tile_idx, range, slab_begin, slab_end, ppc,
-                part, np );
-        }
-        break;
+    case( coord::cyl::z ): {
+        kernel::slab_mask<coord::cyl::z> const mask { 
+            (begin - ref.x)/ dx.x,
+            (end - ref.x)/ dx.x };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::np_mask( tile_idx, mask, range, ppc, view, np );
+        });
+        break; }
+    case( coord::cyl::r ): {
+        kernel::slab_mask<coord::cyl::r> const mask { 
+            (begin - ref.y)/ dx.y,
+            (end - ref.y)/ dx.y };
+        for_each_tile( view, [&]( int2 const tile_idx ) {
+            kernel::np_mask( tile_idx, mask, range, ppc, view, np );
+        });
+        break; }
+    default:
+        util::fatal( "Invalid direction for slab density profile");
     }
-}
-
-namespace kernel {
-
-/**
- * @brief Kernel for injecting sphere profile
- * 
- * @param tile_idx      Tile index (x,y)
- * @param range         Cell range to inject particles in
- * @param center        Sphere center in simulation units
- * @param radius        Sphere radius in simulation units
- * @param dx            Cell size
- * @param ppc           Number of particles per cell
- * @param part          Particle data
- */
-inline void inject_sphere( 
-    uint2 const tile_idx,
-    bnd<unsigned int> range,
-    const float2 center, const float radius, const float2 dx, uint3 ppc, const float q0,
-    ParticleData const part )
-{
-
-    // Tile ID
-    const int tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
-
-    int np_local; np_local = part.np[ tile_id ];
-
-    // Find injection range in tile coordinates
-    const int2 nx = make_int2( part.nx.x, part.nx.y );
-
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
-
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row = (ri1-ri0+1);
-        int const vol = (rj1-rj0+1) * row;
-
-        const int offset =  part.offset[ tile_id ];
-
-        auto * __restrict__ const ix = &part.ix[ offset ];
-        auto * __restrict__ const x  = &part.x[ offset ];
-        auto * __restrict__ const u  = &part.u[ offset ];
-        auto * __restrict__ const q  = &part.q[ offset ];
-        auto * __restrict__ const θ  = &part.θ[ offset ];
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        const int shiftz = tile_idx.x * nx.x;
-        const int shiftr = tile_idx.y * nx.y;
-
-        const float r2 = radius*radius;
-
-        /// @brief angular positions of particles
-        float2 posθ[ ppc.z ];
-        posθ[0] = { 1, 0 };
-        if ( ppc.z > 1 ) {
-            const float Δθ = ( 2 * M_PI ) / ppc.z;
-            posθ[1] = float2{std::cos( Δθ ),std::sin( Δθ ) };
-            // Use recurrence formulas for remaining angles
-            for( unsigned i = 2; i < ppc.z; i++ ) {
-                posθ[i] = { 
-                    2 * posθ[i-1].x * posθ[1].x - posθ[i-2].x,
-                    2 * posθ[i-1].y * posθ[1].x - posθ[i-2].y
-                };
-            }
-        }
-
-        // Charge normalization
-        auto qnorm =  q0;
-        auto α = ( ppc.y % 2 == 0) ? 
-            ( 2 * ( ppc.y*ppc.y - 1.) ) / ( 3 * ( ppc.y * ppc.y ) ) :
-            (2. / 3.);
-
-        for( unsigned iθ = 0; iθ < ppc.z; iθ++ ) {
-            for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-                for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( i0 + 0.5 ) - 0.5,
-                        dpcr * ( i1 + 0.5 ) - 0.5
-                    );
-                    for( int idx = 0; idx < vol; idx++) {
-                        int2 const cell = make_int2( 
-                            idx % row + ri0,
-                            idx / row + rj0
-                        );
-                        float z = ((shiftz + cell.x) + (pos.x+0.5)) * dx.x;
-                        float r = ((shiftr + cell.y) + (pos.y) ) * dx.y;
-                        
-                        int inj = (((z - center.x)*(z - center.x) + (r - center.y)*(r - center.y)) < r2) && (r>0);
-                        // int off = device::block_exscan_add( inj );
-                        int off = 0; // always 0 with 1 thread
-
-                        if ( inj ) {
-                            const int k = np_local + off;
-                            ix[ k ] = cell;
-                            x[ k ] = pos;
-                            u[ k ] = make_float3(0,0,0);
-                            q [ k ] = r * ( (shiftr + cell.y == 0) ? α * qnorm : qnorm );
-                            θ [ k ] = posθ[ iθ ];
-                        }
-                        
-                        // inj = warp::reduce_add( inj );
-                        // if ( warp::thread_rank() == 0 ) {
-                        //     block::atomic_fetch_add( &np_local, inj );
-                        // }
-                        // block_sync();
-
-                        np_local += inj;
-                    }
-                }
-            }
-        }
-
-        // if ( block_thread_rank() == 0 ) {
-        //    part.np[ tile_id ] = np_local;
-        // }
-        part.np[ tile_id ] = np_local;
-    }
-}
-
-
-
-/**
- * @brief Kernel for counting how many particles will be injected by a sphere
- *        profile
- * 
- * @param tile_idx  Tile index (x,y)
- * @param range     Cell range to inject particles in
- * @param center    Sphere center in simulation units
- * @param radius    Sphere radius in simulation units
- * @param dx        Cell size
- * @param ppc       Number of particles per cell
- * @param part      Particle data
- * @param np        (out) Number of particles per tile to inject
- */
-void np_inject_sphere(
-    uint2 const tile_idx,
-    bnd<unsigned int> range,
-    float2 center, float radius, float2 dx, uint3 ppc,
-    ParticleData const part, int * np )
-{
-    // Tile ID
-    int const tile_id = tile_idx.y * part.ntiles.x + tile_idx.x;
-
-    int np_local; np_local = 0;
-    // sync
-
-    // Find injection range in tile coordinates
-    const int2 nx = make_int2( part.nx.x, part.nx.y );
-
-    int ri0 = range.x.lower - tile_idx.x * nx.x;
-    int ri1 = range.x.upper - tile_idx.x * nx.x;
-
-    int rj0 = range.y.lower - tile_idx.y * nx.y;
-    int rj1 = range.y.upper - tile_idx.y * nx.y;
-    
-    int inj_np = 0;
-
-    // If range overlaps with tile
-    if (( ri0 < nx.x ) && ( ri1 >= 0 ) &&
-        ( rj0 < nx.y ) && ( rj1 >= 0 )) {
-
-        // Limit to range inside this tile
-        if (ri0 < 0) ri0 = 0;
-        if (rj0 < 0) rj0 = 0;
-        if (ri1 >= nx.x ) ri1 = nx.x-1;
-        if (rj1 >= nx.y ) rj1 = nx.y-1;
-
-        int const row = (ri1-ri0+1);
-        int const vol = (rj1-rj0+1) * row;
-
-        double dpcz = 1.0 / ppc.x;
-        double dpcr = 1.0 / ppc.y;
-
-        const int shiftz = tile_idx.x * nx.x;
-        const int shiftr = tile_idx.y * nx.y;
-
-        const float r2 = radius*radius;
-
-        for( int idx = 0; idx < vol; idx++) {
-            int2 const cell = make_int2( 
-                idx % row + ri0,
-                idx / row + rj0
-            );
-            for( unsigned i1 = 0; i1 < ppc.y; i1++ ) {
-                for( unsigned i0 = 0; i0 < ppc.x; i0++) {
-                    float2 const pos = make_float2(
-                        dpcz * ( i0 + 0.5 ) - 0.5,
-                        dpcr * ( i1 + 0.5 ) - 0.5
-                    );
-                    float z = ((shiftz + cell.x) + (pos.x+0.5)) * dx.x;
-                    float r = ((shiftr + cell.y) + (pos.y)) * dx.y;
-                    
-                    int inj = (((z - center.x)*(z - center.x) + (r - center.y)*(r - center.y)) < r2) && (r>0);
-                    inj_np += inj;
-                }
-            }
-        }
-    }
-
-    // Not needed with 1 thread / tile
-    // inj_np = warp::reduce_add( inj_np );
-    // if ( warp::thread_rank() == 0 ) {
-    //    block::atomic_fetch_add( &np_local, inj_np );
-    //}
-    
-    np_local += inj_np;
-
-    // block_sync();  
-    //if ( block_thread_rank() == 0 ) {
-    //    np[ tile_id ] = np_local;
-    //}
-
-    // Only 1 thread per tile does this
-    np[ tile_id ] = np_local * ppc.z;
-}
-
 }
 
 /**
  * @brief Injects a sphere density profile
  * 
  * @param part      Particle data object
+ * @param norm      Charge normalization constant
  * @param ppc       Number of particles per cell
  * @param dx        Cell size
  * @param ref       Position of local grid on global simulation box in simulation
  *                  units
  * @param range     Cell range in which to inject
  */
-void Density::Sphere::inject( Particles & part, const float norm,
-    uint3 const ppc, float2 const dx, float2 const ref,
-    bnd<unsigned int> range ) const
+void density::sphere::inject( cyl_part::particles & part, float const norm,
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range ) const
 {
-    float2 sphere_center = center;
-    sphere_center.x -= ref.x;
-    sphere_center.y -= ref.y;
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
-
     /// @brief single particle charge
     auto q0 = norm * n0 / (ppc.x*ppc.y*ppc.z);
 
-    #pragma omp parallel for
-    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-        const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-        kernel::inject_sphere (
-            tile_idx, range, sphere_center, radius, dx, ppc, q0,
-            part );
-    }
+    kernel::sphere_mask const mask {
+        center - ref,
+        radius * radius,
+        dx
+    };
+
+    auto view = part.view();
+    for_each_tile( view, [&]( int2 const tile_idx ) {
+        kernel::inject_mask( tile_idx, mask, range, ppc, q0, dx.y, view );
+    });
 }
 
 /**
@@ -1234,21 +809,40 @@ void Density::Sphere::inject( Particles & part, const float norm,
  * @param range     Cell range in which to inject
  * @param np        (out) Number of particles to inject per tile
  */
-void Density::Sphere::np_inject( Particles & part, 
-    uint3 const ppc, float2 const dx, float2 const ref, bnd<unsigned int> range,
+void density::sphere::np_inject( cyl_part::particles & part, 
+    uint3 const ppc, float2 const dx, float2 const ref, bounds_2d<unsigned int> range,
     int * np ) const
 {
-    float2 sphere_center = center;
-    sphere_center.x -= ref.x;
-    sphere_center.y -= ref.y;
-    const auto ntiles = make_int2( part.ntiles.x, part.ntiles.y );
+    kernel::sphere_mask const mask {
+        center - ref,
+        radius * radius,
+        dx
+    };
 
-    #pragma omp parallel for
-    for( auto tid = 0; tid < ntiles.y * ntiles.x; tid ++ ) {
-        const auto tile_idx = make_uint2( tid % ntiles.x, tid / ntiles.x );
-        kernel::np_inject_sphere (
-            tile_idx,
-            range, sphere_center, radius, dx, ppc,
-            part, np );
-    }
+    auto view = part.view();
+    for_each_tile( view, [&]( int2 const tile_idx ) {
+        kernel::np_mask( tile_idx, mask, range, ppc, view, np );
+    });
 }
+
+/**
+ * @brief Returns number of particles per tile that the none profile would
+ *        inject (always 0)
+ * 
+ * @param part      Particle data object
+ * @param ppc       Number of particles per cell
+ * @param dx        Cell size
+ * @param ref       Position of local grid on global simulation box in simulation
+ *                  units
+ * @param range     Cell range in which to inject
+ * @param np        (out) Number of particles to inject per tile
+ */
+void density::none::np_inject( cyl_part::particles & part, 
+    uint3 const, float2 const, float2 const, bounds_2d<unsigned int>,
+    int * np ) const
+{
+    auto ntiles = part.get_grid_ntiles();
+    memory::zero( np, ntiles.x * ntiles.y );
+}
+
+} // namespace q3d
